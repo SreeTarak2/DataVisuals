@@ -70,11 +70,12 @@ jest.config.js
 jest-cache/
 jest-results.json
 
-# Local env files
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# -------------------
+# Env files (ALL)
+# -------------------
+*.env
+.env
+.env.*       # covers .env.local, .env.production, etc.
 
 # -------------------
 # OS / Misc
