@@ -1,0 +1,148 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 84% 4.9%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+  @apply border-gray-200;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-secondary;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-foreground;
+}
+
+/* Chart container styles */
+.chart-container {
+  @apply bg-card border border-gray-200 rounded-lg p-4;
+}
+
+/* Loading skeleton styles */
+.skeleton {
+  @apply animate-pulse bg-muted rounded;
+}
+
+/* Chart skeleton specific styles */
+.chart-skeleton {
+  @apply relative overflow-hidden;
+}
+
+.chart-skeleton::before {
+  content: '';
+  @apply absolute inset-0 bg-gradient-to-r from-transparent via-muted to-transparent;
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Thinking animation */
+.thinking-dots {
+  @apply flex space-x-1;
+}
+
+.thinking-dots span {
+  @apply w-2 h-2 bg-primary rounded-full animate-pulse;
+}
+
+.thinking-dots span:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+.thinking-dots span:nth-child(3) {
+  animation-delay: 0.2s;
+}
+
+/* Chart hover effects */
+.chart-hover {
+  @apply transition-all duration-200 hover:shadow-lg hover:scale-105;
+}
+
+/* KPI card styles */
+.kpi-card {
+  @apply bg-card border border-gray-200 rounded-lg p-6 transition-all duration-200 hover:border-primary/50 hover:shadow-lg;
+}
+
+/* Dashboard grid */
+.dashboard-grid {
+  @apply grid gap-6;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+/* Responsive chart container */
+.chart-responsive {
+  @apply w-full h-full min-h-[300px] max-h-[500px];
+}
+
+/* Dark theme specific chart colors */
+.chart-primary {
+  @apply text-primary;
+}
+
+.chart-secondary {
+  @apply text-secondary-foreground;
+}
+
+/* Animation for chart loading */
+@keyframes chart-loading {
+  0% {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.chart-loading {
+  animation: chart-loading 0.5s ease-out;
+}
+
