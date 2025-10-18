@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 import os
 from database import get_database
-from models.schemas import User, UserCreate, UserLogin, Token, TokenData
+from models.schemas import User, UserCreate, UserLogin, Token, TokenData, LoginResponse
 import logging
 from bson import ObjectId
 
@@ -19,7 +19,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # JWT settings
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 # Security scheme
 security = HTTPBearer()
@@ -121,7 +121,6 @@ class AuthService:
                 "username": user_data.username,
                 "email": user_data.email,
                 "hashed_password": hashed_password,
-                "full_name": user_data.full_name,
                 "is_active": True,
                 "is_verified": False,
                 "created_at": datetime.utcnow(),
@@ -176,8 +175,8 @@ class AuthService:
             logger.error(f"Error authenticating user: {e}")
             return None
     
-    async def login_user(self, login_data: UserLogin) -> Token:
-        """Login user and return access token"""
+    async def login_user(self, login_data: UserLogin) -> LoginResponse:
+        """Login user and return access token with user data"""
         try:
             user = await self.authenticate_user(login_data.email, login_data.password)
             if not user:
@@ -200,10 +199,11 @@ class AuthService:
                 expires_delta=access_token_expires
             )
             
-            return Token(
+            return LoginResponse(
                 access_token=access_token,
                 token_type="bearer",
-                expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+                expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                user=User(**user)
             )
             
         except HTTPException:

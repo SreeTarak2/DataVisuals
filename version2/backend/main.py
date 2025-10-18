@@ -1,29 +1,32 @@
-from importlib import reload
+# backend/main.py
+
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, status, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import pandas as pd
-import numpy as np
-from typing import List, Dict, Any, Optional
-import uuid
-import json
-import uvicorn
-import io
+from typing import List, Dict, Any
 from datetime import datetime
 import logging
+import polars as pl
 
-# Import database and services
+# --- NEW, CLEANED IMPORTS ---
+# Core application components
 from database import connect_to_mongo, close_mongo_connection
+from models.schemas import *
+
+# Correctly imported services
 from services.auth_service import auth_service, get_current_user
 from services.enhanced_dataset_service import enhanced_dataset_service
-from services.enhanced_llm_service import EnhancedLLMService
-from services.metadata_service import MetadataService
-from services.rag_service import RAGService
-from services.dynamic_drilldown_service import DynamicDrillDownService
-from services.chart_validation_service import ChartValidationService
-from services.ai_visualization_service import ai_visualization_service
-from services.file_storage_service import file_storage_service
-from models.schemas import *
+from services.dynamic_drilldown_service import drilldown_service
+from services.ai_service import ai_service
+from services.analysis_service import analysis_service
+from services.chart_render_service import chart_render_service
+from services.ai_designer_service import ai_designer_service
+from services.faiss_vector_service import faiss_vector_service
+
+# For background task status polling
+from celery.result import AsyncResult
+from tasks import celery_app
+from config import settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,149 +34,85 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="DataSage AI API",
-    description="AI-powered data visualization and analysis platform",
-    version="2.0.0"
+    title="DataSage AI API v3.0",
+    description="Refactored AI-powered data visualization and analysis platform",
+    version="3.0.0"
 )
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000", 
-        "http://localhost:5173", 
-        "http://localhost:5174", 
-        "http://localhost:5175",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "http://127.0.0.1:5175"
-    ],
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Startup and shutdown events
+# --- LIFECYCLE EVENTS (remain the same) ---
 @app.on_event("startup")
 async def startup_event():
     await connect_to_mongo()
+    # service.enhanced_dataset_service = service_module.EnhancedDatasetService()
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    # Properly shutdown the httpx client in the AI service
+    await ai_service.http_client.aclose()
     await close_mongo_connection()
 
-# Initialize services
-llm_service = EnhancedLLMService()
-metadata_service = MetadataService()
-rag_service = RAGService()
-drilldown_service = DynamicDrillDownService()
-chart_validator = ChartValidationService()
+# --- AUTH & HEALTHCHECK ENDPOINTS (remain the same, no changes needed) ---
 
-# In-memory storage for demo (replace with MongoDB in production)
-datasets = {}
-charts = {}
-
-# Authentication Endpoints
-@app.post("/auth/register", response_model=User)
+@app.post("/api/auth/register", response_model=User)
 async def register_user(user_data: UserCreate):
-    """Register a new user"""
-    try:
-        user = await auth_service.create_user(user_data)
-        return user
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Registration error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Registration failed"
-        )
+    return await auth_service.create_user(user_data)
 
-@app.post("/auth/login", response_model=Token)
+@app.post("/api/auth/login", response_model=LoginResponse)
 async def login_user(login_data: UserLogin):
-    """Login user and return access token"""
-    try:
-        token = await auth_service.login_user(login_data)
-        return token
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Login error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Login failed"
-        )
+    return await auth_service.login_user(login_data)
 
-@app.get("/auth/me", response_model=User)
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for debugging"""
+    return {
+        "status": "healthy",
+        "message": "Backend is running",
+        "cors_origins": settings.ALLOWED_ORIGINS,
+        "version": "3.0.0"
+    }
+
+@app.get("/api/auth/me", response_model=User)
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
-    """Get current user information"""
     return current_user
 
-@app.put("/auth/profile", response_model=User)
-async def update_user_profile(
-    profile_data: UserProfileUpdate,
-    current_user: dict = Depends(get_current_user)
-):
-    """Update user profile"""
-    try:
-        updated_user = await auth_service.update_user_profile(
-            current_user["_id"], 
-            profile_data.dict(exclude_unset=True)
-        )
-        return updated_user
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Profile update error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Profile update failed"
-        )
-
-@app.post("/auth/change-password")
-async def change_password(
-    password_data: PasswordChange,
-    current_user: dict = Depends(get_current_user)
-):
-    """Change user password"""
-    try:
-        await auth_service.change_password(
-            current_user["_id"],
-            password_data.old_password,
-            password_data.new_password
-        )
-        return {"message": "Password changed successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Password change error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Password change failed"
-        )
-
-# Health check
 @app.get("/api/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
-# Dataset Management Routes
-@app.get("/api/datasets")
-async def list_datasets(
-    skip: int = 0,
-    limit: int = 100,
-    current_user: dict = Depends(get_current_user)
-):
-    """List all datasets for the current user"""
+@app.get("/api/test-ai")
+async def test_ai_services():
+    """Test AI service connectivity"""
     try:
-        datasets = await enhanced_dataset_service.get_user_datasets(current_user["id"], skip, limit)
-        return {"datasets": datasets}
-    except HTTPException:
-        raise
+        # Test a simple AI call
+        test_response = await ai_service._call_ollama(
+            "Hello, can you respond with just 'AI service working'?", 
+            "chat_engine", 
+            expect_json=False
+        )
+        
+        return {
+            "status": "success",
+            "ai_service": "connected",
+            "test_response": test_response[:100] + "..." if len(test_response) > 100 else test_response
+        }
     except Exception as e:
-        logger.error(f"Error getting datasets: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve datasets")
+        return {
+            "status": "error", 
+            "ai_service": "unavailable",
+            "error": str(e),
+            "message": "AI services are not available. Please check your Ollama installation or configuration."
+        }
+
+# --- DATASET MANAGEMENT ENDPOINTS (remain the same, correctly use enhanced_dataset_service) ---
 
 @app.post("/api/datasets/upload")
 async def upload_dataset(
@@ -182,272 +121,54 @@ async def upload_dataset(
     description: str = Form(None),
     current_user: dict = Depends(get_current_user)
 ):
-    """Upload new dataset"""
-    try:
-        result = await enhanced_dataset_service.upload_dataset(
-            file, 
-            current_user["id"], 
-            name, 
-            description
-        )
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Upload error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Uploads a new dataset and starts a background processing task."""
+    return await enhanced_dataset_service.upload_dataset(file, current_user["id"], name, description)
+
+@app.get("/api/datasets")
+async def list_datasets(skip: int = 0, limit: int = 100, current_user: dict = Depends(get_current_user)):
+    datasets = await enhanced_dataset_service.get_user_datasets(current_user["id"], skip, limit)
+    return {"datasets": datasets}
 
 @app.get("/api/datasets/{dataset_id}")
-async def get_dataset(
-    dataset_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Get dataset details"""
-    try:
-        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
-        return dataset
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting dataset: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve dataset")
+async def get_dataset(dataset_id: str, current_user: dict = Depends(get_current_user)):
+    return await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
 
 @app.delete("/api/datasets/{dataset_id}")
-async def delete_dataset(
-    dataset_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Delete dataset"""
-    try:
-        await enhanced_dataset_service.delete_dataset(dataset_id, current_user["id"])
-        return {"message": "Dataset deleted successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting dataset: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete dataset")
+async def delete_dataset(dataset_id: str, current_user: dict = Depends(get_current_user)):
+    await enhanced_dataset_service.delete_dataset(dataset_id, current_user["id"])
+    return {"message": "Dataset deleted successfully"}
 
 @app.get("/api/datasets/{dataset_id}/data")
 async def get_dataset_data(
-    dataset_id: str,
-    page: int = 1,
-    page_size: int = 100,
-    current_user: dict = Depends(get_current_user)
+    dataset_id: str, page: int = 1, page_size: int = 100, current_user: dict = Depends(get_current_user)
 ):
-    """Get dataset data with pagination"""
-    try:
-        data = await enhanced_dataset_service.get_dataset_data(
-            dataset_id, current_user["id"], page, page_size
-        )
-        return data
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting dataset data: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve dataset data")
+    return await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page, page_size)
 
-@app.get("/api/datasets/{dataset_id}/summary")
-async def get_dataset_summary(
-    dataset_id: str,
-    current_user: dict = Depends(get_current_user)
+@app.get("/api/datasets/{dataset_id}/preview")
+async def get_dataset_preview(
+    dataset_id: str, limit: int = 10, current_user: dict = Depends(get_current_user)
 ):
-    """Get dataset summary statistics"""
+    """
+    Get a preview of the dataset (first few rows) for dashboard display.
+    """
     try:
-        summary = await enhanced_dataset_service.get_dataset_summary(
-            dataset_id, current_user["id"]
-        )
-        return summary
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting dataset summary: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve dataset summary")
-
-@app.get("/api/datasets/{dataset_id}/metadata")
-async def get_dataset_metadata(
-    dataset_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Get dataset metadata"""
-    try:
-        # Get dataset data
-        dataset_data = await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page=1, page_size=1000)
-        
-        metadata = await metadata_service.generate_llm_metadata_package(
-            dataset_data.data, dataset_id
-        )
-        
-        return metadata
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting dataset metadata: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/datasets/{dataset_id}/kpis")
-async def get_dataset_kpis(
-    dataset_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Get KPI metrics for a dataset"""
-    try:
-        # Get dataset summary
-        summary = await enhanced_dataset_service.get_dataset_summary(dataset_id, current_user["id"])
-        
-        # Calculate KPI metrics
-        kpis = [
-            {
-                "title": "Total Rows",
-                "value": str(summary.total_rows),
-                "change": "+0%",
-                "trend": "up",
-                "description": "Total number of data records"
-            },
-            {
-                "title": "Total Columns", 
-                "value": str(summary.total_columns),
-                "change": "+0%",
-                "trend": "up",
-                "description": "Number of data columns"
-            },
-            {
-                "title": "Data Quality",
-                "value": f"{85}%",
-                "change": "+5%",
-                "trend": "up", 
-                "description": "Overall data quality score"
-            },
-            {
-                "title": "Missing Values",
-                "value": str(sum(summary.missing_values.values())),
-                "change": "-2%",
-                "trend": "down",
-                "description": "Total missing data points"
-            }
-        ]
-        
-        return {"kpis": kpis}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting dataset KPIs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Chart Generation Routes
-@app.post("/api/datasets/{dataset_id}/generate-dashboard")
-async def generate_dashboard(
-    dataset_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Generate initial dashboard charts"""
-    try:
-        # Get dataset from enhanced service
-        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
-        
-        # Get dataset data
-        dataset_data = await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page=1, page_size=1000)
-        
-        # Generate metadata
-        metadata = await metadata_service.generate_llm_metadata_package(
-            dataset_data.data, dataset_id
-        )
-        
-        # Generate chart recommendations
-        chart_recommendations = metadata.get("chart_recommendations", [])
-        
-        # Create dashboard charts
-        dashboard_charts = []
-        for i, rec in enumerate(chart_recommendations[:4]):  # Limit to 4 charts
-            chart_id = f"{dataset_id}_chart_{i}"
-            chart_data = await _generate_chart_data(dataset_data.data, rec)
-            
-            chart = {
-                "id": chart_id,
-                "type": rec["chart_type"],
-                "title": rec["title"],
-                "data": chart_data,
-                "fields": rec["suitable_columns"],
-                "explanation": rec["description"],
-                "confidence": rec.get("confidence", 0.8)
-            }
-            
-            charts[chart_id] = chart
-            dashboard_charts.append(chart)
-        
-        return {
-            "charts": dashboard_charts,
-            "dataset_id": dataset_id,
-            "total_charts": len(dashboard_charts)
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Dashboard generation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/datasets/{dataset_id}/create-chart")
-async def create_chart(
-    dataset_id: str, 
-    request: ChartRequest,
-    current_user: dict = Depends(get_current_user)
-):
-    """Create specific chart"""
-    try:
-        # Get dataset data
-        dataset_data = await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page=1, page_size=1000)
-        
-        chart_id = f"{dataset_id}_chart_{len(charts)}"
-        
-        # Generate chart data
-        chart_data = await _generate_chart_data(dataset_data.data, {
-            "chart_type": request.chart_type,
-            "suitable_columns": request.fields
-        })
-        
-        chart = {
-            "id": chart_id,
-            "type": request.chart_type,
-            "title": request.title or f"{request.chart_type.title()} Chart",
-            "data": chart_data,
-            "fields": request.fields,
-            "explanation": request.explanation or "Generated chart based on your request",
-            "confidence": 0.9
-        }
-        
-        charts[chart_id] = chart
-        return chart
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Chart creation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/datasets/{dataset_id}/chart-recommendations")
-async def get_chart_recommendations(
-    dataset_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Get AI chart recommendations"""
-    try:
-        # Get dataset data
-        dataset_data = await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page=1, page_size=1000)
-        
-        metadata = await metadata_service.generate_llm_metadata_package(
-            dataset_data.data, dataset_id
+        # Get the first page with limited rows
+        result = await enhanced_dataset_service.get_dataset_data(
+            dataset_id, current_user["id"], page=1, page_size=limit
         )
         
         return {
-            "recommendations": metadata.get("chart_recommendations", []),
-            "dataset_id": dataset_id
+            "success": True,
+            "rows": result.get("data", []),
+            "total_rows": result.get("total_rows", 0),
+            "columns": result.get("columns", []),
+            "limit": limit
         }
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error getting chart recommendations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting dataset preview: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get dataset preview")
+
+# --- NEW AND REFACTORED AI & ANALYSIS ENDPOINTS ---
 
 @app.post("/api/datasets/{dataset_id}/chat")
 async def process_chat(
@@ -455,761 +176,1012 @@ async def process_chat(
     request: ChatRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    """Process chat queries"""
+    """
+    Handles conversational chat with memory. The frontend must pass back
+    the `conversation_id` on subsequent messages in the same chat thread.
+    """
     try:
-        # Get dataset data
-        dataset_data = await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page=1, page_size=1000)
-        
-        # Generate metadata
-        metadata = await metadata_service.generate_llm_metadata_package(
-            dataset_data.data, dataset_id
+        # Use AI service for chat processing
+        response = await ai_service.process_chat_message(
+            query=request.message,
+            dataset_id=dataset_id,
+            user_id=current_user["id"],
+            conversation_id=request.conversation_id
         )
-        
-        # Process query with LLM
-        response = await llm_service.process_dataset_query(
-            request.message, dataset_id, dataset_data.data
-        )
-        
-        # Generate chart if requested
-        chart = None
-        if response.get("chart_recommendation"):
-            chart_data = await _generate_chart_data(
-                dataset_data.data, 
-                response["chart_recommendation"]
-            )
-            chart = {
-                "type": response["chart_recommendation"]["chart_type"],
-                "data": chart_data,
-                "fields": response["chart_recommendation"]["suitable_columns"],
-                "explanation": response["chart_recommendation"]["description"]
-            }
-        
-        return {
-            "response": response["response"],
-            "chart": chart,
-            "metadata_used": response.get("metadata_used", False),
-            "rag_used": response.get("rag_used", False)
-        }
-        
+        return response
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Chat processing error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to process chat query.")
 
-# Drill-down Routes
-@app.get("/api/datasets/{dataset_id}/hierarchies")
-async def get_hierarchies(
+@app.post("/api/datasets/{dataset_id}/chat/legacy")
+async def process_chat_legacy(
+    dataset_id: str, 
+    request: ChatRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Legacy chat endpoint for backward compatibility.
+    """
+    try:
+        response = await ai_service.process_chat_message(
+            query=request.message,
+            dataset_id=dataset_id,
+            user_id=current_user["id"],
+            conversation_id=request.conversation_id
+        )
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Chat processing error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process chat query.")
+
+@app.post("/api/ai/generate-quis-insights")
+async def generate_quis_insights(
+    request: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generates high-level, proactive insights using the QUIS methodology.
+    """
+    try:
+        dataset_metadata = request.get("dataset_metadata", {})
+        dataset_name = request.get("dataset_name", "Unknown Dataset")
+        return await ai_service.generate_quis_insights(dataset_metadata, dataset_name)
+    except Exception as e:
+        logger.error(f"Error generating QUIS insights: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate QUIS insights.")
+
+@app.post("/api/ai/{dataset_id}/generate-dashboard")
+async def generate_ai_dashboard(
+    dataset_id: str, 
+    force_regenerate: bool = False,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Triggers the AI to design and populate a full dashboard layout
+    based on the dataset's content.
+    
+    Args:
+        force_regenerate: If True, deletes existing dashboard and creates a new one
+    """
+    return await ai_service.generate_ai_dashboard(dataset_id, current_user["id"], force_regenerate)
+
+@app.post("/api/ai/{dataset_id}/design-dashboard")
+async def design_intelligent_dashboard(
+    dataset_id: str, 
+    request: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Creates an intelligent dashboard design using AI Designer service with design patterns.
+    This is the new "AI Designer" approach using few-shot learning.
+    """
+    try:
+        design_preference = request.get("design_preference")
+        
+        response = await ai_designer_service.design_intelligent_dashboard(
+            dataset_id=dataset_id,
+            user_id=current_user["id"],
+            design_preference=design_preference
+        )
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"AI Designer error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to design dashboard.")
+
+@app.get("/api/ai/design-patterns")
+async def get_design_patterns(current_user: dict = Depends(get_current_user)):
+    """
+    Get available design patterns for dashboard creation.
+    """
+    try:
+        patterns = await ai_designer_service.get_available_patterns()
+        return patterns
+    except Exception as e:
+        logger.error(f"Error getting design patterns: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get design patterns.")
+
+# --- NEW STORYTELLING AND CHART EXPLANATION ENDPOINTS ---
+
+@app.post("/api/ai/{dataset_id}/generate-story")
+async def generate_data_story(
+    dataset_id: str,
+    request: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate compelling data narratives using enhanced storytelling capabilities.
+    """
+    try:
+        story_type = request.get("story_type", "business_impact")
+        response = await ai_service.generate_data_story(dataset_id, current_user["id"], story_type)
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating data story: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate data story.")
+
+@app.post("/api/ai/{dataset_id}/explain-chart")
+async def explain_chart(
+    dataset_id: str,
+    request: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Provide comprehensive explanations of charts and visualizations.
+    """
+    try:
+        chart_config = request.get("chart_config", {})
+        chart_data = request.get("chart_data")
+        response = await ai_service.explain_chart(dataset_id, current_user["id"], chart_config, chart_data)
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error explaining chart: {e}")
+        raise HTTPException(status_code=500, detail="Failed to explain chart.")
+
+@app.post("/api/ai/{dataset_id}/business-insights")
+async def generate_business_insights(
+    dataset_id: str,
+    request: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate business-focused insights with actionable recommendations.
+    """
+    try:
+        business_context = request.get("business_context")
+        response = await ai_service.generate_business_insights(dataset_id, current_user["id"], business_context)
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating business insights: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate business insights.")
+
+# --- VECTOR DATABASE ENDPOINTS ---
+
+@app.post("/api/vector/datasets/{dataset_id}/index")
+async def index_dataset_to_vector_db(
     dataset_id: str,
     current_user: dict = Depends(get_current_user)
 ):
-    """Get available hierarchies"""
+    """
+    Index a dataset to the vector database for semantic search.
+    """
     try:
-        # Get dataset data
-        dataset_data = await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page=1, page_size=1000)
+        # Get dataset metadata
+        dataset_doc = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
         
-        analysis = await drilldown_service.analyze_dataset_for_drilldown(dataset_data.data)
+        if not dataset_doc or not dataset_doc.get("metadata"):
+            raise HTTPException(status_code=404, detail="Dataset not found or not processed")
         
-        return {
-            "hierarchies": analysis.get("hierarchies", []),
-            "dataset_id": dataset_id
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting hierarchies: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/datasets/{dataset_id}/drill-down")
-async def drill_down(
-    dataset_id: str, 
-    request: DrillDownRequest,
-    current_user: dict = Depends(get_current_user)
-):
-    """Execute drill-down operation"""
-    try:
-        # Get dataset data
-        dataset_data = await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page=1, page_size=1000)
-        
-        result = await drilldown_service.execute_drilldown(
-            dataset_data.data, 
-            request.hierarchy, 
-            request.current_level, 
-            request.filters
+        # Add to vector database
+        success = await faiss_vector_service.add_dataset_to_vector_db(
+            dataset_id=dataset_id,
+            dataset_metadata=dataset_doc["metadata"],
+            user_id=current_user["id"]
         )
         
-        return result
-        
+        if success:
+            return {"message": "Dataset indexed successfully", "dataset_id": dataset_id}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to index dataset")
+            
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Drill-down error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Dataset indexing error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to index dataset")
 
-# Helper function
-async def _generate_chart_data(data: List[Dict], chart_config: Dict) -> List[Dict]:
-    """Generate chart data based on configuration"""
-    df = pd.DataFrame(data)
-    
-    chart_type = chart_config.get("chart_type", "bar_chart")
-    fields = chart_config.get("suitable_columns", [])
-    
-    if not fields or len(fields) < 1:
-        return []
-    
-    try:
-        if chart_type == "bar_chart":
-            if len(fields) >= 2:
-                # Group by first field, sum the second field
-                result = df.groupby(fields[0])[fields[1]].sum().reset_index()
-                result.columns = ['x', 'y']
-                return result.to_dict('records')
-            else:
-                # Count frequency of single field
-                result = df[fields[0]].value_counts().reset_index()
-                result.columns = ['x', 'y']
-                return result.to_dict('records')
-        
-        elif chart_type == "pie_chart":
-            result = df[fields[0]].value_counts().reset_index()
-            result.columns = ['label', 'value']
-            return result.to_dict('records')
-        
-        elif chart_type == "line_chart":
-            if len(fields) >= 2:
-                # Group by first field, average the second field
-                result = df.groupby(fields[0])[fields[1]].mean().reset_index()
-                result.columns = ['x', 'y']
-                return result.to_dict('records')
-            else:
-                # Count frequency of single field
-                result = df[fields[0]].value_counts().reset_index()
-                result.columns = ['x', 'y']
-                return result.to_dict('records')
-        
-        elif chart_type == "scatter_plot":
-            if len(fields) >= 2:
-                # Scatter plot data
-                result = df[fields[:2]].copy()
-                result.columns = ['x', 'y']
-                # Remove any NaN values
-                result = result.dropna()
-                return result.to_dict('records')
-            else:
-                return []
-        
-        elif chart_type == "histogram":
-            if len(fields) >= 1:
-                # Create histogram bins
-                col = fields[0]
-                if df[col].dtype in ['int64', 'float64']:
-                    # Create bins for histogram
-                    bins = pd.cut(df[col], bins=10, include_lowest=True)
-                    result = bins.value_counts().reset_index()
-                    result.columns = ['bin', 'count']
-                    return result.to_dict('records')
-                else:
-                    # For categorical data, use bar chart
-                    result = df[col].value_counts().reset_index()
-                    result.columns = ['x', 'y']
-                    return result.to_dict('records')
-            else:
-                return []
-        
-        else:
-            # Default: return raw data for specified fields
-            return df[fields].to_dict('records')
-    
-    except Exception as e:
-        logger.error(f"Error generating chart data: {e}")
-        return []
-
-# AI Visualization Endpoints
-@app.post("/api/ai/recommend-fields")
-async def recommend_fields(
+@app.post("/api/vector/search/datasets")
+async def search_similar_datasets(
     request: Dict[str, Any],
     current_user: dict = Depends(get_current_user)
 ):
-    """AI-powered field recommendations for visualization"""
-    try:
-        columns = request.get("columns", [])
-        dataset_name = request.get("dataset_name", "Unknown Dataset")
-        
-        result = await ai_visualization_service.recommend_fields(columns, dataset_name)
-        return result
-    except Exception as e:
-        logger.error(f"Error in field recommendations: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate field recommendations")
-
-@app.post("/api/ai/generate-insights")
-async def generate_insights(
-    request: Dict[str, Any],
-    current_user: dict = Depends(get_current_user)
-):
-    """Generate AI-powered insights using QUIS methodology from research paper"""
-    try:
-        dataset_metadata = request.get("dataset_metadata", {})
-        dataset_name = request.get("dataset_name", "Unknown Dataset")
-        
-        # Generate QUIS insights
-        result = await ai_visualization_service.generate_insights(dataset_metadata, dataset_name)
-        return result
-    except Exception as e:
-        logger.error(f"Error generating QUIS insights: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate insights")
-
-@app.post("/api/ai/natural-query")
-async def process_natural_query(
-    request: Dict[str, Any],
-    current_user: dict = Depends(get_current_user)
-):
-    """Process natural language queries about the dataset"""
+    """
+    Search for datasets similar to the query using semantic similarity.
+    """
     try:
         query = request.get("query", "")
-        dataset_metadata = request.get("dataset_metadata", {})
-        dataset_name = request.get("dataset_name", "Unknown Dataset")
+        limit = request.get("limit", 5)
         
         if not query.strip():
-            raise HTTPException(status_code=400, detail="Query cannot be empty")
+            raise HTTPException(status_code=400, detail="Query is required")
         
-        result = await ai_visualization_service.process_natural_query(query, dataset_metadata, dataset_name)
-        return result
+        similar_datasets = await faiss_vector_service.search_similar_datasets(
+            query=query,
+            user_id=current_user["id"],
+            limit=limit
+        )
+        
+        return {
+            "query": query,
+            "results": similar_datasets,
+            "total_found": len(similar_datasets)
+        }
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing natural query: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process query")
+        logger.error(f"Vector search error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to search datasets")
 
-@app.post("/api/analysis/run")
-async def run_analysis(
+@app.post("/api/vector/rag/{dataset_id}/enhanced")
+async def enhanced_rag_search(
+    dataset_id: str,
     request: Dict[str, Any],
     current_user: dict = Depends(get_current_user)
 ):
-    """Run advanced statistical analysis on dataset"""
+    """
+    Enhanced RAG search combining vector similarity with dataset context.
+    """
+    try:
+        query = request.get("query", "")
+        
+        if not query.strip():
+            raise HTTPException(status_code=400, detail="Query is required")
+        
+        # Add query to history
+        await faiss_vector_service.add_query_to_history(
+            query=query,
+            dataset_id=dataset_id,
+            user_id=current_user["id"]
+        )
+        
+        # Perform enhanced RAG search
+        rag_result = await faiss_vector_service.enhanced_rag_search(
+            query=query,
+            dataset_id=dataset_id,
+            user_id=current_user["id"]
+        )
+        
+        return rag_result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Enhanced RAG error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to perform enhanced RAG search")
+
+@app.get("/api/vector/stats")
+async def get_vector_db_stats(current_user: dict = Depends(get_current_user)):
+    """
+    Get statistics about the vector database for the current user.
+    """
+    try:
+        stats = await faiss_vector_service.get_vector_db_stats(current_user["id"])
+        return stats
+        
+    except Exception as e:
+        logger.error(f"Vector stats error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get vector database stats")
+
+@app.delete("/api/vector/reset")
+async def reset_vector_db(current_user: dict = Depends(get_current_user)):
+    """
+    Reset the vector database for the current user.
+    """
+    try:
+        success = await faiss_vector_service.reset_vector_db(current_user["id"])
+        
+        if success:
+            return {"message": "Vector database reset successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to reset vector database")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Vector reset error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset vector database")
+
+@app.post("/api/charts/render-preview")
+async def render_chart_preview(
+    request: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Dedicated endpoint for deterministic chart rendering.
+    Takes a chart configuration and returns Plotly-ready data.
+    This endpoint is separate from AI reasoning and focuses purely on rendering.
+    """
+    try:
+        chart_config = request.get("chart_config")
+        dataset_id = request.get("dataset_id")
+        
+        if not chart_config or not dataset_id:
+            raise HTTPException(status_code=400, detail="chart_config and dataset_id are required")
+        
+        response = await chart_render_service.render_chart(
+            chart_config=chart_config,
+            dataset_id=dataset_id,
+            user_id=current_user["id"]
+        )
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Chart rendering error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to render chart.")
+
+@app.post("/api/analysis/run")
+async def run_analysis(request: Dict[str, Any], current_user: dict = Depends(get_current_user)):
+    """
+    Runs a specific, targeted statistical analysis from the computational engine.
+    This endpoint no longer contains any analysis logic itself.
+    """
     try:
         dataset_id = request.get("dataset_id")
-        analysis_type = request.get("analysis_type")
-        parameters = request.get("parameters", {})
+        analysis_type = request.get("analysis_type") # e.g., "correlation", "outlier"
         
         if not dataset_id or not analysis_type:
             raise HTTPException(status_code=400, detail="Dataset ID and analysis type are required")
-        
-        # Get dataset details
+
         dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        if not dataset or not dataset.get("file_path"):
+            raise HTTPException(status_code=404, detail="Dataset file not found.")
+
+        # Load data using Polars for performance
+        df = pl.read_csv(dataset["file_path"]) # Add logic for other file types if needed
         
-        # Run analysis based on type
-        results = await run_statistical_analysis(dataset, analysis_type, parameters)
-        
+        # Route to the correct method in analysis_service
+        if analysis_type == "correlation":
+            results = analysis_service.find_strong_correlations(df)
+        elif analysis_type == "outlier":
+            results = analysis_service.detect_outliers_iqr(df)
+        elif analysis_type == "distribution":
+            results = analysis_service.analyze_distribution(df)
+        # Add more routes here as needed...
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown analysis type: {analysis_type}")
+            
         return {
             "results": results,
             "analysis_type": analysis_type,
             "dataset_name": dataset.get("name", "Unknown"),
             "timestamp": datetime.utcnow().isoformat()
         }
-        
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error running analysis: {e}")
-        raise HTTPException(status_code=500, detail="Failed to run analysis")
+        raise HTTPException(status_code=500, detail="Failed to run analysis.")
 
-async def run_statistical_analysis(dataset: Dict, analysis_type: str, parameters: Dict) -> List[Dict]:
-    """Run statistical analysis based on type"""
-    try:
-        # Get dataset data
-        file_path = dataset.get("file_path")
-        if not file_path:
-            raise HTTPException(status_code=404, detail="Dataset file not found")
-        
-        # Read data using file storage service
-        data = await file_storage_service.get_file_data(file_path, limit=10000)  # Limit for analysis
-        
-        if not data:
-            raise HTTPException(status_code=400, detail="No data available for analysis")
-        
-        results = []
-        
-        if analysis_type == "correlation":
-            results = await run_correlation_analysis(data, parameters)
-        elif analysis_type == "trend":
-            results = await run_trend_analysis(data, parameters)
-        elif analysis_type == "distribution":
-            results = await run_distribution_analysis(data, parameters)
-        elif analysis_type == "outlier":
-            results = await run_outlier_analysis(data, parameters)
-        elif analysis_type == "clustering":
-            results = await run_clustering_analysis(data, parameters)
-        elif analysis_type == "regression":
-            results = await run_regression_analysis(data, parameters)
-        else:
-            raise HTTPException(status_code=400, detail="Invalid analysis type")
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error in statistical analysis: {e}")
-        raise e
-
-async def run_correlation_analysis(data: List[Dict], parameters: Dict) -> List[Dict]:
-    """Run correlation analysis"""
-    try:
-        import pandas as pd
-        import numpy as np
-        
-        df = pd.DataFrame(data)
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if len(numeric_cols) < 2:
-            return [{
-                "title": "Insufficient Data for Correlation",
-                "description": "Need at least 2 numeric columns for correlation analysis",
-                "type": "correlation",
-                "confidence": 0.0
-            }]
-        
-        # Calculate correlation matrix
-        corr_matrix = df[numeric_cols].corr()
-        
-        # Find strongest correlations
-        strong_correlations = []
-        for i in range(len(corr_matrix.columns)):
-            for j in range(i+1, len(corr_matrix.columns)):
-                corr_value = corr_matrix.iloc[i, j]
-                if abs(corr_value) > 0.5:  # Strong correlation threshold
-                    strong_correlations.append({
-                        "variable1": corr_matrix.columns[i],
-                        "variable2": corr_matrix.columns[j],
-                        "correlation": corr_value
-                    })
-        
-        # Create correlation heatmap data
-        heatmap_data = [{
-            "z": corr_matrix.values.tolist(),
-            "x": corr_matrix.columns.tolist(),
-            "y": corr_matrix.columns.tolist(),
-            "type": "heatmap",
-            "colorscale": "RdBu"
-        }]
-        
-        results = [{
-            "title": f"Correlation Analysis - {len(strong_correlations)} Strong Relationships Found",
-            "description": f"Found {len(strong_correlations)} strong correlations (|r| > 0.5) between numeric variables",
-            "type": "correlation",
-            "confidence": 0.85,
-            "chart": {
-                "data": heatmap_data,
-                "layout": {
-                    "title": "Correlation Matrix Heatmap",
-                    "xaxis": {"title": "Variables"},
-                    "yaxis": {"title": "Variables"}
-                },
-                "config": {"displayModeBar": True}
-            },
-            "insights": strong_correlations[:5]  # Top 5 correlations
-        }]
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error in correlation analysis: {e}")
-        return [{"title": "Correlation Analysis Failed", "description": str(e), "type": "correlation", "confidence": 0.0}]
-
-async def run_trend_analysis(data: List[Dict], parameters: Dict) -> List[Dict]:
-    """Run trend analysis"""
-    try:
-        import pandas as pd
-        import numpy as np
-        
-        df = pd.DataFrame(data)
-        
-        # Find time-related columns
-        time_cols = [col for col in df.columns if 'date' in col.lower() or 'time' in col.lower()]
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if not time_cols or not numeric_cols:
-            return [{
-                "title": "Insufficient Data for Trend Analysis",
-                "description": "Need time-related and numeric columns for trend analysis",
-                "type": "trend",
-                "confidence": 0.0
-            }]
-        
-        time_col = time_cols[0]
-        value_col = numeric_cols[0]
-        
-        # Convert time column to datetime
-        df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
-        df = df.dropna(subset=[time_col, value_col])
-        
-        # Sort by time
-        df = df.sort_values(time_col)
-        
-        # Create trend line data
-        trend_data = [{
-            "x": df[time_col].dt.strftime('%Y-%m-%d').tolist(),
-            "y": df[value_col].tolist(),
-            "type": "scatter",
-            "mode": "lines+markers",
-            "name": f"{value_col} Trend",
-            "line": {"color": "#3B82F6"}
-        }]
-        
-        # Calculate trend statistics
-        values = df[value_col].values
-        trend_slope = np.polyfit(range(len(values)), values, 1)[0]
-        trend_direction = "increasing" if trend_slope > 0 else "decreasing"
-        
-        results = [{
-            "title": f"Trend Analysis - {value_col} over {time_col}",
-            "description": f"Data shows {trend_direction} trend with slope of {trend_slope:.4f}",
-            "type": "trend",
-            "confidence": 0.8,
-            "chart": {
-                "data": trend_data,
-                "layout": {
-                    "title": f"{value_col} Trend Over Time",
-                    "xaxis": {"title": time_col},
-                    "yaxis": {"title": value_col}
-                },
-                "config": {"displayModeBar": True}
-            },
-            "insights": [{
-                "metric": "Trend Slope",
-                "value": trend_slope,
-                "interpretation": f"{trend_direction} trend"
-            }]
-        }]
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error in trend analysis: {e}")
-        return [{"title": "Trend Analysis Failed", "description": str(e), "type": "trend", "confidence": 0.0}]
-
-async def run_distribution_analysis(data: List[Dict], parameters: Dict) -> List[Dict]:
-    """Run distribution analysis"""
-    try:
-        import pandas as pd
-        import numpy as np
-        
-        df = pd.DataFrame(data)
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if not numeric_cols:
-            return [{
-                "title": "No Numeric Data for Distribution Analysis",
-                "description": "Need numeric columns for distribution analysis",
-                "type": "distribution",
-                "confidence": 0.0
-            }]
-        
-        results = []
-        
-        for col in numeric_cols[:3]:  # Analyze first 3 numeric columns
-            values = df[col].dropna()
-            
-            # Create histogram data
-            hist_data = [{
-                "x": values.tolist(),
-                "type": "histogram",
-                "name": col,
-                "marker": {"color": "#3B82F6"}
-            }]
-            
-            # Calculate distribution statistics
-            mean_val = values.mean()
-            std_val = values.std()
-            skewness = values.skew()
-            kurtosis = values.kurtosis()
-            
-            distribution_type = "normal"
-            if abs(skewness) > 1:
-                distribution_type = "highly skewed"
-            elif abs(skewness) > 0.5:
-                distribution_type = "moderately skewed"
-            
-            results.append({
-                "title": f"Distribution Analysis - {col}",
-                "description": f"Distribution is {distribution_type} (skewness: {skewness:.3f}, kurtosis: {kurtosis:.3f})",
-                "type": "distribution",
-                "confidence": 0.8,
-                "chart": {
-                    "data": hist_data,
-                    "layout": {
-                        "title": f"Distribution of {col}",
-                        "xaxis": {"title": col},
-                        "yaxis": {"title": "Frequency"}
-                    },
-                    "config": {"displayModeBar": True}
-                },
-                "insights": [{
-                    "metric": "Mean",
-                    "value": mean_val,
-                    "interpretation": f"Average value: {mean_val:.2f}"
-                }, {
-                    "metric": "Standard Deviation",
-                    "value": std_val,
-                    "interpretation": f"Spread: {std_val:.2f}"
-                }]
-            })
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error in distribution analysis: {e}")
-        return [{"title": "Distribution Analysis Failed", "description": str(e), "type": "distribution", "confidence": 0.0}]
-
-async def run_outlier_analysis(data: List[Dict], parameters: Dict) -> List[Dict]:
-    """Run outlier detection analysis"""
-    try:
-        import pandas as pd
-        import numpy as np
-        
-        df = pd.DataFrame(data)
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if not numeric_cols:
-            return [{
-                "title": "No Numeric Data for Outlier Analysis",
-                "description": "Need numeric columns for outlier detection",
-                "type": "outlier",
-                "confidence": 0.0
-            }]
-        
-        results = []
-        
-        for col in numeric_cols[:2]:  # Analyze first 2 numeric columns
-            values = df[col].dropna()
-            
-            # IQR method for outlier detection
-            Q1 = values.quantile(0.25)
-            Q3 = values.quantile(0.75)
-            IQR = Q3 - Q1
-            lower_bound = Q1 - 1.5 * IQR
-            upper_bound = Q3 + 1.5 * IQR
-            
-            outliers = values[(values < lower_bound) | (values > upper_bound)]
-            outlier_percentage = (len(outliers) / len(values)) * 100
-            
-            # Create box plot data
-            box_data = [{
-                "y": values.tolist(),
-                "type": "box",
-                "name": col,
-                "marker": {"color": "#3B82F6"}
-            }]
-            
-            results.append({
-                "title": f"Outlier Detection - {col}",
-                "description": f"Found {len(outliers)} outliers ({outlier_percentage:.1f}% of data) using IQR method",
-                "type": "outlier",
-                "confidence": 0.85,
-                "chart": {
-                    "data": box_data,
-                    "layout": {
-                        "title": f"Box Plot - {col} (Outliers Highlighted)",
-                        "yaxis": {"title": col}
-                    },
-                    "config": {"displayModeBar": True}
-                },
-                "insights": [{
-                    "metric": "Outlier Count",
-                    "value": len(outliers),
-                    "interpretation": f"{outlier_percentage:.1f}% of data points are outliers"
-                }]
-            })
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error in outlier analysis: {e}")
-        return [{"title": "Outlier Analysis Failed", "description": str(e), "type": "outlier", "confidence": 0.0}]
-
-async def run_clustering_analysis(data: List[Dict], parameters: Dict) -> List[Dict]:
-    """Run clustering analysis"""
-    try:
-        import pandas as pd
-        import numpy as np
-        
-        df = pd.DataFrame(data)
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if len(numeric_cols) < 2:
-            return [{
-                "title": "Insufficient Data for Clustering",
-                "description": "Need at least 2 numeric columns for clustering analysis",
-                "type": "clustering",
-                "confidence": 0.0
-            }]
-        
-        # Use first 2 numeric columns for clustering
-        X = df[numeric_cols[:2]].dropna()
-        
-        if len(X) < 10:
-            return [{
-                "title": "Insufficient Data for Clustering",
-                "description": "Need at least 10 data points for clustering analysis",
-                "type": "clustering",
-                "confidence": 0.0
-            }]
-        
-        # Simple k-means clustering (k=3)
-        from sklearn.cluster import KMeans
-        kmeans = KMeans(n_clusters=3, random_state=42)
-        clusters = kmeans.fit_predict(X)
-        
-        # Create scatter plot with clusters
-        scatter_data = [{
-            "x": X.iloc[:, 0].tolist(),
-            "y": X.iloc[:, 1].tolist(),
-            "mode": "markers",
-            "type": "scatter",
-            "marker": {
-                "color": clusters,
-                "colorscale": "Viridis",
-                "size": 8
-            },
-            "name": "Clusters"
-        }]
-        
-        results = [{
-            "title": f"Clustering Analysis - {numeric_cols[0]} vs {numeric_cols[1]}",
-            "description": f"Data grouped into 3 clusters using k-means algorithm",
-            "type": "clustering",
-            "confidence": 0.8,
-            "chart": {
-                "data": scatter_data,
-                "layout": {
-                    "title": f"K-Means Clustering ({numeric_cols[0]} vs {numeric_cols[1]})",
-                    "xaxis": {"title": numeric_cols[0]},
-                    "yaxis": {"title": numeric_cols[1]}
-                },
-                "config": {"displayModeBar": True}
-            },
-            "insights": [{
-                "metric": "Number of Clusters",
-                "value": 3,
-                "interpretation": "Data naturally groups into 3 distinct clusters"
-            }]
-        }]
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error in clustering analysis: {e}")
-        return [{"title": "Clustering Analysis Failed", "description": str(e), "type": "clustering", "confidence": 0.0}]
-
-async def run_regression_analysis(data: List[Dict], parameters: Dict) -> List[Dict]:
-    """Run regression analysis"""
-    try:
-        import pandas as pd
-        import numpy as np
-        
-        df = pd.DataFrame(data)
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if len(numeric_cols) < 2:
-            return [{
-                "title": "Insufficient Data for Regression",
-                "description": "Need at least 2 numeric columns for regression analysis",
-                "type": "regression",
-                "confidence": 0.0
-            }]
-        
-        # Use first 2 numeric columns for regression
-        X = df[numeric_cols[0]].dropna().values.reshape(-1, 1)
-        y = df[numeric_cols[1]].dropna().values
-        
-        if len(X) != len(y) or len(X) < 10:
-            return [{
-                "title": "Insufficient Data for Regression",
-                "description": "Need matching data points for regression analysis",
-                "type": "regression",
-                "confidence": 0.0
-            }]
-        
-        # Simple linear regression
-        from sklearn.linear_model import LinearRegression
-        from sklearn.metrics import r2_score
-        
-        model = LinearRegression()
-        model.fit(X, y)
-        y_pred = model.predict(X)
-        r2 = r2_score(y, y_pred)
-        
-        # Create regression plot
-        regression_data = [
-            {
-                "x": X.flatten().tolist(),
-                "y": y.tolist(),
-                "mode": "markers",
-                "type": "scatter",
-                "name": "Data Points",
-                "marker": {"color": "#3B82F6"}
-            },
-            {
-                "x": X.flatten().tolist(),
-                "y": y_pred.tolist(),
-                "mode": "lines",
-                "type": "scatter",
-                "name": "Regression Line",
-                "line": {"color": "#EF4444"}
-            }
-        ]
-        
-        results = [{
-            "title": f"Regression Analysis - {numeric_cols[0]} vs {numeric_cols[1]}",
-            "description": f"Linear regression with R² = {r2:.3f} (slope: {model.coef_[0]:.3f}, intercept: {model.intercept_:.3f})",
-            "type": "regression",
-            "confidence": 0.8,
-            "chart": {
-                "data": regression_data,
-                "layout": {
-                    "title": f"Linear Regression ({numeric_cols[0]} vs {numeric_cols[1]})",
-                    "xaxis": {"title": numeric_cols[0]},
-                    "yaxis": {"title": numeric_cols[1]}
-                },
-                "config": {"displayModeBar": True}
-            },
-            "insights": [{
-                "metric": "R² Score",
-                "value": r2,
-                "interpretation": f"Model explains {r2*100:.1f}% of variance"
-            }]
-        }]
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error in regression analysis: {e}")
-        return [{"title": "Regression Analysis Failed", "description": str(e), "type": "regression", "confidence": 0.0}]
-
-@app.post("/api/ai/generate-chart")
-async def generate_chart(
-    request: Dict[str, Any],
-    current_user: dict = Depends(get_current_user)
-):
-    """Generate AI-powered chart from dataset"""
+@app.post("/api/analysis/run-quis")
+async def run_quis_analysis(request: Dict[str, Any], current_user: dict = Depends(get_current_user)):
+    """
+    Runs the comprehensive QUIS analysis including subspace search for deep insights.
+    This implements the full QUIS methodology for discovering hidden patterns.
+    """
     try:
         dataset_id = request.get("dataset_id")
-        columns = request.get("columns", [])
-        data_sample = request.get("data_sample", [])
+        max_depth = request.get("max_depth", 2)  # Default to 2-level subspace search
         
         if not dataset_id:
             raise HTTPException(status_code=400, detail="Dataset ID is required")
+
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        if not dataset or not dataset.get("file_path"):
+            raise HTTPException(status_code=404, detail="Dataset file not found.")
+
+        # Load data using Polars for performance
+        import polars as pl
+        df = pl.read_csv(dataset["file_path"])  # Add logic for other file types if needed
         
-        # Get dataset details
+        # Run comprehensive QUIS analysis
+        quis_results = analysis_service.run_quis_analysis(df)
+        
+        # Add query to history for future RAG enhancement
+        await faiss_vector_service.add_query_to_history(
+            query="QUIS comprehensive analysis",
+            dataset_id=dataset_id,
+            user_id=current_user["id"]
+        )
+        
+        return {
+            "quis_analysis": quis_results,
+            "dataset_name": dataset.get("name", "Unknown"),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error running QUIS analysis: {e}")
+        raise HTTPException(status_code=500, detail="Failed to run QUIS analysis.")
+
+# --- DRILLDOWN ENDPOINTS (remain the same, correctly use drilldown_service) ---
+@app.post("/api/datasets/{dataset_id}/reprocess")
+async def reprocess_dataset(dataset_id: str, current_user: dict = Depends(get_current_user)):
+    """Reprocess a dataset to regenerate metadata."""
+    try:
+        # Get the dataset to ensure it exists and user owns it
         dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
         
-        # Generate chart using AI analysis
-        result = await ai_visualization_service.generate_chart(dataset, columns, data_sample)
-        return result
+        # Dispatch a new processing task
+        from tasks import process_dataset_task
+        task = process_dataset_task.delay(dataset_id, dataset["file_path"])
         
-    except HTTPException:
-        raise
+        return {
+            "message": "Dataset reprocessing started",
+            "task_id": task.id,
+            "dataset_id": dataset_id
+        }
     except Exception as e:
-        logger.error(f"Error generating chart: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate chart")
+        logger.error(f"Error reprocessing dataset {dataset_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reprocess dataset")
+
+@app.get("/api/datasets/{dataset_id}/hierarchies")
+async def get_hierarchies(dataset_id: str, current_user: dict = Depends(get_current_user)):
+    dataset_data = await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page_size=5000)
+    analysis = await drilldown_service.analyze_dataset_for_drilldown(dataset_data.data)
+    return {"hierarchies": analysis.get("hierarchies", []), "dataset_id": dataset_id}
+
+@app.post("/api/datasets/{dataset_id}/drill-down")
+async def drill_down(
+    dataset_id: str, request: DrillDownRequest, current_user: dict = Depends(get_current_user)
+):
+    dataset_data = await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page_size=20000)
+    return await drilldown_service.execute_drilldown(
+        dataset_data.data, request.hierarchy, request.current_level, request.filters
+    )
+
+# --- NEW BACKGROUND TASK STATUS ENDPOINT ---
+@app.get("/api/tasks/{task_id}/status")
+async def get_task_status(task_id: str, current_user: dict = Depends(get_current_user)):
+    """Polls the status of a Celery background task."""
+    task_result = AsyncResult(task_id, app=celery_app)
+    response = {"task_id": task_id, "state": task_result.state, "info": {}}
+    if task_result.state == 'PROGRESS':
+        response["info"] = task_result.info
+    elif task_result.state == 'SUCCESS':
+        response["info"] = task_result.result
+    elif task_result.state == 'FAILURE':
+        response["info"] = {'error': str(task_result.info)}
+    return response
+
+# --- DASHBOARD ENDPOINTS ---
+
+@app.get("/api/dashboard/{dataset_id}/overview")
+async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(get_current_user)):
+    """Get dashboard overview with KPIs and basic statistics"""
+    try:
+        # Get dataset info
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Load dataset data
+        df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
+        if df is None:
+            raise HTTPException(status_code=404, detail="Dataset data not found")
+        
+        # Calculate basic statistics
+        numeric_cols = df.select(pl.col(pl.NUMERIC_DTYPES)).columns
+        categorical_cols = df.select(pl.col([pl.Utf8, pl.Categorical])).columns
+        
+        # Generate KPIs based on actual data
+        kpis = []
+        
+        if numeric_cols:
+            # Use first numeric column for primary KPI
+            primary_col = numeric_cols[0]
+            total_value = df[primary_col].sum()
+            mean_value = df[primary_col].mean()
+            
+            kpis.append({
+                "title": f"Total {primary_col}",
+                "value": f"${total_value:,.2f}" if "price" in primary_col.lower() or "revenue" in primary_col.lower() or "sales" in primary_col.lower() else f"{total_value:,.0f}",
+                "change": 0,  # Would need historical data for real change
+                "color": "success",
+                "trendData": []  # Would need time series data
+            })
+            
+            kpis.append({
+                "title": f"Average {primary_col}",
+                "value": f"${mean_value:,.2f}" if "price" in primary_col.lower() or "revenue" in primary_col.lower() or "sales" in primary_col.lower() else f"{mean_value:,.0f}",
+                "change": 0,
+                "color": "info",
+                "trendData": []
+            })
+        
+        # Row count KPI
+        kpis.append({
+            "title": "Total Records",
+            "value": f"{len(df):,}",
+            "change": 0,
+            "color": "success",
+            "trendData": []
+        })
+        
+        # Column count KPI
+        kpis.append({
+            "title": "Data Columns",
+            "value": f"{len(df.columns)}",
+            "change": 0,
+            "color": "info",
+            "trendData": []
+        })
+        
+        return {
+            "dataset": {
+                "id": dataset["id"],
+                "name": dataset["name"],
+                "row_count": len(df),
+                "column_count": len(df.columns)
+            },
+            "kpis": kpis,
+            "data_types": {
+                "numeric": len(numeric_cols),
+                "categorical": len(categorical_cols),
+                "total": len(df.columns)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting dashboard overview: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get dashboard overview")
+
+@app.get("/api/dashboard/{dataset_id}/insights")
+async def get_dashboard_insights(dataset_id: str, current_user: dict = Depends(get_current_user)):
+    """Get AI-generated insights for dashboard"""
+    try:
+        # Get dataset info
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Load dataset data
+        df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
+        if df is None:
+            raise HTTPException(status_code=404, detail="Dataset data not found")
+        
+        # Run QUIS analysis to get real insights
+        quis_results = analysis_service.run_quis_analysis(df)
+        
+        # Convert QUIS results to dashboard insights format
+        insights = []
+        
+        # Process basic insights
+        for insight in quis_results["basic_insights"][:3]:  # Limit to top 3
+            if insight["type"] == "correlation":
+                strength = insight.get("strength", "moderate")
+                method = insight.get("method", "correlation")
+                columns = insight.get("columns", ["unknown", "unknown"])
+                value = insight.get("value", 0)
+                
+                insights.append({
+                    "id": len(insights) + 1,
+                    "type": "info",
+                    "title": f"Strong {method} correlation found",
+                    "description": f"Columns '{columns[0]}' and '{columns[1]}' show {strength} correlation ({value})",
+                    "confidence": 85,
+                    "icon": "TrendingUp",
+                    "color": "text-blue-400",
+                    "bgColor": "bg-blue-500/10",
+                    "borderColor": "border-blue-500/30"
+                })
+            elif insight["type"] == "outlier":
+                insights.append({
+                    "id": len(insights) + 1,
+                    "type": "warning",
+                    "title": "Outliers detected",
+                    "description": f"Column '{insight['column']}' has {insight['percentage']}% outliers that may need attention",
+                    "confidence": 90,
+                    "icon": "AlertTriangle",
+                    "color": "text-yellow-400",
+                    "bgColor": "bg-yellow-500/10",
+                    "borderColor": "border-yellow-500/30"
+                })
+        
+        # Process deep insights (QUIS subspace search results)
+        for insight in quis_results["deep_insights"][:2]:  # Limit to top 2
+            if insight["type"] == "subspace_correlation":
+                insights.append({
+                    "id": len(insights) + 1,
+                    "type": "success",
+                    "title": "Hidden pattern discovered",
+                    "description": f"Correlation between '{insight['base_insight']['columns'][0]}' and '{insight['base_insight']['columns'][1]}' is much stronger ({insight['subspace_correlation']}) in {insight['subspace']}",
+                    "confidence": 95,
+                    "icon": "Lightbulb",
+                    "color": "text-green-400",
+                    "bgColor": "bg-green-500/10",
+                    "borderColor": "border-green-500/30"
+                })
+            elif insight["type"] == "category_specific_pattern":
+                insights.append({
+                    "id": len(insights) + 1,
+                    "type": "info",
+                    "title": "Category-specific pattern",
+                    "description": f"Category '{insight['category_value']}' shows significantly different behavior in '{insight['numeric_column']}' (deviation: {insight['deviation']})",
+                    "confidence": 88,
+                    "icon": "CheckCircle",
+                    "color": "text-blue-400",
+                    "bgColor": "bg-blue-500/10",
+                    "borderColor": "border-blue-500/30"
+                })
+        
+        # If no insights found, add a default one
+        if not insights:
+            insights.append({
+                "id": 1,
+                "type": "info",
+                "title": "Dataset analysis complete",
+                "description": f"Successfully analyzed {len(df)} records with {len(df.columns)} columns. No significant patterns detected.",
+                "confidence": 100,
+                "icon": "CheckCircle",
+                "color": "text-blue-400",
+                "bgColor": "bg-blue-500/10",
+                "borderColor": "border-blue-500/30"
+            })
+        
+        return {
+            "insights": insights,
+            "summary": {
+                "total_insights": len(insights),
+                "high_confidence": len([i for i in insights if i["confidence"] > 90]),
+                "quis_insights": len(quis_results["deep_insights"])
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting dashboard insights: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get dashboard insights")
+
+@app.post("/api/analytics/generate-chart")
+async def generate_analytics_chart(
+    request: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """Generate chart data for analytics studio"""
+    try:
+        dataset_id = request.get("dataset_id")
+        chart_type = request.get("chart_type", "bar")
+        x_axis = request.get("x_axis")
+        y_axis = request.get("y_axis")
+        aggregation = request.get("aggregation", "sum")
+        
+        if not dataset_id or not x_axis or not y_axis:
+            raise HTTPException(status_code=400, detail="dataset_id, x_axis, and y_axis are required")
+        
+        # Get dataset
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Load dataset data
+        df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
+        if df is None:
+            raise HTTPException(status_code=404, detail="Dataset data not found")
+        
+        # Generate chart data based on type
+        chart_data = []
+        
+        if chart_type == "pie":
+            # For pie charts, group by x-axis and aggregate y-axis
+            grouped = df.group_by(x_axis).agg([
+                getattr(pl.col(y_axis), aggregation)().alias("value")
+            ]).sort("value", descending=True).limit(10)
+            
+            chart_data = [
+                {
+                    "name": str(row[x_axis]) if row[x_axis] is not None else "Unknown",
+                    "value": float(row["value"]) if row["value"] is not None else 0
+                }
+                for row in grouped.to_dicts()
+            ]
+        else:
+            # For other charts, use the data as-is
+            sample_data = df.limit(100)  # Limit to 100 rows for performance
+            chart_data = [
+                {
+                    "name": str(row[x_axis]) if row[x_axis] is not None else f"Item {i+1}",
+                    x_axis: str(row[x_axis]) if row[x_axis] is not None else f"Item {i+1}",
+                    y_axis: float(row[y_axis]) if row[y_axis] is not None else 0,
+                    "x": i,
+                    "y": float(row[y_axis]) if row[y_axis] is not None else 0
+                }
+                for i, row in enumerate(sample_data.to_dicts())
+            ]
+        
+        return {
+            "chart_data": chart_data,
+            "chart_type": chart_type,
+            "x_axis": x_axis,
+            "y_axis": y_axis,
+            "aggregation": aggregation,
+            "dataset_info": {
+                "name": dataset["name"],
+                "row_count": len(df),
+                "column_count": len(df.columns)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating analytics chart: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate chart data")
+
+@app.get("/api/dashboard/{dataset_id}/charts")
+async def get_dashboard_charts(dataset_id: str, current_user: dict = Depends(get_current_user)):
+    """Get chart data for dashboard"""
+    try:
+        # Get dataset info
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Load dataset data
+        df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
+        if df is None:
+            raise HTTPException(status_code=404, detail="Dataset data not found")
+        
+        charts = {}
+        
+        # Generate revenue/time chart - improved logic
+        numeric_cols = df.select(pl.col(pl.NUMERIC_DTYPES)).columns
+        temporal_cols = df.select(pl.col([pl.Date, pl.Datetime])).columns
+        
+        # Also check for string columns that might be dates
+        string_cols = df.select(pl.col([pl.Utf8, pl.Categorical])).columns
+        potential_date_cols = [col for col in string_cols if any(keyword in col.lower() for keyword in ['date', 'time', 'created', 'updated', 'invoice'])]
+        
+        logger.info(f"Found numeric cols: {numeric_cols}")
+        logger.info(f"Found temporal cols: {temporal_cols}")
+        logger.info(f"Found potential date cols: {potential_date_cols}")
+        
+        # Try to generate revenue chart with different approaches
+        revenue_data = None
+        
+        if numeric_cols:
+            # Use first numeric column for revenue
+            num_col = numeric_cols[0]
+            
+            if temporal_cols:
+                # Use proper temporal column
+                temp_col = temporal_cols[0]
+                try:
+                    revenue_data = df.group_by_dynamic(temp_col, every="1mo").agg([
+                        pl.col(num_col).sum().alias("revenue")
+                    ]).sort(temp_col).to_dicts()
+                except Exception as e:
+                    logger.warning(f"Dynamic grouping failed: {e}")
+                    revenue_data = None
+            
+            if not revenue_data and potential_date_cols:
+                # Try with string date column
+                temp_col = potential_date_cols[0]
+                try:
+                    # Try to parse the string dates and group
+                    df_with_parsed_dates = df.with_columns([
+                        pl.col(temp_col).str.to_date("%Y-%m-%d", strict=False).alias("parsed_date")
+                    ]).filter(pl.col("parsed_date").is_not_null())
+                    
+                    if len(df_with_parsed_dates) > 0:
+                        revenue_data = df_with_parsed_dates.group_by_dynamic("parsed_date", every="1mo").agg([
+                            pl.col(num_col).sum().alias("revenue")
+                        ]).sort("parsed_date").to_dicts()
+                except Exception as e:
+                    logger.warning(f"String date parsing failed: {e}")
+            
+            # Fallback: group by row index if no temporal data
+            if not revenue_data:
+                try:
+                    # Create a simple time series based on row order
+                    sample_size = min(12, len(df))  # Limit to 12 data points
+                    step = len(df) // sample_size
+                    
+                    revenue_data = []
+                    for i in range(sample_size):
+                        start_idx = i * step
+                        end_idx = min((i + 1) * step, len(df))
+                        subset = df.slice(start_idx, end_idx - start_idx)
+                        revenue_sum = subset[num_col].sum()
+                        
+                        revenue_data.append({
+                            "month": f"Period {i+1}",
+                            "revenue": float(revenue_sum) if revenue_sum is not None else 0
+                        })
+                except Exception as e:
+                    logger.warning(f"Fallback grouping failed: {e}")
+            
+            # Format the data
+            if revenue_data:
+                charts["revenue_over_time"] = []
+                for row in revenue_data:
+                    # Extract month name or use period
+                    if "parsed_date" in row:
+                        month_str = row["parsed_date"].strftime("%b %Y") if hasattr(row["parsed_date"], 'strftime') else str(row["parsed_date"])
+                    elif any(key in row for key in temporal_cols):
+                        temp_key = next(key for key in temporal_cols if key in row)
+                        month_str = row[temp_key].strftime("%b %Y") if hasattr(row[temp_key], 'strftime') else str(row[temp_key])
+                    else:
+                        month_str = row.get("month", "Unknown")
+                    
+                    charts["revenue_over_time"].append({
+                        "month": month_str,
+                        "revenue": float(row["revenue"]) if row["revenue"] is not None else 0
+                    })
+                
+                logger.info(f"Generated {len(charts['revenue_over_time'])} revenue data points")
+        
+        # Generate category distribution if we have categorical columns
+        categorical_cols = df.select(pl.col([pl.Utf8, pl.Categorical])).columns
+        if categorical_cols and numeric_cols:
+            cat_col = categorical_cols[0]
+            num_col = numeric_cols[0]
+            
+            # Group by category and sum numeric values
+            category_data = df.group_by(cat_col).agg([
+                pl.col(num_col).sum().alias("value")
+            ]).sort("value", descending=True).limit(5).to_dicts()
+            
+            charts["sales_by_category"] = [
+                {
+                    "name": str(row[cat_col]) if row[cat_col] is not None else "Unknown",
+                    "value": float(row["value"]) if row["value"] is not None else 0
+                }
+                for row in category_data
+            ]
+        
+        # Generate dynamic user activity chart
+        if numeric_cols and len(df) > 0:
+            # Use second numeric column for users, or create meaningful data
+            user_col = numeric_cols[1] if len(numeric_cols) > 1 else numeric_cols[0]
+            user_data = None  # Initialize user_data
+            
+            # If we have temporal data, use it; otherwise create meaningful periods
+            if temporal_cols or potential_date_cols:
+                # Use the same temporal logic as revenue chart
+                if temporal_cols:
+                    temp_col = temporal_cols[0]
+                    try:
+                        user_data = df.group_by_dynamic(temp_col, every="1mo").agg([
+                            pl.col(user_col).count().alias("users")  # Count records as "users"
+                        ]).sort(temp_col).to_dicts()
+                    except Exception as e:
+                        logger.warning(f"Dynamic user grouping failed: {e}")
+                        user_data = None
+                
+                if not user_data and potential_date_cols:
+                    temp_col = potential_date_cols[0]
+                    try:
+                        df_with_parsed_dates = df.with_columns([
+                            pl.col(temp_col).str.to_date("%Y-%m-%d", strict=False).alias("parsed_date")
+                        ]).filter(pl.col("parsed_date").is_not_null())
+                        
+                        if len(df_with_parsed_dates) > 0:
+                            user_data = df_with_parsed_dates.group_by_dynamic("parsed_date", every="1mo").agg([
+                                pl.count().alias("users")
+                            ]).sort("parsed_date").to_dicts()
+                    except Exception as e:
+                        logger.warning(f"String date user parsing failed: {e}")
+                        user_data = None
+                
+                if user_data:
+                    charts["monthly_active_users"] = []
+                    for row in user_data:
+                        if "parsed_date" in row:
+                            month_str = row["parsed_date"].strftime("%b %Y") if hasattr(row["parsed_date"], 'strftime') else str(row["parsed_date"])
+                        elif any(key in row for key in temporal_cols):
+                            temp_key = next(key for key in temporal_cols if key in row)
+                            month_str = row[temp_key].strftime("%b %Y") if hasattr(row[temp_key], 'strftime') else str(row[temp_key])
+                        else:
+                            month_str = "Unknown"
+                        
+                        charts["monthly_active_users"].append({
+                            "month": month_str,
+                            "users": int(row["users"]) if row["users"] is not None else 0
+                        })
+            
+            # Fallback: create meaningful periods based on data
+            if "monthly_active_users" not in charts:
+                try:
+                    sample_size = min(6, len(df))
+                    step = len(df) // sample_size
+                    
+                    mau_data = []
+                    for i in range(sample_size):
+                        start_idx = i * step
+                        end_idx = min((i + 1) * step, len(df))
+                        subset = df.slice(start_idx, end_idx - start_idx)
+                        user_count = len(subset)
+                        
+                        mau_data.append({
+                            "month": f"Period {i+1}",
+                            "users": user_count
+                        })
+                    charts["monthly_active_users"] = mau_data
+                except Exception as e:
+                    logger.warning(f"Fallback user data generation failed: {e}")
+                    # Final fallback
+                    charts["monthly_active_users"] = [
+                        {"month": "Period 1", "users": len(df)}
+                    ]
+        
+        # Generate dynamic traffic source pie chart from categorical data
+        if categorical_cols:
+            # Use a categorical column to create meaningful segments
+            traffic_col = categorical_cols[1] if len(categorical_cols) > 1 else categorical_cols[0]
+            
+            # Count occurrences of each category
+            traffic_data = df.group_by(traffic_col).agg([
+                pl.count().alias("value")
+            ]).sort("value", descending=True).limit(4).to_dicts()
+            
+            if traffic_data:
+                charts["traffic_source"] = []
+                for row in traffic_data:
+                    charts["traffic_source"].append({
+                        "name": str(row[traffic_col]) if row[traffic_col] is not None else "Unknown",
+                        "value": int(row["value"]) if row["value"] is not None else 0
+                    })
+        
+        # Fallback traffic source if no categorical data
+        if "traffic_source" not in charts:
+            charts["traffic_source"] = [
+                {"name": "Data Records", "value": len(df)},
+                {"name": "Columns", "value": len(df.columns)},
+                {"name": "Categories", "value": len(categorical_cols) if categorical_cols else 1}
+            ]
+        
+        return {
+            "charts": charts,
+            "dataset_info": {
+                "name": dataset["name"],
+                "row_count": len(df),
+                "column_count": len(df.columns)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting dashboard charts: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get dashboard charts")
+
+@app.get("/api/dashboard/{dataset_id}/ai-layout")
+async def get_ai_dashboard_layout(
+    dataset_id: str, current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate AI-driven dashboard layout using the dashboard_designer prompt.
+    """
+    try:
+        # Handle both ObjectId and UUID formats
+        try:
+            # Try ObjectId format first
+            query = {"_id": ObjectId(dataset_id), "user_id": current_user["id"]}
+        except Exception:
+            # If ObjectId fails, treat as string (UUID format)
+            query = {"_id": dataset_id, "user_id": current_user["id"]}
+        
+        dataset_doc = await db.datasets.find_one(query)
+        if not dataset_doc or not dataset_doc.get("metadata"):
+            raise HTTPException(status_code=404, detail="Dataset not found or not ready")
+        
+        # Use AI service to generate dashboard layout
+        ai_layout = await ai_service.generate_ai_dashboard(dataset_id, current_user["id"])
+        
+        return {
+            "success": True,
+            "layout": ai_layout,
+            "dataset_info": {
+                "name": dataset_doc.get("name", "Unknown Dataset"),
+                "row_count": dataset_doc.get("metadata", {}).get("dataset_overview", {}).get("total_rows", 0),
+                "column_count": dataset_doc.get("metadata", {}).get("dataset_overview", {}).get("total_columns", 0)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating AI dashboard layout: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate AI dashboard layout")
+
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

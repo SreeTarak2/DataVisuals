@@ -1,199 +1,82 @@
-import React, { createContext, useContext, useState, useEffect } from 'react'
-import axios from 'axios'
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import axios from 'axios';
 
-const AuthContext = createContext()
+const AuthContext = createContext();
 
 export const useAuth = () => {
-  const context = useContext(AuthContext)
+  const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider')
+    throw new Error('useAuth must be used within AuthProvider');
   }
-  return context
-}
+  return context;
+};
 
-const API_BASE_URL = 'http://localhost:8000'
-
-// Configure axios defaults
-axios.defaults.baseURL = API_BASE_URL
-
-// Add request interceptor to include auth token
-axios.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('access_token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  },
-  (error) => {
-    return Promise.reject(error)
-  }
-)
-
-// Add response interceptor to handle token expiration
-axios.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('user')
-      window.location.href = '/login'
-    }
-    return Promise.reject(error)
-  }
-)
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [token, setToken] = useState(() => localStorage.getItem('datasage-token'));
 
   useEffect(() => {
-    const initAuth = async () => {
-      const token = localStorage.getItem('access_token')
-      const savedUser = localStorage.getItem('user')
-      
-      if (token && savedUser) {
-        try {
-          // Verify token is still valid
-          const response = await axios.get('/auth/me')
-          setUser(response.data)
-          setIsAuthenticated(true)
-        } catch (error) {
-          // Token is invalid, clear storage
-          localStorage.removeItem('access_token')
-          localStorage.removeItem('user')
-          setUser(null)
-          setIsAuthenticated(false)
-        }
-      }
-      setLoading(false)
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      // Verify token and get user info
+      verifyToken();
+    } else {
+      setLoading(false);
     }
+  }, [token]);
 
-    initAuth()
-  }, [])
+  const verifyToken = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/auth/me`);
+      setUser(response.data);
+    } catch (error) {
+      console.error('Token verification failed:', error);
+      logout();
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const login = async (email, password) => {
     try {
-      const response = await axios.post('/auth/login', {
-        email,
-        password
-      })
-      
-      const { access_token, ...tokenData } = response.data
-      
-      // Store token and user data
-      localStorage.setItem('access_token', access_token)
-      
-      // Get user info
-      const userResponse = await axios.get('/auth/me')
-      const userData = userResponse.data
-      
-      localStorage.setItem('user', JSON.stringify(userData))
-      setUser(userData)
-      setIsAuthenticated(true)
-      
-      return { success: true, user: userData }
+      const response = await axios.post(`${API_URL}/auth/login`, { email, password });
+      const { access_token, user: userData } = response.data;
+      localStorage.setItem('datasage-token', access_token);
+      setToken(access_token);
+      setUser(userData);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      return { success: true };
     } catch (error) {
-      return {
-        success: false,
-        error: error.response?.data?.detail || 'Login failed'
-      }
+      return { success: false, error: error.response?.data?.detail || 'Login failed' };
     }
-  }
+  };
 
-  const register = async (userData) => {
+  const register = async (email, password, username) => {
     try {
-      const response = await axios.post('/auth/register', userData)
-      
-      // Registration successful, now try to auto-login
-      try {
-        const loginResult = await login(userData.email, userData.password)
-        if (loginResult.success) {
-          return { success: true, user: loginResult.user, message: 'Account created successfully!' }
-        } else {
-          // Registration succeeded but auto-login failed
-          return { 
-            success: true, 
-            user: response.data, 
-            message: 'Account created successfully! Please log in.',
-            needsLogin: true 
-          }
-        }
-      } catch (loginError) {
-        // Registration succeeded but auto-login failed
-        return { 
-          success: true, 
-          user: response.data, 
-          message: 'Account created successfully! Please log in.',
-          needsLogin: true 
-        }
-      }
+      const response = await axios.post(`${API_URL}/auth/register`, {
+        email,
+        password,
+        username
+      });
+      return { success: true, message: 'Registration successful! Please login.' };
     } catch (error) {
-      return {
-        success: false,
-        error: error.response?.data?.detail || 'Registration failed'
-      }
+      return { success: false, error: error.response?.data?.detail || 'Registration failed' };
     }
-  }
+  };
 
   const logout = () => {
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('user')
-    setUser(null)
-    setIsAuthenticated(false)
-  }
-
-  const updateProfile = async (profileData) => {
-    try {
-      const response = await axios.put('/auth/profile', profileData)
-      const updatedUser = response.data
-      
-      localStorage.setItem('user', JSON.stringify(updatedUser))
-      setUser(updatedUser)
-      
-      return { success: true, user: updatedUser }
-    } catch (error) {
-      return {
-        success: false,
-        error: error.response?.data?.detail || 'Profile update failed'
-      }
-    }
-  }
-
-  const changePassword = async (oldPassword, newPassword) => {
-    try {
-      await axios.post('/auth/change-password', {
-        old_password: oldPassword,
-        new_password: newPassword
-      })
-      
-      return { success: true }
-    } catch (error) {
-      return {
-        success: false,
-        error: error.response?.data?.detail || 'Password change failed'
-      }
-    }
-  }
-
-  const value = {
-    user,
-    loading,
-    isAuthenticated,
-    login,
-    register,
-    logout,
-    updateProfile,
-    changePassword
-  }
+    localStorage.removeItem('datasage-token');
+    setToken(null);
+    setUser(null);
+    delete axios.defaults.headers.common['Authorization'];
+  };
 
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider value={{ user, login, register, logout, loading, isAuthenticated: !!user }}>
       {children}
     </AuthContext.Provider>
-  )
-}
-
-
-
+  );
+};

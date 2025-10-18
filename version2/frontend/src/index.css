@@ -4,145 +4,213 @@
 
 @layer base {
   :root {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 84% 4.9%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --radius: 0.5rem;
+    --background: 0 0% 100%; /* Pure white for clean, airy feel */
+    --foreground: 240 10% 3.9%; /* Soft dark gray for readability */
+    --card: 0 0% 99%; /* Off-white for subtle cards */
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%; /* White popovers */
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 217 91% 60%; /* Vibrant blue (primary accent) */
+    --primary-foreground: 0 0% 98%; /* White text on blue */
+    --secondary: 197 100% 50%; /* Sky blue (secondary accent, fresh & modern) */
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 4.8% 95.9%; /* Light gray for subtle elements */
+    --muted-foreground: 240 4.8% 46.1%;
+    --accent: 240 5.3% 95.1%; /* Soft off-white accent */
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%; /* Red for errors (unchanged for usability) */
+    --destructive-foreground: 0 0% 98%;
+    --success: 142 76% 36.1%; /* Green for success */
+    --success-foreground: 0 0% 98%;
+    --border: 240 5.3% 90%; /* Light border */
+    --input: 240 5.3% 90%;
+    --ring: 217 91% 60%; /* Blue ring for focus */
+    --radius: 1.95rem; /* Standard rounded look (12px) */
+    --chart-1: 217 91% 60%; /* Blue for charts */
+    --chart-2: 197 100% 50%; /* Sky blue */
+    --chart-3: 142 76% 36.1%; /* Green for positive trends */
+    --chart-4: 240 5.9% 10%; /* Dark gray for neutrals */
+    --chart-5: 0 0% 98%; /* White for highlights */
+  }
+
+  .dark {
+    --background: 240 10% 3.9%; /* Deep navy for dark mode (modern, not stark black) */
+    --foreground: 0 0% 98%; /* Near-white text */
+    --card: 240 10% 3.9%; /* Matches bg for seamless cards */
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 217 91% 60%; /* Blue pops in dark */
+    --primary-foreground: 0 0% 98%;
+    --secondary: 197 100% 50%; /* Sky blue remains vibrant */
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%; /* Dark muted for subtlety */
+    --muted-foreground: 240 4.8% 95.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%; /* Darker red */
+    --destructive-foreground: 0 0% 98%;
+    --success: 142 76% 36.1%; /* Green stays */
+    --success-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 217 91% 60%; /* Blue focus ring */
+    --chart-1: 217 91% 60%;
+    --chart-2: 197 100% 50%;
+    --chart-3: 142 76% 36.1%;
+    --chart-4: 0 0% 98%; /* Light in dark charts */
+    --chart-5: 240 5.9% 10%; /* Dark accents */
   }
 }
 
 @layer base {
   * {
-  @apply border-gray-200;
+    @apply border-border;
   }
   body {
     @apply bg-background text-foreground;
   }
 }
 
-/* Custom scrollbar for dark theme */
+/* Custom scrollbar - Blue accents */
 ::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-secondary;
+  background: hsl(var(--background) / 0.05);
+  border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-muted-foreground rounded-full;
+  background: hsl(var(--primary) / 0.6); /* Blue thumb */
+  border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-foreground;
+  background: hsl(var(--primary) / 0.8);
 }
 
-/* Chart container styles */
-.chart-container {
-  @apply bg-card border border-gray-200 rounded-lg p-4;
+/* Glassmorphism effect - Airy with white/blue tones */
+.glass-effect {
+  background: hsl(var(--card) / 0.8); /* More opaque for readability */
+  backdrop-filter: blur(16px); /* Softer blur */
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid hsl(var(--border) / 0.3); /* Lighter border */
 }
 
-/* Loading skeleton styles */
-.skeleton {
-  @apply animate-pulse bg-muted rounded;
+/* Enhanced animations - Subtle for modern calm */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); } /* Gentler float */
 }
 
-/* Chart skeleton specific styles */
-.chart-skeleton {
-  @apply relative overflow-hidden;
+.animate-float { 
+  animation: float 4s ease-in-out infinite; 
 }
 
-.chart-skeleton::before {
-  content: '';
-  @apply absolute inset-0 bg-gradient-to-r from-transparent via-muted to-transparent;
-  animation: shimmer 2s infinite;
+.gradient-text {
+  background: linear-gradient(to right, hsl(var(--primary)), hsl(var(--secondary))); /* Blue to sky blue */
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-@keyframes shimmer {
-  0% {
-    transform: translateX(-100%);
+/* Focus visible for accessibility - Blue ring */
+@layer components {
+  .focus-visible-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
   }
-  100% {
-    transform: translateX(100%);
+  
+  /* Success and destructive - Consistent with theme */
+  .text-success {
+    @apply text-green-500;
+  }
+  
+  .text-destructive {
+    @apply text-red-500;
+  }
+  
+  /* Blue-based utilities */
+  .bg-gradient-blue {
+    background: linear-gradient(to right, hsl(var(--primary)), hsl(var(--secondary)));
+  }
+  
+  /* Additional utility classes */
+  .text-success {
+    @apply text-green-500;
+  }
+  
+  .text-destructive {
+    @apply text-red-500;
+  }
+  
+  .bg-success {
+    @apply bg-green-500;
+  }
+  
+  .bg-destructive {
+    @apply bg-red-500;
+  }
+  
+  .border-success {
+    @apply border-green-500;
+  }
+  
+  .border-destructive {
+    @apply border-red-500;
+  }
+  
+  .text-primary {
+    @apply text-blue-500;
+  }
+  
+  .bg-primary {
+    @apply bg-blue-500;
+  }
+  
+  .border-primary {
+    @apply border-blue-500;
+  }
+  
+  .text-muted-foreground {
+    @apply text-gray-500;
+  }
+  
+  .text-foreground {
+    @apply text-gray-900 dark:text-gray-100;
+  }
+  
+  .bg-foreground {
+    @apply bg-gray-900 dark:bg-gray-100;
+  }
+  
+  .text-muted {
+    @apply text-gray-500;
+  }
+  
+  .bg-muted {
+    @apply bg-gray-100 dark:bg-gray-800;
+  }
+  
+  .bg-accent {
+    @apply bg-gray-100 dark:bg-gray-800;
+  }
+  
+  .text-accent-foreground {
+    @apply text-gray-900 dark:text-gray-100;
+  }
+  
+  .border-border {
+    @apply border-gray-200 dark:border-gray-700;
+  }
+  
+  .text-destructive-foreground {
+    @apply text-white;
+  }
+  
+  .text-primary-foreground {
+    @apply text-white;
   }
 }
-
-/* Thinking animation */
-.thinking-dots {
-  @apply flex space-x-1;
-}
-
-.thinking-dots span {
-  @apply w-2 h-2 bg-primary rounded-full animate-pulse;
-}
-
-.thinking-dots span:nth-child(2) {
-  animation-delay: 0.1s;
-}
-
-.thinking-dots span:nth-child(3) {
-  animation-delay: 0.2s;
-}
-
-/* Chart hover effects */
-.chart-hover {
-  @apply transition-all duration-200 hover:shadow-lg hover:scale-105;
-}
-
-/* KPI card styles */
-.kpi-card {
-  @apply bg-card border border-gray-200 rounded-lg p-6 transition-all duration-200 hover:border-primary/50 hover:shadow-lg;
-}
-
-/* Dashboard grid */
-.dashboard-grid {
-  @apply grid gap-6;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-}
-
-/* Responsive chart container */
-.chart-responsive {
-  @apply w-full h-full min-h-[300px] max-h-[500px];
-}
-
-/* Dark theme specific chart colors */
-.chart-primary {
-  @apply text-primary;
-}
-
-.chart-secondary {
-  @apply text-secondary-foreground;
-}
-
-/* Animation for chart loading */
-@keyframes chart-loading {
-  0% {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.chart-loading {
-  animation: chart-loading 0.5s ease-out;
-}
-

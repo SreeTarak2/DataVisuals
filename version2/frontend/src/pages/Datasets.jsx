@@ -1,283 +1,446 @@
-import React, { useState, useEffect } from 'react'
-import { Database, Upload, MoreVertical, Eye, Trash2, BarChart3, Download, Filter, Loader2 } from 'lucide-react'
-import UploadModal from '../components/UploadModal'
-import ConfirmationModal from '../components/ConfirmationModal'
-import { useAuth } from '../contexts/AuthContext'
-import axios from 'axios'
-import toast from 'react-hot-toast'
+import React, { useState, useEffect } from 'react';
+import { 
+  File, X, CheckCircle, AlertCircle, Database, BarChart3, 
+  MessageSquare, Eye, Calendar, Hash, Columns, Upload,
+  Search, Filter, Grid, List, MoreVertical, Trash2, Edit3
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import GlassCard from '../components/common/GlassCard';
+import DeleteConfirmModal from '../components/DeleteConfirmModal';
+import GlobalUploadButton from '../components/GlobalUploadButton';
+import useDatasetStore from '../store/datasetStore';
+import { useNavigate } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
+import { cn } from '../lib/utils';
 
 const Datasets = () => {
-  const [showUploadModal, setShowUploadModal] = useState(false)
-  const [selectedDataset, setSelectedDataset] = useState(null)
-  const [datasets, setDatasets] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [uploading, setUploading] = useState(false)
-  const [showDeleteModal, setShowDeleteModal] = useState(false)
-  const [datasetToDelete, setDatasetToDelete] = useState(null)
-  const [deleting, setDeleting] = useState(false)
-  const { user } = useAuth()
-  
-  // Load datasets on component mount
+  const { 
+    datasets, 
+    loading, 
+    error, 
+    fetchDatasets, 
+    deleteDataset 
+  } = useDatasetStore();
+  const [deleteModal, setDeleteModal] = useState({ isOpen: false, dataset: null });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState('grid'); // grid or list
+  const [sortBy, setSortBy] = useState('created_at'); // created_at, name, size
+  const navigate = useNavigate();
+
   useEffect(() => {
-    loadDatasets()
-  }, [])
-  
-  const loadDatasets = async () => {
-    try {
-      setLoading(true)
-      const response = await axios.get('/api/datasets')
-      console.log('Datasets response:', response.data)
-      const datasets = response.data.datasets || []
-      console.log('Datasets array:', datasets)
-      setDatasets(datasets)
-    } catch (error) {
-      console.error('Error loading datasets:', error)
-      toast.error('Failed to load datasets')
-    } finally {
-      setLoading(false)
-    }
-  }
-  
-  const handleUploadSuccess = (uploadResponse) => {
-    // The upload response contains the dataset metadata
-    // We need to create a dataset object that matches our expected structure
-    const newDataset = {
-      id: uploadResponse.dataset_id,
-      name: uploadResponse.metadata?.name || 'Unnamed Dataset',
-      file_size: uploadResponse.metadata?.file_size || 0,
-      row_count: uploadResponse.metadata?.dataset_overview?.total_rows || 0,
-      column_count: uploadResponse.metadata?.dataset_overview?.total_columns || 0,
-      uploaded_at: new Date().toISOString(),
-      is_processed: true,
-      metadata: uploadResponse.metadata
-    }
-    
-    setDatasets(prev => [newDataset, ...prev])
-    setShowUploadModal(false)
-    toast.success('Dataset uploaded successfully!')
-  }
-  
+    fetchDatasets();
+  }, []);
+
   const handleDeleteClick = (dataset) => {
-    setDatasetToDelete(dataset)
-    setShowDeleteModal(true)
-  }
+    setDeleteModal({ isOpen: true, dataset });
+  };
 
   const handleDeleteConfirm = async () => {
-    if (!datasetToDelete) return
+    if (!deleteModal.dataset) return;
 
-    setDeleting(true)
     try {
-      await axios.delete(`/api/datasets/${datasetToDelete.id}`)
-      setDatasets(prev => prev.filter(d => d.id !== datasetToDelete.id))
-      toast.success('Dataset deleted successfully')
-      setShowDeleteModal(false)
-      setDatasetToDelete(null)
+      const result = await deleteDataset(deleteModal.dataset.id);
+      if (result.success) {
+        toast.success('Dataset deleted successfully');
+      } else {
+        toast.error('Failed to delete dataset');
+      }
     } catch (error) {
-      console.error('Error deleting dataset:', error)
-      toast.error('Failed to delete dataset')
+      toast.error('Failed to delete dataset');
     } finally {
-      setDeleting(false)
+      setDeleteModal({ isOpen: false, dataset: null });
     }
-  }
+  };
 
-  const handleDeleteCancel = () => {
-    setShowDeleteModal(false)
-    setDatasetToDelete(null)
-  }
-  
-  const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes'
-    const k = 1024
-    const sizes = ['Bytes', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
-  }
-  
-  const formatDate = (dateString) => {
-    const date = new Date(dateString)
-    const now = new Date()
-    const diffInHours = Math.floor((now - date) / (1000 * 60 * 60))
-    
-    if (diffInHours < 1) return 'Just now'
-    if (diffInHours < 24) return `${diffInHours} hours ago`
-    if (diffInHours < 48) return '1 day ago'
-    return `${Math.floor(diffInHours / 24)} days ago`
-  }
+  const handleDatasetClick = (dataset) => {
+    navigate(`/chat?dataset=${dataset.id}`);
+  };
 
-  const filteredDatasets = datasets
-  
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-emerald-400 mx-auto mb-4" />
-          <p className="text-slate-300">Loading datasets...</p>
-        </div>
-      </div>
-    )
-  }
+  const filteredDatasets = datasets.filter(dataset =>
+    (dataset.name || dataset.filename || 'Unnamed Dataset').toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
-  const handleDelete = (datasetId) => {
-    if (window.confirm('Are you sure you want to delete this dataset?')) {
-      setDatasets(datasets.filter(d => d.id !== datasetId))
+  const sortedDatasets = [...filteredDatasets].sort((a, b) => {
+    switch (sortBy) {
+      case 'name':
+        const nameA = a.name || a.filename || 'Unnamed Dataset';
+        const nameB = b.name || b.filename || 'Unnamed Dataset';
+        return nameA.localeCompare(nameB);
+      case 'size':
+        return (b.row_count || 0) - (a.row_count || 0);
+      case 'created_at':
+      default:
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
     }
-  }
+  });
 
-  const handleView = (dataset) => {
-    setSelectedDataset(dataset)
-    // Open dataset preview modal or navigate to analysis
-  }
+  const getFileIcon = (dataset) => {
+    const name = (dataset.name || dataset.filename || '').toLowerCase();
+    if (name.includes('csv')) return '📊';
+    if (name.includes('json')) return '📋';
+    if (name.includes('xlsx') || name.includes('excel')) return '📈';
+    return '📄';
+  };
+
+  const getStatusColor = (dataset) => {
+    if (dataset.status === 'processing') return 'text-yellow-400';
+    if (dataset.status === 'error') return 'text-red-400';
+    return 'text-green-400';
+  };
+
+  const getStatusIcon = (dataset) => {
+    if (dataset.status === 'processing') return AlertCircle;
+    if (dataset.status === 'error') return X;
+    return CheckCircle;
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 p-6">
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-white">Datasets</h1>
-            <p className="text-slate-300 mt-1">
-              Manage and explore your data collections
-            </p>
-          </div>
-          <button
-            onClick={() => setShowUploadModal(true)}
-            className="flex items-center space-x-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
-          >
-            <Upload className="w-4 h-4" />
-            <span>Upload Dataset</span>
-          </button>
+    <div className="space-y-6 p-6">
+      {/* Header */}
+      <motion.div 
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+      >
+        <div>
+          <h1 className="text-3xl font-bold text-foreground">Datasets</h1>
+          <p className="text-muted-foreground mt-2">
+            Manage and analyze your data files
+          </p>
         </div>
+      </motion.div>
 
-        {/* Filters */}
-        <div className="flex items-center space-x-4">
-          <button className="flex items-center space-x-2 px-4 py-2 border border-slate-600 rounded-lg hover:bg-slate-800 transition-colors text-slate-300">
-            <Filter className="w-4 h-4" />
-            <span>Filter</span>
-          </button>
-        </div>
-
-        {/* Datasets Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredDatasets.map((dataset) => (
-            <div key={dataset.id} className="relative bg-gradient-to-br from-slate-800/20 to-gray-800/20 backdrop-blur-sm rounded-xl border border-slate-600/20 p-6 shadow-2xl shadow-slate-500/10 hover:shadow-slate-500/20 transition-all duration-300">
-              <div className="absolute inset-0 bg-gradient-to-br from-slate-600/5 to-gray-600/5 rounded-xl"></div>
-              <div className="relative">
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-10 h-10 bg-emerald-500/20 rounded-lg flex items-center justify-center">
-                      <Database className="w-5 h-5 text-emerald-400" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-white">{dataset.name}</h3>
-                      <p className="text-sm text-slate-400">
-                        {dataset.row_count ? dataset.row_count.toLocaleString() : 'Unknown'} records
-                      </p>
-                    </div>
-                  </div>
-                  <div className="relative">
-                    <button className="p-1 text-slate-400 hover:text-slate-200 transition-colors">
-                      <MoreVertical className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-2 mb-4">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-400">Size:</span>
-                    <span className="text-slate-200">{formatFileSize(dataset.file_size)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-400">Columns:</span>
-                    <span className="text-slate-200">{dataset.column_count || 'Unknown'}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-400">Updated:</span>
-                    <span className="text-slate-200">{formatDate(dataset.upload_date)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-400">Status:</span>
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                      dataset.is_processed 
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30' 
-                        : 'bg-amber-500/20 text-amber-300 border border-amber-400/30'
-                    }`}>
-                      {dataset.is_processed ? 'Processed' : 'Processing'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex space-x-2">
-                  <button
-                    onClick={() => handleView(dataset)}
-                    className="flex-1 flex items-center justify-center space-x-2 px-3 py-2 text-sm font-medium text-emerald-300 bg-emerald-500/20 rounded-lg hover:bg-emerald-500/30 transition-colors border border-emerald-400/30"
-                  >
-                    <Eye className="w-4 h-4" />
-                    <span>View</span>
-                  </button>
-                  <button className="flex items-center justify-center px-3 py-2 text-sm font-medium text-slate-300 bg-slate-700/50 rounded-lg hover:bg-slate-700/70 transition-colors border border-slate-600/30">
-                    <BarChart3 className="w-4 h-4" />
-                  </button>
-                  <button className="flex items-center justify-center px-3 py-2 text-sm font-medium text-slate-300 bg-slate-700/50 rounded-lg hover:bg-slate-700/70 transition-colors border border-slate-600/30">
-                    <Download className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteClick(dataset)}
-                    className="flex items-center justify-center px-3 py-2 text-sm font-medium text-red-400 bg-red-500/20 rounded-lg hover:bg-red-500/30 transition-colors border border-red-400/30"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Empty State */}
-        {filteredDatasets.length === 0 && (
-          <div className="text-center py-12">
-            <div className="p-4 bg-slate-700/50 rounded-full w-20 h-20 mx-auto mb-4 flex items-center justify-center">
-              <Database className="w-12 h-12 text-slate-400" />
-            </div>
-            <h3 className="text-lg font-medium text-white mb-2">No datasets found</h3>
-            <p className="text-slate-400 mb-6">
-              Upload your first dataset to get started
-            </p>
-            <button
-              onClick={() => setShowUploadModal(true)}
-              className="inline-flex items-center space-x-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
-            >
-              <Upload className="w-4 h-4" />
-              <span>Upload Dataset</span>
-            </button>
-          </div>
-        )}
+      {/* Controls */}
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2 }}
+        className="flex flex-col sm:flex-row gap-4 items-center justify-between"
+      >
+        {/* Search */}
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Search datasets..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 rounded-lg glass-effect border border-border/50 text-foreground focus:ring-primary focus:border-primary transition-all"
+          />
       </div>
 
-      {/* Upload Modal */}
-      {showUploadModal && (
-        <UploadModal
-          isOpen={showUploadModal}
-          onClose={() => setShowUploadModal(false)}
-          onUploadSuccess={handleUploadSuccess}
-        />
-      )}
+        {/* Controls */}
+        <div className="flex items-center gap-2">
+          {/* Sort */}
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="px-3 py-2 rounded-lg glass-effect border border-border/50 text-foreground focus:ring-primary"
+          >
+            <option value="created_at">Sort by Date</option>
+            <option value="name">Sort by Name</option>
+            <option value="size">Sort by Size</option>
+          </select>
+
+          {/* View Mode */}
+          <div className="flex rounded-lg glass-effect border border-border/50 p-1">
+            <button
+              onClick={() => setViewMode('grid')}
+              className={cn(
+                "p-2 rounded-md transition-all",
+                viewMode === 'grid' 
+                  ? "bg-primary text-primary-foreground" 
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <Grid className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setViewMode('list')}
+              className={cn(
+                "p-2 rounded-md transition-all",
+                viewMode === 'list' 
+                  ? "bg-primary text-primary-foreground" 
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <List className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Stats Cards */}
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+        className="grid grid-cols-1 md:grid-cols-4 gap-4"
+      >
+        <GlassCard className="p-4" elevated>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-cyan-500 flex items-center justify-center">
+              <Database className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-foreground">{datasets.length}</p>
+              <p className="text-sm text-muted-foreground">Total Datasets</p>
+            </div>
+          </div>
+        </GlassCard>
+
+        <GlassCard className="p-4" elevated>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center">
+              <CheckCircle className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-foreground">
+                {datasets.filter(d => d.status === 'completed').length}
+              </p>
+              <p className="text-sm text-muted-foreground">Processed</p>
+            </div>
+          </div>
+        </GlassCard>
+
+        <GlassCard className="p-4" elevated>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+              <Hash className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-foreground">
+                {datasets.reduce((sum, d) => sum + (d.row_count || 0), 0).toLocaleString()}
+              </p>
+              <p className="text-sm text-muted-foreground">Total Rows</p>
+            </div>
+          </div>
+        </GlassCard>
+
+        <GlassCard className="p-4" elevated>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+              <Columns className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-foreground">
+                {datasets.reduce((sum, d) => sum + (d.column_count || 0), 0)}
+              </p>
+              <p className="text-sm text-muted-foreground">Total Columns</p>
+            </div>
+          </div>
+        </GlassCard>
+      </motion.div>
+
+
+      {/* Datasets List */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.3 }}
+      >
+        {loading ? (
+          <GlassCard className="p-12 text-center" elevated>
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+              className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full mx-auto mb-4"
+            />
+            <p className="text-muted-foreground">Loading datasets...</p>
+          </GlassCard>
+        ) : sortedDatasets.length === 0 ? (
+          <GlassCard className="p-12 text-center" elevated>
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ delay: 0.2, type: "spring", stiffness: 200 }}
+            >
+              <Database className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
+              <h3 className="text-lg font-semibold text-foreground mb-2">No datasets found</h3>
+              <p className="text-muted-foreground mb-4">
+                {searchQuery ? 'No datasets match your search.' : 'Upload your first dataset to get started!'}
+              </p>
+              {!searchQuery && (
+                <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+                  <GlobalUploadButton variant="outline" />
+                </motion.div>
+              )}
+            </motion.div>
+          </GlassCard>
+        ) : (
+          <div className={cn(
+            "gap-6",
+            viewMode === 'grid' 
+              ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3" 
+              : "space-y-4"
+          )}>
+            <AnimatePresence>
+              {sortedDatasets.map((dataset, index) => (
+                <motion.div
+                  key={dataset.id}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  transition={{ delay: index * 0.05 }}
+                  layout
+                >
+                  <GlassCard 
+                    className={cn(
+                      "group cursor-pointer transition-all duration-300 hover:scale-[1.02] hover:shadow-xl",
+                      viewMode === 'list' ? "p-4" : "p-6"
+                    )}
+                    elevated
+                    hover
+                    onClick={() => handleDatasetClick(dataset)}
+                  >
+                    {viewMode === 'grid' ? (
+                      // Grid View
+                      <>
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-cyan-500 flex items-center justify-center text-2xl">
+                              {getFileIcon(dataset)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <h3 className="text-lg font-semibold text-foreground truncate">
+                                {dataset.name || dataset.filename || 'Unnamed Dataset'}
+                              </h3>
+                              <div className="flex items-center gap-2 mt-1">
+                                <div className={cn("flex items-center gap-1 text-xs", getStatusColor(dataset))}>
+                                  {React.createElement(getStatusIcon(dataset), { className: "w-3 h-3" })}
+                                  {dataset.status || 'completed'}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <motion.button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteClick(dataset);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-2 rounded-lg hover:bg-red-500/20 hover:text-red-400 transition-all"
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.9 }}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </motion.button>
+                        </div>
+
+                        <div className="space-y-2 text-sm text-muted-foreground mb-4">
+                          <div className="flex items-center gap-2">
+                            <Hash className="w-4 h-4" />
+                            <span>{dataset.row_count?.toLocaleString() || 'N/A'} rows</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Columns className="w-4 h-4" />
+                            <span>{dataset.column_count || 'N/A'} columns</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Calendar className="w-4 h-4" />
+                            <span>{dataset.created_at ? new Date(dataset.created_at).toLocaleDateString() : 'Unknown'}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex gap-2">
+                          <motion.button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDatasetClick(dataset);
+                            }}
+                            className="flex-1 py-2 px-4 rounded-lg bg-gradient-to-r from-primary to-cyan-500 text-primary-foreground text-sm font-medium hover:from-primary/90 hover:to-cyan-500/90 transition-all flex items-center justify-center gap-2"
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                          >
+                            <MessageSquare className="w-4 h-4" />
+                            Analyze
+                          </motion.button>
+                          <motion.button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/analytics?dataset=${dataset.id}`);
+                            }}
+                            className="px-4 py-2 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/90 transition-all flex items-center justify-center"
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                          >
+                            <BarChart3 className="w-4 h-4" />
+                          </motion.button>
+                        </div>
+                      </>
+                    ) : (
+                      // List View
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-cyan-500 flex items-center justify-center text-lg">
+                          {getFileIcon(dataset)}
+                </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-lg font-semibold text-foreground truncate">
+                            {dataset.name || dataset.filename || 'Unnamed Dataset'}
+                </h3>
+                          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                            <span>{dataset.row_count?.toLocaleString() || 'N/A'} rows</span>
+                            <span>{dataset.column_count || 'N/A'} columns</span>
+                            <span>{dataset.created_at ? new Date(dataset.created_at).toLocaleDateString() : 'Unknown'}</span>
+                          </div>
+                </div>
+                        <div className="flex items-center gap-2">
+                          <motion.button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDatasetClick(dataset);
+                            }}
+                            className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all flex items-center gap-2"
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                          >
+                            <MessageSquare className="w-4 h-4" />
+                            Analyze
+                          </motion.button>
+                          <motion.button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/analytics?dataset=${dataset.id}`);
+                            }}
+                            className="px-4 py-2 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/90 transition-all"
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                          >
+                            <BarChart3 className="w-4 h-4" />
+                          </motion.button>
+                          <motion.button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteClick(dataset);
+                            }}
+                            className="p-2 rounded-lg hover:bg-red-500/20 hover:text-red-400 transition-all"
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.9 }}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </motion.button>
+                        </div>
+                </div>
+                    )}
+              </GlassCard>
+                </motion.div>
+            ))}
+            </AnimatePresence>
+          </div>
+        )}
+      </motion.div>
 
       {/* Delete Confirmation Modal */}
-      <ConfirmationModal
-        isOpen={showDeleteModal}
-        onClose={handleDeleteCancel}
+      <DeleteConfirmModal
+        isOpen={deleteModal.isOpen}
+        onClose={() => setDeleteModal({ isOpen: false, dataset: null })}
         onConfirm={handleDeleteConfirm}
         title="Delete Dataset"
-        message={`Are you sure you want to permanently delete "${datasetToDelete?.name}"? This action cannot be undone and will remove all associated data and files.`}
-        confirmText={deleting ? "Deleting..." : "Delete"}
-        cancelText="Cancel"
-        type="danger"
+        message="Are you sure you want to delete this dataset? This action cannot be undone and will remove all associated data and insights."
+        itemName={deleteModal.dataset?.name || deleteModal.dataset?.filename}
+        isLoading={loading}
       />
     </div>
-  )
-}
+  );
+};
 
-export default Datasets
-
-
-
+export default Datasets;

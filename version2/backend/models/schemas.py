@@ -46,6 +46,7 @@ class ChartRecommendation(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     context: Optional[Dict[str, Any]] = None
+    conversation_id: Optional[str] = None 
 
 class ChatResponse(BaseModel):
     response: str
@@ -136,7 +137,6 @@ class DatasetSummary(BaseModel):
 class UserBase(BaseModel):
     username: str
     email: EmailStr
-    full_name: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
@@ -158,12 +158,17 @@ class Token(BaseModel):
     token_type: str
     expires_in: int
 
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str
+    expires_in: int
+    user: User
+
 class TokenData(BaseModel):
     email: Optional[str] = None
 
 class UserProfileUpdate(BaseModel):
     username: Optional[str] = None
-    full_name: Optional[str] = None
 
 class PasswordChange(BaseModel):
     old_password: str

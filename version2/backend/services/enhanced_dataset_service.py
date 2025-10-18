@@ -1,540 +1,245 @@
-from fastapi import HTTPException, UploadFile, Depends
-from typing import List, Dict, Any, Optional
-import pandas as pd
+# backend/services/enhanced_dataset_service.py
+
 import uuid
 from datetime import datetime
 import logging
-import numpy as np
+from typing import List, Dict, Optional
+
+from fastapi import HTTPException, UploadFile
+from fastapi.responses import JSONResponse
+
 from database import get_database
-from models.schemas import (
-    DatasetCreate, DatasetFile, DatasetData, DatasetSummary,
-    DatasetMetadata, ChartRequest, ChartResponse, KPICard, UploadResponse
-)
-from services.auth_service import get_current_user
+from models.schemas import DatasetData, DatasetSummary
 from services.file_storage_service import file_storage_service
-import io
+from services.faiss_vector_service import faiss_vector_service
+from tasks import process_dataset_task # Import our Celery task
 
 logger = logging.getLogger(__name__)
 
 class EnhancedDatasetService:
+    """
+    Manages the lifecycle of dataset metadata records in the database.
+    This service does NOT perform file I/O or heavy computation itself;
+    it delegates those tasks to file_storage_service and Celery workers.
+    """
+
     def __init__(self):
-        self.db = None
-    
-    def _get_db(self):
-        """Get database connection"""
-        if self.db is None:
-            self.db = get_database()
-        return self.db
-    
-    def _convert_numpy_types(self, obj):
-        """Convert numpy types to Python native types recursively"""
-        if isinstance(obj, dict):
-            return {k: self._convert_numpy_types(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [self._convert_numpy_types(item) for item in obj]
-        elif isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            val = float(obj)
-            # Handle NaN and infinity values
-            if np.isnan(val) or np.isinf(val):
-                return None
-            return val
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, float):
-            # Handle regular Python floats that might be NaN
-            if np.isnan(obj) or np.isinf(obj):
-                return None
-            return obj
-        else:
-            return obj
-    
-    async def upload_dataset(self, file: UploadFile, user_id: str, name: str = None, description: str = None) -> Dict[str, Any]:
-        """Upload and process a dataset with file storage"""
+        """
+        The __init__ method is good practice, even if empty. It signifies
+        that this class is intended to be instantiated.
+        """
+    @property
+    def db(self):
+        """Lazily gets the database connection on first access."""
+        db_conn = get_database()
+        if db_conn is None:
+            raise Exception("Database is not connected. Application startup may have failed.")
+        return db_conn
+
+    async def upload_dataset(
+        self, file: UploadFile, user_id: str, name: str = None, description: str = None
+    ) -> JSONResponse:
+        """
+        Handles the initial upload request.
+        1. Saves the file using the file_storage_service.
+        2. Creates an initial dataset record in the database.
+        3. Dispatches a background task to process the dataset and generate metadata.
+        Returns an immediate 'Accepted' response.
+        """
         try:
-            # Read file content
             file_content = await file.read()
+            file_metadata = await file_storage_service.save_file(file_content, file.filename, user_id)
             
-            # Use file storage service
-            file_metadata = await file_storage_service.save_file(
-                file_content, 
-                file.filename, 
-                user_id
-            )
-            
-            # Generate dataset ID
             dataset_id = str(uuid.uuid4())
             
-            # Create dataset document
             dataset_doc = {
                 "_id": dataset_id,
                 "user_id": user_id,
                 "name": name or file.filename.split('.')[0],
                 "description": description or "",
                 "file_id": file_metadata["file_id"],
-                "original_filename": file_metadata["original_filename"],
+                "original_filename": file.filename,
                 "file_path": file_metadata["file_path"],
                 "file_size": file_metadata["file_size"],
-                "storage_type": file_metadata["storage_type"],
                 "file_extension": file_metadata["file_extension"],
-                "upload_date": file_metadata["upload_date"],
-                "last_accessed": None,
-                "is_processed": False,
+                "upload_date": datetime.utcnow(),
+                "is_processed": False, # IMPORTANT: Set to False, the worker will update this.
                 "is_active": True,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow()
+                "processing_status": "pending",
+                "metadata": {} # Metadata will be populated by the worker.
             }
             
-            # Add preview data if available
-            if file_metadata.get("preview_data"):
-                dataset_doc.update({
-                    "columns": file_metadata["columns"],
-                    "data_types": file_metadata["data_types"],
-                    "row_count": file_metadata["row_count"],
-                    "column_count": file_metadata["column_count"],
-                    "preview_data": file_metadata["preview_data"],
-                    "sample_data": file_metadata["sample_data"]
-                })
+            await self.db.datasets.insert_one(dataset_doc)
             
-            # Store dataset metadata in MongoDB
-            db = self._get_db()
-            result = await db.datasets.insert_one(dataset_doc)
+            # Dispatch the background task for processing
+            task = process_dataset_task.delay(dataset_id, file_metadata["file_path"])
             
-            # Convert _id to id for response
-            dataset_doc["id"] = str(result.inserted_id)
-            dataset_doc.pop("_id", None)
+            logger.info(f"Dataset {dataset_id} accepted for processing. Task ID: {task.id}")
             
-            # Generate additional metadata for small datasets
-            if file_metadata["storage_type"] == "database":
-                metadata = await self._generate_metadata(file_metadata["file_path"])
-                # Convert numpy types before storing
-                metadata = self._convert_numpy_types(metadata)
-                await db.datasets.update_one(
-                    {"_id": result.inserted_id},
-                    {"$set": {"metadata": metadata, "is_processed": True}}
-                )
-            
-            logger.info(f"Dataset uploaded successfully: {dataset_id}")
-            
-            # Create metadata object
-            metadata = DatasetMetadata(
-                dataset_overview={
-                    "total_rows": file_metadata.get("row_count", 0),
-                    "total_columns": file_metadata.get("column_count", 0),
-                    "numeric_columns": 0,
-                    "categorical_columns": 0,
-                    "missing_values": 0,
-                    "duplicate_rows": 0
-                },
-                column_metadata=[
-                    {"name": col, "type": "unknown", "null_count": 0, "null_percentage": 0.0, "unique_count": 0}
-                    for col in file_metadata.get("columns", [])
-                ],
-                statistical_summaries={},
-                data_quality={
-                    "completeness": 100.0,
-                    "uniqueness": 100.0,
-                    "consistency": 85.0,
-                    "accuracy": 90.0
-                },
-                chart_recommendations=[],
-                hierarchies=[]
-            )
-            
-            # Return simple dict response
-            return {
-                "dataset_id": dataset_id,
-                "message": "Dataset uploaded successfully",
-                "metadata": {
-                    "dataset_overview": metadata.dataset_overview,
-                    "column_metadata": metadata.column_metadata,
-                    "statistical_summaries": metadata.statistical_summaries,
-                    "data_quality": metadata.data_quality,
-                    "chart_recommendations": metadata.chart_recommendations,
-                    "hierarchies": metadata.hierarchies
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "dataset_id": dataset_id,
+                    "task_id": task.id,
+                    "message": "Dataset upload accepted and is now being processed."
                 }
-            }
-            
+            )
+        except HTTPException as e:
+            # Re-raise HTTP exceptions from file validation
+            raise e
         except Exception as e:
-            logger.error(f"Error uploading dataset: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to upload dataset: {str(e)}"
-            )
-    
-    async def _generate_metadata(self, file_path: str) -> Dict[str, Any]:
-        """Generate metadata for small datasets stored in database"""
-        try:
-            # Read the file to generate metadata
-            file_extension = file_path.split('.')[-1].lower()
-            
-            if file_extension == 'csv':
-                df = pd.read_csv(file_path)
-            elif file_extension in ['xlsx', 'xls']:
-                # Try to read Excel file with different engines
-                try:
-                    df = pd.read_excel(file_path, engine='openpyxl')
-                except Exception as e:
-                    logger.warning(f"Failed to read Excel with openpyxl: {e}")
-                    try:
-                        df = pd.read_excel(file_path, engine='xlrd')
-                    except Exception as e2:
-                        logger.error(f"Failed to read Excel with xlrd: {e2}")
-                        return {}
-                
-                # Handle NaT values in datetime columns
-                for col in df.columns:
-                    if df[col].dtype == 'datetime64[ns]':
-                        # Replace NaT values with None to avoid utcoffset issues
-                        df[col] = df[col].where(pd.notna(df[col]), None)
-            elif file_extension == 'json':
-                df = pd.read_json(file_path)
-            else:
-                return {}
-            
-            # Basic statistics
-            numeric_columns = df.select_dtypes(include=['number']).columns.tolist()
-            categorical_columns = df.select_dtypes(include=['object', 'category']).columns.tolist()
-            
-            # Dataset overview - ensure all values are Python native types
-            dataset_overview = {
-                "total_rows": int(len(df)),
-                "total_columns": int(len(df.columns)),
-                "numeric_columns": int(len(numeric_columns)),
-                "categorical_columns": int(len(categorical_columns)),
-                "missing_values": int(df.isnull().sum().sum()),
-                "duplicate_rows": int(df.duplicated().sum())
-            }
-            
-            # Column metadata
-            column_metadata = []
-            for col in df.columns:
-                col_info = {
-                    "name": col,
-                    "type": str(df[col].dtype),
-                    "null_count": int(df[col].isnull().sum()),
-                    "null_percentage": float((df[col].isnull().sum() / len(df)) * 100),
-                    "unique_count": int(df[col].nunique())
-                }
-                
-                # Add type-specific statistics
-                if col in numeric_columns:
-                    col_info.update({
-                        "min": float(df[col].min()) if not df[col].isnull().all() else None,
-                        "max": float(df[col].max()) if not df[col].isnull().all() else None,
-                        "mean": float(df[col].mean()) if not df[col].isnull().all() else None,
-                        "std": float(df[col].std()) if not df[col].isnull().all() else None,
-                        "median": float(df[col].median()) if not df[col].isnull().all() else None
-                    })
-                elif col in categorical_columns:
-                    col_info.update({
-                        "top_values": {k: int(v) for k, v in df[col].value_counts().head(5).to_dict().items()},
-                        "most_common": str(df[col].mode().iloc[0]) if not df[col].mode().empty else None
-                    })
-                
-                column_metadata.append(col_info)
-            
-            # Statistical summaries
-            statistical_summaries = {}
-            if numeric_columns:
-                # Convert numpy types to Python native types
-                desc = df[numeric_columns].describe()
-                statistical_summaries["numeric_summary"] = {
-                    col: {stat: float(val) for stat, val in stats.items()}
-                    for col, stats in desc.to_dict().items()
-                }
-            
-            # Data quality assessment
-            data_quality = {
-                "completeness": float((1 - df.isnull().sum().sum() / (len(df) * len(df.columns))) * 100),
-                "uniqueness": float((1 - df.duplicated().sum() / len(df)) * 100),
-                "consistency": 85.0,  # Placeholder
-                "accuracy": 90.0     # Placeholder
-            }
-            
-            # Chart recommendations
-            chart_recommendations = self._generate_chart_recommendations(df, numeric_columns, categorical_columns)
-            
-            # Hierarchy detection
-            hierarchies = self._detect_hierarchies(df)
-            
-            metadata = {
-                "dataset_overview": dataset_overview,
-                "column_metadata": column_metadata,
-                "statistical_summaries": statistical_summaries,
-                "data_quality": data_quality,
-                "chart_recommendations": chart_recommendations,
-                "hierarchies": hierarchies
-            }
-            
-            # Convert all numpy types to Python native types
-            return self._convert_numpy_types(metadata)
-            
-        except Exception as e:
-            logger.error(f"Error generating metadata: {e}")
-            return {}
-    
-    def _generate_chart_recommendations(self, df: pd.DataFrame, numeric_cols: List[str], categorical_cols: List[str]) -> List[Dict[str, Any]]:
-        """Generate chart recommendations based on data types"""
-        recommendations = []
-        
-        # Bar chart for categorical data
-        if categorical_cols:
-            for col in categorical_cols[:3]:
-                recommendations.append({
-                    "chart_type": "bar",
-                    "title": f"Distribution of {col}",
-                    "description": f"Shows the frequency distribution of {col}",
-                    "suitable_columns": [col],
-                    "confidence": "high"
-                })
-        
-        # Line chart for time series data
-        date_cols = df.select_dtypes(include=['datetime64']).columns.tolist()
-        if date_cols and numeric_cols:
-            for date_col in date_cols[:1]:
-                for num_col in numeric_cols[:2]:
-                    recommendations.append({
-                        "chart_type": "line",
-                        "title": f"{num_col} over {date_col}",
-                        "description": f"Shows trend of {num_col} over time",
-                        "suitable_columns": [date_col, num_col],
-                        "confidence": "high"
-                    })
-        
-        # Scatter plot for numeric relationships
-        if len(numeric_cols) >= 2:
-            recommendations.append({
-                "chart_type": "scatter",
-                "title": f"{numeric_cols[0]} vs {numeric_cols[1]}",
-                "description": f"Shows relationship between {numeric_cols[0]} and {numeric_cols[1]}",
-                "suitable_columns": numeric_cols[:2],
-                "confidence": "high"
-            })
-        
-        return recommendations
-    
-    def _detect_hierarchies(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
-        """Detect potential hierarchies in the data"""
-        hierarchies = []
-        
-        # Date hierarchy detection
-        date_cols = df.select_dtypes(include=['datetime64']).columns.tolist()
-        if date_cols:
-            hierarchies.append({
-                "type": "temporal",
-                "field": date_cols[0],
-                "levels": ["year", "month", "day"],
-                "confidence": "high"
-            })
-        
-        # Geographic hierarchy detection
-        geo_keywords = ['country', 'state', 'city', 'region', 'area', 'location']
-        for col in df.columns:
-            if any(keyword in col.lower() for keyword in geo_keywords):
-                hierarchies.append({
-                    "type": "geographic",
-                    "field": col,
-                    "levels": ["country", "state", "city"],
-                    "confidence": "medium"
-                })
-                break
-        
-        return hierarchies
-    
-    async def get_user_datasets(self, user_id: str, skip: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
-        """Get datasets for a specific user"""
-        try:
-            db = self._get_db()
-            cursor = db.datasets.find(
-                {"user_id": user_id, "is_active": True}
-            ).sort("created_at", -1).skip(skip).limit(limit)
-            
-            datasets = []
-            async for doc in cursor:
-                doc["id"] = str(doc["_id"])
-                doc.pop("_id", None)
-                # Convert numpy types before returning
-                doc = self._convert_numpy_types(doc)
-                datasets.append(doc)
-            
-            return datasets
-            
-        except Exception as e:
-            logger.error(f"Error getting user datasets: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to retrieve datasets"
-            )
-    
-    async def get_dataset(self, dataset_id: str, user_id: str) -> Dict[str, Any]:
-        """Get a specific dataset"""
-        try:
-            db = self._get_db()
-            dataset = await db.datasets.find_one({
-                "_id": dataset_id,
-                "user_id": user_id,
-                "is_active": True
-            })
-            
-            if not dataset:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Dataset not found"
-                )
-            
-            # Update last accessed
-            await db.datasets.update_one(
-                {"_id": dataset_id},
-                {"$set": {"last_accessed": datetime.utcnow()}}
-            )
-            
-            dataset["id"] = str(dataset["_id"])
-            dataset.pop("_id", None)
-            return dataset
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error getting dataset: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to retrieve dataset"
-            )
-    
-    async def get_dataset_data(self, dataset_id: str, user_id: str, page: int = 1, page_size: int = 100) -> DatasetData:
-        """Get dataset data with pagination"""
-        try:
-            # Get dataset info
-            dataset = await self.get_dataset(dataset_id, user_id)
-            
-            if dataset["storage_type"] == "database":
-                # Data is stored in MongoDB
-                db = self._get_db()
-                data_collection = db[f"dataset_{dataset_id}_data"]
-                
-                skip = (page - 1) * page_size
-                cursor = data_collection.find({}).skip(skip).limit(page_size)
-                
-                data = []
-                async for doc in cursor:
-                    doc.pop("_id", None)
-                    data.append(doc)
-                
-                total_rows = await data_collection.count_documents({})
-                
-            else:
-                # Data is stored as file
-                data = await file_storage_service.get_file_data(
-                    dataset["file_path"], 
-                    limit=page_size
-                )
-                total_rows = dataset.get("row_count", len(data))
-            
-            has_more = (page * page_size) < total_rows
-            
-            return DatasetData(
-                data=data,
-                total_rows=total_rows,
-                current_page=page,
-                page_size=page_size,
-                has_more=has_more
-            )
-            
-        except Exception as e:
-            logger.error(f"Error getting dataset data: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to retrieve dataset data"
-            )
-    
-    async def get_dataset_summary(self, dataset_id: str, user_id: str) -> DatasetSummary:
-        """Get dataset summary statistics"""
-        try:
-            dataset = await self.get_dataset(dataset_id, user_id)
-            
-            if dataset["storage_type"] == "database" and dataset.get("metadata"):
-                # Use pre-computed metadata
-                overview = dataset["metadata"]["dataset_overview"]
-                column_metadata = dataset["metadata"]["column_metadata"]
-                
-                numeric_columns = [col["name"] for col in column_metadata if col["type"] in ["int64", "float64"]]
-                categorical_columns = [col["name"] for col in column_metadata if col["type"] in ["object", "category"]]
-                
-                missing_values = {col["name"]: col["null_count"] for col in column_metadata}
-                data_types = {col["name"]: col["type"] for col in column_metadata}
-                
-                return DatasetSummary(
-                    total_rows=overview["total_rows"],
-                    total_columns=overview["total_columns"],
-                    numeric_columns=numeric_columns,
-                    categorical_columns=categorical_columns,
-                    missing_values=missing_values,
-                    data_types=data_types,
-                    basic_stats=dataset["metadata"].get("statistical_summaries", {})
-                )
-            else:
-                # For file-based storage, we need to read the file
-                # This is a simplified version - in production, you'd want to cache this
-                return DatasetSummary(
-                    total_rows=dataset.get("row_count", 0),
-                    total_columns=dataset.get("column_count", 0),
-                    numeric_columns=[],
-                    categorical_columns=[],
-                    missing_values={},
-                    data_types={}
-                )
-                
-        except Exception as e:
-            logger.error(f"Error getting dataset summary: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to retrieve dataset summary"
-            )
-    
-    async def delete_dataset(self, dataset_id: str, user_id: str) -> bool:
-        """Permanently delete a dataset and its associated files"""
-        try:
-            # Get dataset info first
-            dataset = await self.get_dataset(dataset_id, user_id)
-            
-            # Delete file from storage
-            if dataset.get("file_id") and dataset.get("file_extension"):
-                await file_storage_service.delete_file(
-                    dataset["file_id"], user_id, dataset["file_extension"]
-                )
-            
-            # Permanently delete from database
-            db = self._get_db()
-            result = await db.datasets.delete_one(
-                {"_id": dataset_id, "user_id": user_id}
-            )
-            
-            if result.deleted_count == 0:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Dataset not found or not owned by user"
-                )
-            
-            # Delete related data collections if they exist
-            if dataset.get("storage_type") == "database":
-                try:
-                    await db[f"dataset_{dataset_id}_data"].drop()
-                except Exception as e:
-                    logger.warning(f"Could not drop data collection for dataset {dataset_id}: {e}")
-            
-            logger.info(f"Dataset permanently deleted: {dataset_id}")
-            return True
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error deleting dataset: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to delete dataset"
-            )
+            logger.error(f"Error in upload_dataset orchestration: {e}")
+            raise HTTPException(status_code=500, detail="Failed to initiate dataset upload.")
 
-# Create enhanced dataset service instance
+    async def get_user_datasets(self, user_id: str, skip: int = 0, limit: int = 100) -> List[Dict]:
+        """Gets all active datasets for a specific user."""
+        cursor = self.db.datasets.find(
+            {"user_id": user_id, "is_active": True}
+        ).sort("upload_date", -1).skip(skip).limit(limit)
+        
+        datasets = []
+        async for doc in cursor:
+            doc["id"] = str(doc["_id"])
+            doc.pop("_id", None)
+            
+            # Ensure we have the basic fields with fallbacks
+            if not doc.get("name"):
+                doc["name"] = doc.get("original_filename", "Unnamed Dataset")
+            if not doc.get("row_count"):
+                doc["row_count"] = 0
+            if not doc.get("column_count"):
+                doc["column_count"] = 0
+            if not doc.get("created_at"):
+                doc["created_at"] = doc.get("upload_date")
+                
+            datasets.append(doc)
+        return datasets
+
+    async def get_dataset(self, dataset_id: str, user_id: str) -> Dict:
+        """Gets a single, complete dataset document, including its metadata."""
+        # Handle both ObjectId and UUID formats
+        try:
+            # Try ObjectId format first
+            from bson import ObjectId
+            query = {"_id": ObjectId(dataset_id), "user_id": user_id, "is_active": True}
+        except Exception:
+            # If ObjectId fails, treat as string (UUID format)
+            query = {"_id": dataset_id, "user_id": user_id, "is_active": True}
+        
+        dataset = await self.db.datasets.find_one(query)
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+        
+        dataset["id"] = str(dataset["_id"])
+        dataset.pop("_id", None)
+        return dataset
+
+    async def delete_dataset(self, dataset_id: str, user_id: str) -> bool:
+        """Permanently deletes a dataset record and its associated file."""
+        dataset = await self.get_dataset(dataset_id, user_id) # Ensures user owns the dataset
+
+        # Delete the physical file from storage
+        if dataset.get("file_path"):
+            await file_storage_service.delete_file(dataset["file_path"])
+
+        # Delete related conversations
+        await self.db.conversations.delete_many({"dataset_id": dataset_id, "user_id": user_id})
+
+        # Delete the dataset record from MongoDB
+        # Convert string ID to ObjectId for MongoDB query
+        from bson import ObjectId
+        try:
+            object_id = ObjectId(dataset_id)
+            query = {"_id": object_id, "user_id": user_id}
+        except Exception:
+            # If ObjectId conversion fails, treat as string (UUID format)
+            query = {"_id": dataset_id, "user_id": user_id}
+        
+        result = await self.db.datasets.delete_one(query)
+        
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Dataset could not be deleted.")
+        
+        logger.info(f"Dataset {dataset_id} permanently deleted by user {user_id}.")
+        return True
+
+    async def get_dataset_data(self, dataset_id: str, user_id: str, page: int = 1, page_size: int = 100) -> Dict:
+        """Gets paginated data directly from the dataset's file."""
+        dataset = await self.get_dataset(dataset_id, user_id)
+        
+        # We now always read from the file path via the storage service.
+        offset = (page - 1) * page_size
+        data, total_rows = await file_storage_service.get_paginated_file_data(
+            dataset["file_path"], limit=page_size, offset=offset
+        )
+
+        return {
+            "data": data,
+            "total_rows": total_rows,
+            "current_page": page,
+            "page_size": page_size,
+            "has_more": (page * page_size) < total_rows
+        }
+
+    async def load_dataset_data(self, dataset_id: str, user_id: str):
+        """Loads the full dataset as a Polars DataFrame for analysis."""
+        import polars as pl
+        from pathlib import Path
+        
+        dataset = await self.get_dataset(dataset_id, user_id)
+        file_path = dataset.get("file_path")
+        
+        if not file_path:
+            raise HTTPException(status_code=404, detail="Dataset file not found.")
+        
+        path = Path(file_path)
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Dataset file not found on disk.")
+        
+        try:
+            file_ext = path.suffix.lower()
+            if file_ext == ".csv":
+                return pl.read_csv(file_path, infer_schema_length=10000)
+            elif file_ext in [".xlsx", ".xls"]:
+                return pl.read_excel(file_path)
+            elif file_ext == ".json":
+                return pl.read_json(file_path)
+            else:
+                raise HTTPException(status_code=400, detail=f"Unsupported file format: {file_ext}")
+        except Exception as e:
+            logger.error(f"Failed to load dataset from {file_path}: {e}")
+            raise HTTPException(status_code=500, detail=f"Could not load dataset: {str(e)}")
+
+    async def auto_index_dataset_to_vector_db(self, dataset_id: str, user_id: str) -> bool:
+        """
+        Automatically index a dataset to vector database after processing.
+        This is called internally when dataset processing is complete.
+        """
+        try:
+            # Get the processed dataset
+            dataset_doc = await self.get_dataset(dataset_id, user_id)
+            
+            if dataset_doc and dataset_doc.get("metadata"):
+                # Index to vector database
+                success = await faiss_vector_service.add_dataset_to_vector_db(
+                    dataset_id=dataset_id,
+                    dataset_metadata=dataset_doc["metadata"],
+                    user_id=user_id
+                )
+                
+                if success:
+                    logger.info(f"Dataset {dataset_id} auto-indexed to vector database")
+                    return True
+                else:
+                    logger.warning(f"Failed to auto-index dataset {dataset_id} to vector database")
+                    return False
+            else:
+                logger.warning(f"Dataset {dataset_id} not ready for vector indexing")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Auto-indexing failed for dataset {dataset_id}: {e}")
+            return False
+
+# Singleton instance
 enhanced_dataset_service = EnhancedDatasetService()

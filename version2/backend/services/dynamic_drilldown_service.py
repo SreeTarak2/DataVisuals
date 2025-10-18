@@ -413,3 +413,5 @@ class DynamicDrillDownService:
         # For custom aggregations, use group by
         return await self._execute_group_aggregation(df, field, hierarchy)
 
+# Create a singleton instance that can be imported consistently by main.py
+drilldown_service = DynamicDrillDownService()

@@ -11,27 +11,34 @@
   },
   "dependencies": {
     "axios": "^1.12.2",
-    "lucide-react": "^0.544.0",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.23.24",
+    "lodash": "^4.17.21",
+    "lucide-react": "^0.545.0",
     "plotly.js": "^3.1.1",
+    "plotly.js-dist-min": "^3.1.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-dropzone": "^14.3.8",
     "react-hot-toast": "^2.6.0",
     "react-plotly.js": "^2.6.0",
-    "react-router-dom": "^7.9.3",
-    "recharts": "^3.2.1"
+    "react-router-dom": "^7.9.4",
+    "recharts": "^3.2.1",
+    "tailwind-merge": "^3.3.1",
+    "tailwindcss": "^3.4.17",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
-    "@types/react": "^19.1.13",
+    "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
-    "@vitejs/plugin-react": "^5.0.3",
+    "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
     "eslint": "^9.36.0",
     "eslint-plugin-react-hooks": "^5.2.0",
-    "eslint-plugin-react-refresh": "^0.4.20",
+    "eslint-plugin-react-refresh": "^0.4.22",
     "globals": "^16.4.0",
     "postcss": "^8.5.6",
-    "tailwindcss": "^3.4.17",
     "vite": "^7.1.7"
   }
 }
