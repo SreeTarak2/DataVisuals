@@ -15,8 +15,8 @@ import { cn } from '../lib/utils';
 import useDatasetStore from '../store/datasetStore';
 import { datasetAPI } from '../services/api';
 
-const Analytics = () => {
-  const { datasets, selectedDataset, setSelectedDataset, fetchDatasets } = useDatasetStore();
+const Charts = () => {
+  const { selectedDataset } = useDatasetStore();
   const [chartType, setChartType] = useState('bar');
   const [xAxis, setXAxis] = useState('');
   const [yAxis, setYAxis] = useState('');
@@ -39,16 +39,15 @@ const Analytics = () => {
     const loadData = async () => {
       setLoading(true);
       try {
-        await fetchDatasets();
-        if (datasets.length > 0 && !selectedDataset) {
-        setSelectedDataset(datasets[0]);
+        if (selectedDataset) {
+          await loadDatasetColumns();
         }
       } finally {
         setLoading(false);
       }
     };
     loadData();
-  }, [fetchDatasets, datasets.length, selectedDataset, setSelectedDataset]);
+  }, [selectedDataset]);
 
   useEffect(() => {
     if (selectedDataset) {
@@ -240,7 +239,7 @@ const Analytics = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Analytics Studio</h1>
+          <h1 className="text-3xl font-bold text-foreground">Charts Studio</h1>
           <p className="text-muted-foreground mt-2">Build visualizations like in Power BI—select data and create charts.</p>
         </div>
         
@@ -287,20 +286,6 @@ const Analytics = () => {
 
         {/* Controls Panel - Takes 1/3 of the space */}
         <div className="space-y-4">
-      {/* Dataset Selector */}
-          <GlassCard className="p-4" elevated>
-            <h3 className="text-lg font-semibold text-foreground mb-3">Dataset</h3>
-            <select
-              value={selectedDataset?.id || ''}
-              onChange={(e) => setSelectedDataset(datasets.find(d => d.id === e.target.value))}
-              className="w-full px-3 py-2 rounded-lg glass-effect border border-border/50 text-foreground focus:ring-primary"
-            >
-              <option value="">Select dataset...</option>
-              {datasets.map(d => (
-                <option key={d.id} value={d.id}>{d.name}</option>
-              ))}
-            </select>
-        </GlassCard>
 
       {/* Chart Type Selector */}
           <GlassCard className="p-4" elevated>
@@ -382,4 +367,4 @@ const Analytics = () => {
   );
 };
 
-export default Analytics;
+export default Charts;

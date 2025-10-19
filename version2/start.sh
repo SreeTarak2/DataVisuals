@@ -17,10 +17,21 @@ fi
 # Start backend
 echo "🔧 Starting backend server..."
 cd backend
-python3 -m venv venv
+
+# Create virtual environment if it doesn't exist
+if [ ! -d "venv" ]; then
+    echo "📦 Creating virtual environment..."
+    python3 -m venv venv
+fi
+
+# Activate virtual environment and install dependencies
+echo "🔧 Activating virtual environment..."
 source venv/bin/activate
 pip install -r requirements.txt
-python main.py &
+
+# Start the backend server using uvicorn with the virtual environment
+echo "🚀 Starting FastAPI server with uvicorn..."
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
 BACKEND_PID=$!
 
 # Wait for backend to start

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   File, X, CheckCircle, AlertCircle, Database, BarChart3, 
   MessageSquare, Eye, Calendar, Hash, Columns, Upload,
-  Search, Filter, Grid, List, MoreVertical, Trash2, Edit3
+  Search, Filter, Grid, List, MoreVertical, Trash2, Edit3, RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import GlassCard from '../components/common/GlassCard';
@@ -29,6 +29,14 @@ const Datasets = () => {
 
   useEffect(() => {
     fetchDatasets();
+    
+    // Set up polling to refresh datasets every 5 seconds
+    // This ensures we get updated data after processing completes
+    const interval = setInterval(() => {
+      fetchDatasets(true); // Force refresh
+    }, 5000);
+    
+    return () => clearInterval(interval);
   }, []);
 
   const handleDeleteClick = (dataset) => {
@@ -141,6 +149,15 @@ const Datasets = () => {
             <option value="name">Sort by Name</option>
             <option value="size">Sort by Size</option>
           </select>
+
+          {/* Refresh Button */}
+          <button
+            onClick={() => fetchDatasets(true)}
+            className="p-2 rounded-lg glass-effect border border-border/50 transition-all text-muted-foreground hover:text-foreground hover:bg-black/20"
+            title="Refresh datasets"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
 
           {/* View Mode */}
           <div className="flex rounded-lg glass-effect border border-border/50 p-1">

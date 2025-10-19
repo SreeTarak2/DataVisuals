@@ -12,7 +12,7 @@ import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import Datasets from "./pages/Datasets";
 import Chat from "./pages/Chat";
-import Analytics from "./pages/Analytics";
+import Charts from "./pages/Charts";
 import Settings from "./pages/Settings";
 
 import "./App.css";
@@ -40,7 +40,7 @@ function App() {
               <Route path="dashboard" element={<Dashboard />} />
               <Route path="datasets" element={<Datasets />} />
               <Route path="chat" element={<Chat />} />
-              <Route path="analytics" element={<Analytics />} />
+              <Route path="charts" element={<Charts />} />
               <Route path="settings" element={<Settings />} />
             </Route>
 
@@ -48,7 +48,7 @@ function App() {
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
           <Toaster 
-            position="top-right"
+            position="top-center"
             toastOptions={{
               duration: 4000,
               style: {

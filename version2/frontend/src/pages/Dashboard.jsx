@@ -142,7 +142,30 @@ const Dashboard = () => {
 
       setLoading(true);
       try {
-        await fetchDatasets();
+        // Always fetch fresh dataset data to get updated row/column counts
+        const freshDatasets = await fetchDatasets(true);
+        
+        // Check if dataset is still processing and set up polling
+        const currentDataset = freshDatasets.find(d => d.id === selectedDataset.id || d._id === selectedDataset.id);
+        if (currentDataset && !currentDataset.is_processed && currentDataset.processing_status !== 'failed') {
+          // Dataset is still processing, set up polling to refresh every 3 seconds
+          const pollInterval = setInterval(async () => {
+            try {
+              const updatedDatasets = await fetchDatasets(true);
+              const updatedDataset = updatedDatasets.find(d => d.id === selectedDataset.id || d._id === selectedDataset.id);
+              if (updatedDataset && updatedDataset.is_processed) {
+                clearInterval(pollInterval);
+                // Reload dashboard data once processing is complete
+                loadDashboardData();
+              }
+            } catch (error) {
+              console.error('Error polling for dataset updates:', error);
+            }
+          }, 3000);
+          
+          // Clean up interval on unmount
+          return () => clearInterval(pollInterval);
+        }
         
         const token = localStorage.getItem('datasage-token');
         const { fallbackKpis, fallbackCharts, fallbackInsights } = generateFallbackData();
@@ -452,7 +475,7 @@ const Dashboard = () => {
         <div className="space-y-2">
           <h1 className="text-4xl font-bold text-white tracking-tight flex items-center gap-3">
             <Sparkles className="w-10 h-10 text-emerald-400" />
-            DataWizard AI
+            DataSage AI
         </h1>
           <p className="text-slate-400 text-lg">
             {selectedDataset?.name ? (
@@ -461,6 +484,11 @@ const Dashboard = () => {
                 <span className="ml-4 text-sm bg-slate-800/50 px-3 py-1 rounded-full border border-slate-700">
                   {selectedDataset.row_count || 0} rows • {selectedDataset.column_count || 0} columns
                 </span>
+                {selectedDataset.metadata?.data_quality?.data_cleaning_applied && (
+                  <span className="ml-2 text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded-full border border-green-500/30">
+                    ✨ Data Cleaned
+                  </span>
+                )}
               </>
             ) : (
               "AI-powered data exploration and insights"
@@ -475,24 +503,6 @@ const Dashboard = () => {
         </p>
       </div>
 
-          {/* Dataset Selector */}
-          {datasets.length > 0 && (
-            <select 
-              value={selectedDataset?.id || ''} 
-              onChange={(e) => {
-                const newDataset = datasets.find(d => d.id === e.target.value);
-                if (newDataset) setSelectedDataset(newDataset);
-              }}
-              className="bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 focus:ring-2 focus:ring-emerald-500 text-white text-sm"
-            >
-              {datasets.map(d => (
-                <option key={d.id} value={d.id}>
-                  {d.name} {d.is_processed ? '✓' : '⏳'}
-                </option>
-              ))}
-            </select>
-          )}
-          
           {/* Power-user "Redesign" button - subtle and optional */}
           <Button 
             onClick={() => generateAiDashboard(true)}
@@ -507,14 +517,6 @@ const Dashboard = () => {
             )}
             {layoutLoading ? 'Redesigning...' : 'Redesign'}
           </Button>
-          
-          <Button 
-            onClick={() => setShowUploadModal(true)}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-500 hover:border-emerald-400 transition-all duration-200 shadow-lg"
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            Upload Dataset
-          </Button>
         </div>
       </motion.div>
 
@@ -523,7 +525,7 @@ const Dashboard = () => {
         /* No Dataset State */
         <div className="text-center py-20 bg-slate-800/50 border border-slate-700 rounded-xl">
           <Database className="w-16 h-16 mx-auto text-slate-500 mb-6" />
-          <h3 className="text-2xl font-semibold text-white mb-3">Welcome to DataWizard AI</h3>
+          <h3 className="text-2xl font-semibold text-white mb-3">Welcome to DataSage AI</h3>
           <p className="text-slate-400 mb-8 max-w-md mx-auto">
             Upload your first dataset to begin your AI-powered data exploration journey. 
             Our intelligent system will automatically analyze and create beautiful visualizations for you.
@@ -586,8 +588,7 @@ const Dashboard = () => {
 
           {/* Charts and Tables Section */}
           <motion.div
-            className="grid gap-6"
-            style={{ gridTemplateColumns: aiDashboardConfig.layout_grid || 'repeat(4, 1fr)' }}
+            className="space-y-6"
             variants={{ 
               hidden: {}, 
               visible: { 
@@ -597,22 +598,59 @@ const Dashboard = () => {
             initial="hidden"
             animate="visible"
           >
-            {aiDashboardConfig.components
-              .filter(component => component.type !== 'kpi')
-              .map((component, index) => (
-                <motion.div 
-                  key={`other-${index}`} 
-                  variants={{ 
-                    hidden: { y: 20, opacity: 0 }, 
-                    visible: { y: 0, opacity: 1 } 
-                  }}
-                >
-                  <DashboardComponent 
-                    component={component} 
-                    datasetData={datasetData}
-                  />
-                </motion.div>
-              ))}
+            {(() => {
+              const chartComponents = aiDashboardConfig.components.filter(component => component.type !== 'kpi' && component.type !== 'table');
+              
+              return (
+                <>
+                  {/* Main Chart - Large */}
+                  {chartComponents.length > 0 && (
+                    <motion.div 
+                      key="main-chart"
+                      className="w-full"
+                      variants={{ 
+                        hidden: { y: 20, opacity: 0 }, 
+                        visible: { y: 0, opacity: 1 } 
+                      }}
+                    >
+                      <DashboardComponent 
+                        component={chartComponents[0]} 
+                        datasetData={datasetData}
+                      />
+                    </motion.div>
+                  )}
+                  
+                  {/* Secondary Charts - Smaller Grid */}
+                  {chartComponents.length > 1 && (
+                    <motion.div 
+                      className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                      variants={{ 
+                        hidden: {}, 
+                        visible: { 
+                          transition: { staggerChildren: 0.1 } 
+                        } 
+                      }}
+                    >
+                      {chartComponents.slice(1).map((component, index) => (
+                        <motion.div 
+                          key={`secondary-${index}`} 
+                          variants={{ 
+                            hidden: { y: 20, opacity: 0 }, 
+                            visible: { y: 0, opacity: 1 } 
+                          }}
+                        >
+                          <DashboardComponent 
+                            component={component} 
+                            datasetData={datasetData}
+                          />
+                        </motion.div>
+                      ))}
+                    </motion.div>
+                  )}
+                  
+                </>
+              );
+            })()}
           </motion.div>
 
           {/* Data Preview Section - Always show after AI dashboard */}

@@ -288,7 +288,6 @@ class PromptFactory:
         )
 
     # ---------------- Enhanced Dashboard Designer Prompt ----------------
-
     def _get_dashboard_designer_prompt(
         self,
         chart_options: List[str],
@@ -382,10 +381,10 @@ class PromptFactory:
         Provide only the valid JSON object and nothing else.
         """
 
-        # Format the template with max_components first, then inject context
-        template_formatted = template.format(
-            chart_options_str=chart_options_str,
-            max_components=max_components
+        # ✅ FIX: Avoid using .format() which breaks due to JSON braces in template
+        template_formatted = (
+            template.replace("{chart_options_str}", chart_options_str)
+                    .replace("{max_components}", str(max_components))
         )
         return self._inject_context(template_formatted)
 

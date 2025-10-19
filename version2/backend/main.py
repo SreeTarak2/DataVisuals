@@ -52,7 +52,6 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     await connect_to_mongo()
-    # service.enhanced_dataset_service = service_module.EnhancedDatasetService()
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -84,9 +83,6 @@ async def health_check():
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     return current_user
 
-@app.get("/api/health")
-async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 @app.get("/api/test-ai")
 async def test_ai_services():
@@ -195,28 +191,6 @@ async def process_chat(
         logger.error(f"Chat processing error: {e}")
         raise HTTPException(status_code=500, detail="Failed to process chat query.")
 
-@app.post("/api/datasets/{dataset_id}/chat/legacy")
-async def process_chat_legacy(
-    dataset_id: str, 
-    request: ChatRequest,
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Legacy chat endpoint for backward compatibility.
-    """
-    try:
-        response = await ai_service.process_chat_message(
-            query=request.message,
-            dataset_id=dataset_id,
-            user_id=current_user["id"],
-            conversation_id=request.conversation_id
-        )
-        return response
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Chat processing error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process chat query.")
 
 @app.post("/api/ai/generate-quis-insights")
 async def generate_quis_insights(
@@ -365,17 +339,20 @@ async def index_dataset_to_vector_db(
         if not dataset_doc or not dataset_doc.get("metadata"):
             raise HTTPException(status_code=404, detail="Dataset not found or not processed")
         
-        # Add to vector database
-        success = await faiss_vector_service.add_dataset_to_vector_db(
+        # Add to vector database using Celery task
+        from tasks import index_dataset_to_vector_db
+        vector_task = index_dataset_to_vector_db.delay(
             dataset_id=dataset_id,
             dataset_metadata=dataset_doc["metadata"],
             user_id=current_user["id"]
         )
         
-        if success:
-            return {"message": "Dataset indexed successfully", "dataset_id": dataset_id}
-        else:
-            raise HTTPException(status_code=500, detail="Failed to index dataset")
+        return {
+            "message": "Dataset indexing started", 
+            "dataset_id": dataset_id,
+            "task_id": vector_task.id,
+            "status": "processing"
+        }
             
     except HTTPException:
         raise
@@ -431,8 +408,9 @@ async def enhanced_rag_search(
         if not query.strip():
             raise HTTPException(status_code=400, detail="Query is required")
         
-        # Add query to history
-        await faiss_vector_service.add_query_to_history(
+        # Add query to history using Celery task
+        from tasks import add_query_to_vector_history
+        add_query_to_vector_history.delay(
             query=query,
             dataset_id=dataset_id,
             user_id=current_user["id"]
@@ -575,14 +553,14 @@ async def run_quis_analysis(request: Dict[str, Any], current_user: dict = Depend
             raise HTTPException(status_code=404, detail="Dataset file not found.")
 
         # Load data using Polars for performance
-        import polars as pl
         df = pl.read_csv(dataset["file_path"])  # Add logic for other file types if needed
         
         # Run comprehensive QUIS analysis
         quis_results = analysis_service.run_quis_analysis(df)
         
-        # Add query to history for future RAG enhancement
-        await faiss_vector_service.add_query_to_history(
+        # Add query to history for future RAG enhancement using Celery task
+        from tasks import add_query_to_vector_history
+        add_query_to_vector_history.delay(
             query="QUIS comprehensive analysis",
             dataset_id=dataset_id,
             user_id=current_user["id"]
@@ -618,11 +596,6 @@ async def reprocess_dataset(dataset_id: str, current_user: dict = Depends(get_cu
         logger.error(f"Error reprocessing dataset {dataset_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to reprocess dataset")
 
-@app.get("/api/datasets/{dataset_id}/hierarchies")
-async def get_hierarchies(dataset_id: str, current_user: dict = Depends(get_current_user)):
-    dataset_data = await enhanced_dataset_service.get_dataset_data(dataset_id, current_user["id"], page_size=5000)
-    analysis = await drilldown_service.analyze_dataset_for_drilldown(dataset_data.data)
-    return {"hierarchies": analysis.get("hierarchies", []), "dataset_id": dataset_id}
 
 @app.post("/api/datasets/{dataset_id}/drill-down")
 async def drill_down(
@@ -746,11 +719,23 @@ async def get_dashboard_insights(dataset_id: str, current_user: dict = Depends(g
         # Run QUIS analysis to get real insights
         quis_results = analysis_service.run_quis_analysis(df)
         
+        # Debug: Log the structure of insights returned
+        logger.info(f"QUIS results structure: {list(quis_results.keys())}")
+        if quis_results.get("basic_insights"):
+            logger.info(f"Basic insights count: {len(quis_results['basic_insights'])}")
+            if quis_results["basic_insights"]:
+                logger.info(f"First insight structure: {list(quis_results['basic_insights'][0].keys())}")
+        
         # Convert QUIS results to dashboard insights format
         insights = []
         
         # Process basic insights
-        for insight in quis_results["basic_insights"][:3]:  # Limit to top 3
+        basic_insights = quis_results.get("basic_insights", [])
+        for insight in basic_insights[:3]:  # Limit to top 3
+            # Skip insights without a type field
+            if not insight.get("type"):
+                continue
+                
             if insight["type"] == "correlation":
                 strength = insight.get("strength", "moderate")
                 method = insight.get("method", "correlation")
@@ -861,35 +846,102 @@ async def generate_analytics_chart(
         if df is None:
             raise HTTPException(status_code=404, detail="Dataset data not found")
         
+        # Validate that the requested columns exist
+        if x_axis not in df.columns:
+            raise HTTPException(status_code=400, detail=f"Column '{x_axis}' not found in dataset")
+        if y_axis not in df.columns:
+            raise HTTPException(status_code=400, detail=f"Column '{y_axis}' not found in dataset")
+        
+        # Log column types for debugging
+        logger.info(f"Chart generation - X-axis: {x_axis} (type: {df[x_axis].dtype}), Y-axis: {y_axis} (type: {df[y_axis].dtype})")
+        
         # Generate chart data based on type
         chart_data = []
         
+        # Helper function to safely convert values to numeric
+        def safe_to_numeric(value):
+            if value is None:
+                return 0
+            try:
+                # Try to convert to float first
+                return float(value)
+            except (ValueError, TypeError):
+                # If conversion fails, try to extract numeric part or use count
+                if isinstance(value, str):
+                    # Try to extract numbers from string
+                    import re
+                    numbers = re.findall(r'-?\d+\.?\d*', str(value))
+                    if numbers:
+                        return float(numbers[0])
+                # If all else fails, return 0
+                return 0
+        
+        # Helper function to safely convert values to string
+        def safe_to_string(value):
+            if value is None:
+                return "Unknown"
+            return str(value)
+        
         if chart_type == "pie":
             # For pie charts, group by x-axis and aggregate y-axis
-            grouped = df.group_by(x_axis).agg([
-                getattr(pl.col(y_axis), aggregation)().alias("value")
-            ]).sort("value", descending=True).limit(10)
+            # Check if y_axis is numeric, if not use count
+            try:
+                # Try to use the requested aggregation
+                grouped = df.group_by(x_axis).agg([
+                    getattr(pl.col(y_axis), aggregation)().alias("value")
+                ]).sort("value", descending=True).limit(10)
+            except Exception:
+                # If aggregation fails (e.g., sum on strings), use count instead
+                grouped = df.group_by(x_axis).agg([
+                    pl.col(y_axis).count().alias("value")
+                ]).sort("value", descending=True).limit(10)
             
             chart_data = [
                 {
-                    "name": str(row[x_axis]) if row[x_axis] is not None else "Unknown",
-                    "value": float(row["value"]) if row["value"] is not None else 0
+                    "name": safe_to_string(row[x_axis]),
+                    "value": safe_to_numeric(row["value"])
                 }
                 for row in grouped.to_dicts()
             ]
         else:
-            # For other charts, use the data as-is
-            sample_data = df.limit(100)  # Limit to 100 rows for performance
-            chart_data = [
-                {
-                    "name": str(row[x_axis]) if row[x_axis] is not None else f"Item {i+1}",
-                    x_axis: str(row[x_axis]) if row[x_axis] is not None else f"Item {i+1}",
-                    y_axis: float(row[y_axis]) if row[y_axis] is not None else 0,
-                    "x": i,
-                    "y": float(row[y_axis]) if row[y_axis] is not None else 0
-                }
-                for i, row in enumerate(sample_data.to_dicts())
-            ]
+            # For other charts, check if Y-axis is numeric or categorical
+            # If Y-axis is categorical, group by X-axis and count Y-axis values
+            try:
+                # Try to determine if Y-axis is numeric by attempting aggregation
+                test_agg = df.select(pl.col(y_axis).sum()).item()
+                is_numeric = True
+            except Exception:
+                is_numeric = False
+            
+            if is_numeric:
+                # For numeric Y-axis, use the data as-is
+                sample_data = df.limit(100)  # Limit to 100 rows for performance
+                chart_data = [
+                    {
+                        "name": safe_to_string(row[x_axis]),
+                        x_axis: safe_to_string(row[x_axis]),
+                        y_axis: safe_to_numeric(row[y_axis]),
+                        "x": i,
+                        "y": safe_to_numeric(row[y_axis])
+                    }
+                    for i, row in enumerate(sample_data.to_dicts())
+                ]
+            else:
+                # For categorical Y-axis, group by X-axis and count occurrences
+                grouped = df.group_by(x_axis).agg([
+                    pl.col(y_axis).count().alias("count")
+                ]).sort("count", descending=True).limit(20)
+                
+                chart_data = [
+                    {
+                        "name": safe_to_string(row[x_axis]),
+                        x_axis: safe_to_string(row[x_axis]),
+                        y_axis: safe_to_numeric(row["count"]),
+                        "x": i,
+                        "y": safe_to_numeric(row["count"])
+                    }
+                    for i, row in enumerate(grouped.to_dicts())
+                ]
         
         return {
             "chart_data": chart_data,
@@ -905,8 +957,115 @@ async def generate_analytics_chart(
         }
         
     except Exception as e:
-        logger.error(f"Error generating analytics chart: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate chart data")
+        logger.error(f"Error generating analytics chart: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate chart data: {str(e)}")
+
+# --- DRILL-DOWN API ENDPOINTS ---
+
+@app.post("/api/drilldown/{dataset_id}/analyze")
+async def analyze_dataset_for_drilldown(
+    dataset_id: str, 
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Analyze dataset to discover possible drill-down hierarchies.
+    Frontend calls this once after uploading or selecting a dataset.
+    """
+    try:
+        # Get dataset info
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Load dataset data using the file_path
+        file_path = dataset.get("file_path")
+        if not file_path:
+            raise HTTPException(status_code=404, detail="Dataset file not found")
+        
+        # Read the file based on its extension
+        file_ext = file_path.split('.')[-1].lower()
+        if file_ext == 'csv':
+            df = pl.read_csv(file_path, infer_schema_length=10000)
+        elif file_ext in ['xlsx', 'xls']:
+            df = pl.read_excel(file_path)
+        elif file_ext == 'json':
+            df = pl.read_json(file_path)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported file format: {file_ext}")
+        
+        dataset_data = df.to_dicts()
+        
+        # Analyze for drill-down hierarchies
+        result = await drilldown_service.analyze_dataset_for_drilldown(dataset_data)
+        
+        return {
+            "status": "success",
+            "dataset_id": dataset_id,
+            "analysis": result,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing dataset for drill-down: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to analyze dataset: {str(e)}")
+
+@app.post("/api/drilldown/{dataset_id}/execute")
+async def execute_drilldown(
+    dataset_id: str,
+    request: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Execute a specific drill-down level based on user interaction.
+    Frontend calls this each time a chart point is clicked.
+    """
+    try:
+        # Get dataset info
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Load dataset data using the file_path
+        file_path = dataset.get("file_path")
+        if not file_path:
+            raise HTTPException(status_code=404, detail="Dataset file not found")
+        
+        # Read the file based on its extension
+        file_ext = file_path.split('.')[-1].lower()
+        if file_ext == 'csv':
+            df = pl.read_csv(file_path, infer_schema_length=10000)
+        elif file_ext in ['xlsx', 'xls']:
+            df = pl.read_excel(file_path)
+        elif file_ext == 'json':
+            df = pl.read_json(file_path)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported file format: {file_ext}")
+        
+        dataset_data = df.to_dicts()
+        
+        # Extract request parameters
+        hierarchy = request.get("hierarchy", {})
+        current_level = request.get("current_level", 1)
+        filters = request.get("filters", {})
+        
+        # Execute drill-down
+        result = await drilldown_service.execute_drilldown(
+            dataset_data=dataset_data,
+            hierarchy=hierarchy,
+            current_level=current_level,
+            filters=filters
+        )
+        
+        return {
+            "status": "success",
+            "dataset_id": dataset_id,
+            "drilldown_result": result,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error executing drill-down: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to execute drill-down: {str(e)}")
 
 @app.get("/api/dashboard/{dataset_id}/charts")
 async def get_dashboard_charts(dataset_id: str, current_user: dict = Depends(get_current_user)):
@@ -1152,15 +1311,8 @@ async def get_ai_dashboard_layout(
     Generate AI-driven dashboard layout using the dashboard_designer prompt.
     """
     try:
-        # Handle both ObjectId and UUID formats
-        try:
-            # Try ObjectId format first
-            query = {"_id": ObjectId(dataset_id), "user_id": current_user["id"]}
-        except Exception:
-            # If ObjectId fails, treat as string (UUID format)
-            query = {"_id": dataset_id, "user_id": current_user["id"]}
-        
-        dataset_doc = await db.datasets.find_one(query)
+        # Use service layer for consistent dataset access
+        dataset_doc = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
         if not dataset_doc or not dataset_doc.get("metadata"):
             raise HTTPException(status_code=404, detail="Dataset not found or not ready")
         

@@ -34,7 +34,12 @@ const useDatasetStore = create(
           const response = await datasetAPI.getDatasets();
           const fetched = response.data.datasets || [];
           set({ datasets: fetched, loading: false });
-          toast.success(`Loaded ${fetched.length} datasets`);
+          
+          // Only show success toast for manual refreshes, not automatic polling
+          if (force) {
+            toast.success(`Refreshed ${fetched.length} datasets`);
+          }
+          
           // Auto-select first if none
           if (fetched.length > 0 && !get().selectedDataset) {
             set({ selectedDataset: fetched[0] });
@@ -43,7 +48,10 @@ const useDatasetStore = create(
         } catch (error) {
           const errMsg = error.response?.data?.detail || 'Failed to fetch datasets';
           set({ error: errMsg, loading: false });
-          toast.error(errMsg);
+          // Only show error toast for manual refreshes, not automatic polling
+          if (force) {
+            toast.error(errMsg);
+          }
           return [];
         }
       },

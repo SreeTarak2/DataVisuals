@@ -16,8 +16,8 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
     { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
     { icon: Database, label: 'Datasets', path: '/datasets' },
     { icon: MessageSquare, label: 'AI Chat', path: '/chat' },
-    { icon: BarChart3, label: 'Analytics', path: '/analytics' },
-    { icon: Settings, label: 'Settings', path: '/settings' },
+    { icon: BarChart3, label: 'Charts', path: '/charts' },
+    { icon: History, label: 'Chat History', path: '/chat-history', isButton: true, onClick: () => setShowHistoryModal(true) },
   ];
 
   return (
@@ -82,58 +82,52 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: index * 0.05 }}
                 >
-                  <NavLink
-                    to={item.path}
-                    className={({ isActive }) =>
-                      cn(
-                        "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 focus-visible-ring relative",
-                        isActive
-                          ? "bg-primary/10 text-primary border border-primary/20 shadow-md"
-                          : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                      )
-                    }
-                  >
-                    <item.icon className="w-5 h-5 shrink-0" aria-hidden="true" />
-                    <motion.span 
-                      className="whitespace-nowrap"
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: isOpen || onHover ? 1 : 0, x: 0 }}
-                      transition={{ delay: 0.1 }}
+                  {item.isButton ? (
+                    <button
+                      onClick={item.onClick}
+                      className={cn(
+                        "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 focus-visible-ring relative w-full text-left",
+                        "text-muted-foreground hover:bg-accent hover:text-foreground"
+                      )}
                     >
-                      {item.label}
-                    </motion.span>
-                  </NavLink>
+                      <item.icon className="w-5 h-5 shrink-0" aria-hidden="true" />
+                      <motion.span 
+                        className="whitespace-nowrap"
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: isOpen || onHover ? 1 : 0, x: 0 }}
+                        transition={{ delay: 0.1 }}
+                      >
+                        {item.label}
+                      </motion.span>
+                    </button>
+                  ) : (
+                    <NavLink
+                      to={item.path}
+                      className={({ isActive }) =>
+                        cn(
+                          "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 focus-visible-ring relative",
+                          isActive
+                            ? "bg-primary/10 text-primary border border-primary/20 shadow-md"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                        )
+                      }
+                    >
+                      <item.icon className="w-5 h-5 shrink-0" aria-hidden="true" />
+                      <motion.span 
+                        className="whitespace-nowrap"
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: isOpen || onHover ? 1 : 0, x: 0 }}
+                        transition={{ delay: 0.1 }}
+                      >
+                        {item.label}
+                      </motion.span>
+                    </NavLink>
+                  )}
                 </motion.div>
               ))}
             </AnimatePresence>
           </nav>
 
-          {/* History Button */}
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="mb-4"
-          >
-            <button
-              onClick={() => setShowHistoryModal(true)}
-              className={cn(
-                "flex items-center gap-3 px-4 py-3 rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-all duration-200 focus-visible-ring w-full",
-                !(isOpen || onHover) && "justify-center"
-              )}
-              aria-label="Chat History"
-            >
-              <History className="w-5 h-5 shrink-0" />
-              <motion.span 
-                className="whitespace-nowrap"
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: isOpen || onHover ? 1 : 0, x: 0 }}
-                transition={{ delay: 0.1 }}
-              >
-                Chat History
-              </motion.span>
-            </button>
-          </motion.div>
 
           {/* User Section */}
           <motion.div 
@@ -158,6 +152,23 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
                 <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
               </motion.div>
             </div>
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-3 px-4 py-3 mt-2 rounded-lg transition-all duration-200 focus-visible-ring w-full",
+                  isActive
+                    ? "bg-primary/10 text-primary border border-primary/20 shadow-md"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                  !(isOpen || onHover) && "justify-center"
+                )
+              }
+            >
+              <Settings className="w-5 h-5" />
+              <span className={cn("whitespace-nowrap", !(isOpen || onHover) && "hidden")}>
+                Settings
+              </span>
+            </NavLink>
             <button
               onClick={logout}
               className={cn(

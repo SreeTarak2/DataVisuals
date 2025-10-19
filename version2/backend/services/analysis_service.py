@@ -188,7 +188,13 @@ class AnalysisService:
 
     def chi_square_test(self, df: pl.DataFrame, col1: str, col2: str) -> Dict[str, Any]:
         try:
-            crosstab = df.select([col1, col2]).to_pandas().crosstab(df[col1].to_pandas(), df[col2].to_pandas())
+            # Drop null values before creating crosstab
+            clean_df = df.select([col1, col2]).drop_nulls()
+            if len(clean_df) < 10:  # Need sufficient data for chi-square test
+                logger.warning("Not enough valid data for chi-square test")
+                return {}
+            
+            crosstab = clean_df.to_pandas().crosstab(clean_df[col1].to_pandas(), clean_df[col2].to_pandas())
             chi2, p, dof, expected = chi2_contingency(crosstab)
             return {
                 "type": "chi_square",
@@ -206,8 +212,28 @@ class AnalysisService:
     def run_pca(self, df: pl.DataFrame, n_components: int = 2) -> Dict[str, Any]:
         try:
             numeric_cols = df.select(pl.col(self.numeric_dtypes)).columns
+            if len(numeric_cols) < 2:
+                logger.warning("PCA requires at least 2 numeric columns")
+                return {}
+            
+            # Get data and handle NaN values
             data = df.select(numeric_cols).to_numpy()
-            pca = PCA(n_components=n_components)
+            
+            # Check for NaN values and handle them
+            if np.isnan(data).any():
+                logger.info("Found NaN values in data, dropping rows with NaN values for PCA")
+                # Drop rows with any NaN values
+                mask = ~np.isnan(data).any(axis=1)
+                if mask.sum() < 5:  # Need at least 5 valid rows
+                    logger.warning("Not enough valid rows for PCA after removing NaN values")
+                    return {}
+                data = data[mask]
+            
+            if len(data) < n_components:
+                logger.warning(f"Not enough data points ({len(data)}) for {n_components} components")
+                return {}
+            
+            pca = PCA(n_components=min(n_components, len(numeric_cols)))
             pca.fit(data)
             explained = pca.explained_variance_ratio_
             return {"type": "pca", "explained_variance_ratio": explained.tolist()}
@@ -218,11 +244,31 @@ class AnalysisService:
     def run_kmeans(self, df: pl.DataFrame, n_clusters: int = 3) -> Dict[str, Any]:
         try:
             numeric_cols = df.select(pl.col(self.numeric_dtypes)).columns
+            if len(numeric_cols) < 2:
+                logger.warning("KMeans requires at least 2 numeric columns")
+                return {}
+            
+            # Get data and handle NaN values
             data = df.select(numeric_cols).to_numpy()
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42).fit(data)
+            
+            # Check for NaN values and handle them
+            if np.isnan(data).any():
+                logger.info("Found NaN values in data, dropping rows with NaN values for KMeans")
+                # Drop rows with any NaN values
+                mask = ~np.isnan(data).any(axis=1)
+                if mask.sum() < n_clusters * 2:  # Need at least 2 points per cluster
+                    logger.warning("Not enough valid rows for KMeans after removing NaN values")
+                    return {}
+                data = data[mask]
+            
+            if len(data) < n_clusters:
+                logger.warning(f"Not enough data points ({len(data)}) for {n_clusters} clusters")
+                return {}
+            
+            kmeans = KMeans(n_clusters=min(n_clusters, len(data)), random_state=42).fit(data)
             return {
                 "type": "kmeans",
-                "n_clusters": n_clusters,
+                "n_clusters": kmeans.n_clusters,
                 "inertia": float(kmeans.inertia_),
                 "cluster_centers": kmeans.cluster_centers_.tolist()
             }
