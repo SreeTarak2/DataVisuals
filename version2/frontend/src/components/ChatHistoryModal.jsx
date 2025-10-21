@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Search, MessageSquare, Clock, Trash2, MoreVertical, Database } from 'lucide-react';
+import { X, Search, MessageSquare, Clock, Trash2, MoreVertical, Database, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import GlassCard from './common/GlassCard';
 import useDatasetStore from '../store/datasetStore';
 import useChatStore from '../store/chatStore';
@@ -10,8 +11,18 @@ import { toast } from 'react-hot-toast';
 const ChatHistoryModal = ({ isOpen, onClose }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedChats, setSelectedChats] = useState(new Set());
+  const [loading, setLoading] = useState(false);
   const { datasets } = useDatasetStore();
-  const { conversations, clearConversation } = useChatStore();
+  const { conversations, clearConversation, setCurrentConversation, loadConversations, startNewChat } = useChatStore();
+  const navigate = useNavigate();
+  
+  // Load conversations when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setLoading(true);
+      loadConversations().finally(() => setLoading(false));
+    }
+  }, [isOpen, loadConversations]);
   
   // Get real chat history from the chat store
   const chatHistory = Object.values(conversations).map(conversation => {
@@ -21,12 +32,12 @@ const ChatHistoryModal = ({ isOpen, onClose }) => {
     
     return {
       id: conversation.id,
-      title: `Chat with ${dataset?.name || 'Unknown Dataset'}`,
+      title: `Chat with ${conversation.datasetName || dataset?.name || 'Unknown Dataset'}`,
       timestamp: conversation.createdAt,
       messageCount: messages.length,
       lastMessage: lastMessage?.content || 'No messages yet',
       datasetId: conversation.datasetId,
-      datasetName: dataset?.name || dataset?.filename || 'Unknown Dataset'
+      datasetName: conversation.datasetName || dataset?.name || dataset?.filename || 'Unknown Dataset'
     };
   }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)); // Sort by newest first
 
@@ -35,7 +46,14 @@ const ChatHistoryModal = ({ isOpen, onClose }) => {
     chat.datasetName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleSelectChat = (chatId) => {
+  const handleSelectChat = (chatId, event) => {
+    // If clicking on the main area (not on selection checkbox), open the conversation
+    if (event.target.closest('.chat-open-area')) {
+      handleOpenChat(chatId);
+      return;
+    }
+    
+    // Otherwise, handle selection for deletion
     const newSelected = new Set(selectedChats);
     if (newSelected.has(chatId)) {
       newSelected.delete(chatId);
@@ -43,6 +61,42 @@ const ChatHistoryModal = ({ isOpen, onClose }) => {
       newSelected.add(chatId);
     }
     setSelectedChats(newSelected);
+  };
+
+  const handleOpenChat = (chatId) => {
+    try {
+      // Set the current conversation in the store
+      setCurrentConversation(chatId);
+      
+      // Navigate to the chat page with the conversation ID
+      navigate(`/chat?chatId=${chatId}`);
+      
+      // Close the modal
+      onClose();
+      
+      toast.success('Chat opened successfully');
+    } catch (error) {
+      console.error('Error opening chat:', error);
+      toast.error('Failed to open chat');
+    }
+  };
+
+  const handleNewChat = () => {
+    try {
+      // Start a new chat (clear current conversation)
+      startNewChat();
+      
+      // Navigate to the chat page without a conversation ID
+      navigate('/app/chat');
+      
+      // Close the modal
+      onClose();
+      
+      toast.success('New chat started');
+    } catch (error) {
+      console.error('Error starting new chat:', error);
+      toast.error('Failed to start new chat');
+    }
   };
 
   const handleDeleteSelected = () => {
@@ -103,15 +157,23 @@ const ChatHistoryModal = ({ isOpen, onClose }) => {
                 <div>
                   <h2 className="text-xl font-bold text-foreground">Chat History</h2>
                   <p className="text-muted-foreground text-sm">
-                    {filteredChats.length} conversation{filteredChats.length !== 1 ? 's' : ''}
+                    {loading ? 'Loading...' : `${filteredChats.length} conversation${filteredChats.length !== 1 ? 's' : ''}`}
                   </p>
                 </div>
-                <button
-                  onClick={onClose}
-                  className="p-2 rounded-lg hover:bg-accent/50 transition-colors"
-                >
-                  <X className="w-4 h-4 text-muted-foreground" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleNewChat}
+                    className="px-3 py-1.5 rounded-lg bg-primary/20 text-primary hover:bg-primary/30 transition-colors text-sm font-medium"
+                  >
+                    New Chat
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="p-2 rounded-lg hover:bg-accent/50 transition-colors"
+                  >
+                    <X className="w-4 h-4 text-muted-foreground" />
+                  </button>
+                </div>
               </div>
 
               {/* Search */}
@@ -144,31 +206,51 @@ const ChatHistoryModal = ({ isOpen, onClose }) => {
                       key={chat.id}
                       initial={{ opacity: 0, y: 5 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+                      className={`p-4 rounded-2xl border transition-all ${
                         selectedChats.has(chat.id)
                           ? 'border-primary bg-primary/10'
                           : 'border-border/30 hover:border-border/50 hover:bg-accent/10'
                       }`}
-                      onClick={() => handleSelectChat(chat.id)}
                     >
                       <div className="flex items-start gap-3">
-                        <div className={`w-4 h-4 rounded-full border-2 mt-1 flex items-center justify-center ${
-                          selectedChats.has(chat.id)
-                            ? 'border-primary bg-primary'
-                            : 'border-border/50'
-                        }`}>
+                        {/* Selection checkbox */}
+                        <div 
+                          className={`w-4 h-4 rounded-full border-2 mt-1 flex items-center justify-center cursor-pointer ${
+                            selectedChats.has(chat.id)
+                              ? 'border-primary bg-primary'
+                              : 'border-border/50 hover:border-primary/50'
+                          }`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newSelected = new Set(selectedChats);
+                            if (newSelected.has(chat.id)) {
+                              newSelected.delete(chat.id);
+                            } else {
+                              newSelected.add(chat.id);
+                            }
+                            setSelectedChats(newSelected);
+                          }}
+                        >
                           {selectedChats.has(chat.id) && (
                             <div className="w-2 h-2 bg-white rounded-full"></div>
                           )}
                         </div>
-                        <div className="flex-1 min-w-0">
+                        
+                        {/* Chat content - clickable to open */}
+                        <div 
+                          className="flex-1 min-w-0 chat-open-area cursor-pointer"
+                          onClick={(e) => handleSelectChat(chat.id, e)}
+                        >
                           <div className="flex items-center justify-between mb-2">
                             <h3 className="text-sm font-medium text-foreground truncate">
                               {chat.title}
                             </h3>
-                            <span className="text-xs text-muted-foreground">
-                              {formatTimestamp(chat.timestamp)}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground">
+                                {formatTimestamp(chat.timestamp)}
+                              </span>
+                              <ExternalLink className="w-3 h-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </div>
                           </div>
                           
                           <p className="text-xs text-muted-foreground mb-3 line-clamp-2">

@@ -68,6 +68,9 @@ export const datasetAPI = {
   // Get dataset summary
   getDatasetSummary: (id) => api.get(`/datasets/${id}/summary`),
   
+  // Get dataset columns with types
+  getDatasetColumns: (id) => api.get(`/datasets/${id}/columns`),
+  
   // Reprocess dataset
   reprocessDataset: (id) => {
     if (!id) {
@@ -106,6 +109,31 @@ export const aiAPI = {
     }),
 };
 
+// Chat API calls
+export const chatAPI = {
+  // Get all conversations
+  getConversations: () => api.get('/chat/conversations'),
+  
+  // Get specific conversation
+  getConversation: (conversationId) => api.get(`/chat/conversations/${conversationId}`),
+  
+  // Delete conversation
+  deleteConversation: (conversationId) => api.delete(`/chat/conversations/${conversationId}`),
+};
+
+// Chart Insights API calls
+export const chartInsightsAPI = {
+  // Get cached charts for a dataset
+  getCachedCharts: (datasetId) => api.get(`/datasets/${datasetId}/cached-charts`),
+  
+  // Generate insights for a specific chart
+  generateChartInsight: (datasetId, chartConfig, chartData) => 
+    api.post(`/datasets/${datasetId}/generate-chart-insight`, {
+      chart_config: chartConfig,
+      chart_data: chartData
+    }),
+};
+
 // Chart API calls
 export const chartAPI = {
   // Render chart preview
@@ -113,6 +141,16 @@ export const chartAPI = {
     api.post('/charts/render-preview', {
       chart_config: chartConfig,
       dataset_id: datasetId
+    }),
+  
+  // Generate analytics chart with aggregation
+  generateChart: (datasetId, chartType, xAxis, yAxis, aggregation = 'sum') => 
+    api.post('/analytics/generate-chart', {
+      dataset_id: datasetId,
+      chart_type: chartType,
+      x_axis: xAxis,
+      y_axis: yAxis,
+      aggregation: aggregation
     }),
 };
 

@@ -16,18 +16,35 @@ class Settings:
     # OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "https://3aa913b93b79.ngrok-free.app/")
     # OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "mistral:7b")
 
-    LLAMA_BASE_URL = "https://e25f9df7b292.ngrok-free.app/"
-    MISTRAL_BASE_URL = "https://wilber-unremarried-reversibly.ngrok-free.dev/"
+    LLAMA_BASE_URL = "https://e0e504f6703f.ngrok-free.app/"
+    QWEN_BASE_URL = "https://wilber-unremarried-reversibly.ngrok-free.dev/"
 
     MODELS = {
-        "chat_engine": {"model": "llama3.1", "base_url":LLAMA_BASE_URL},
-        "layout_designer": {"model": "llama3.1", "base_url":LLAMA_BASE_URL},
-        "summary_engine": {"model": "llama3.1", "base_url":LLAMA_BASE_URL},
-        "chart_recommender": {"model": "mistral:7b", "base_url": MISTRAL_BASE_URL},
-        "story_engine": {"model": "mistral:7b", "base_url": MISTRAL_BASE_URL},
-        "explainer_engine": {"model": "mistral:7b", "base_url": MISTRAL_BASE_URL},
-        "business_engine": {"model": "mistral:7b", "base_url": MISTRAL_BASE_URL},
+        "chat_engine": {
+            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+        },
+        "layout_designer": {
+            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+        },
+        "summary_engine": {
+            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+        },
+        "chart_recommender": {
+            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+        },
+        "chart_engine": {
+            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+        },
+        "insight_engine": {
+            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+        },
+        "visualization_engine": {
+            "primary": {"model": "qwen3:0.6b", "base_url": QWEN_BASE_URL}
+        },
     }
+    
+    MODEL_HEALTH_CHECK_TIMEOUT = 180
+    MODEL_FALLBACK_ENABLED = False  # Fallback mechanism removed
 
     # Vector Database Configuration
     VECTOR_DB_PATH: str = os.getenv("VECTOR_DB_PATH", "./faiss_db")
@@ -44,7 +61,7 @@ class Settings:
     ALLOWED_ORIGINS: List[str] = os.getenv("ALLOWED_ORIGINS", ",".join(DEV_ORIGINS)).split(",")
     
     # File Upload Configuration
-    MAX_FILE_SIZE: int = int(os.getenv("MAX_FILE_SIZE", "10485760"))  # 10MB
+    MAX_FILE_SIZE: int = int(os.getenv("MAX_FILE_SIZE", "52428800"))  # 50MB
     ALLOWED_FILE_TYPES: List[str] = os.getenv("ALLOWED_FILE_TYPES", "csv,xlsx,xls").split(",")
 
 settings = Settings()

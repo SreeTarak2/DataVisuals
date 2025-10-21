@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 
-const PlotlyChart = ({ data, layout = {}, style = {}, config = {} }) => {
+const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = 'bar' }) => {
   const plotRef = useRef(null);
 
   useEffect(() => {
@@ -10,26 +10,81 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {} }) => {
         const Plotly = (await import('plotly.js-dist-min')).default;
         
         if (plotRef.current && data) {
-          Plotly.newPlot(plotRef.current, data, {
-            ...layout,
+          // Process data based on chart type
+          let processedData = data;
+          
+          if (chartType === 'pie' && data.length > 0 && data[0].labels && data[0].values) {
+            // Convert pie chart data to Plotly format
+            processedData = [{
+              labels: data[0].labels,
+              values: data[0].values,
+              type: 'pie',
+              textinfo: 'label+percent',
+              textposition: 'outside',
+              marker: {
+                colors: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316']
+              }
+            }];
+          } else if (chartType === 'donut' && data.length > 0 && data[0].labels && data[0].values) {
+            // Convert donut chart data to Plotly format
+            processedData = [{
+              labels: data[0].labels,
+              values: data[0].values,
+              type: 'pie',
+              hole: 0.4,
+              textinfo: 'label+percent',
+              textposition: 'outside',
+              marker: {
+                colors: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316']
+              }
+            }];
+          }
+
+          const defaultLayout = {
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
             font: {
-              color: '#e2e8f0'
+              color: '#e2e8f0',
+              family: 'Inter, system-ui, sans-serif'
             },
             xaxis: {
               color: '#64748b',
               gridcolor: 'rgba(100, 116, 139, 0.2)',
-              ...layout.xaxis
+              showgrid: true,
+              zeroline: false
             },
             yaxis: {
               color: '#64748b',
               gridcolor: 'rgba(100, 116, 139, 0.2)',
-              ...layout.yaxis
+              showgrid: true,
+              zeroline: false
+            },
+            margin: {
+              l: 60,
+              r: 30,
+              t: 30,
+              b: 60
+            },
+            showlegend: chartType !== 'pie' && chartType !== 'donut',
+            legend: {
+              x: 1,
+              y: 1,
+              bgcolor: 'rgba(0,0,0,0)',
+              bordercolor: 'rgba(0,0,0,0)',
+              font: {
+                color: '#e2e8f0'
+              }
             }
+          };
+
+          Plotly.newPlot(plotRef.current, processedData, {
+            ...defaultLayout,
+            ...layout
           }, {
             responsive: true,
-            displayModeBar: false,
+            displayModeBar: true,
+            modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+            displaylogo: false,
             ...config
           });
         }
@@ -69,7 +124,7 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {} }) => {
         plotRef.current.innerHTML = '';
       }
     };
-  }, [data, layout, config]);
+  }, [data, layout, config, chartType]);
 
   return (
     <div 

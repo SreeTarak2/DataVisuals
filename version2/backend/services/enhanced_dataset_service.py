@@ -1,18 +1,18 @@
-# backend/services/enhanced_dataset_service.py
-
 import uuid
+import hashlib
 from datetime import datetime
 import logging
 from typing import List, Dict, Optional
+from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from bson import ObjectId
 
 from database import get_database
-from models.schemas import DatasetData, DatasetSummary
 from services.file_storage_service import file_storage_service
 from services.faiss_vector_service import faiss_vector_service
-from tasks import process_dataset_task # Import our Celery task
+from tasks import process_dataset_task
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +24,9 @@ class EnhancedDatasetService:
     """
 
     def __init__(self):
-        """
-        The __init__ method is good practice, even if empty. It signifies
-        that this class is intended to be instantiated.
-        """
+        """Initialize the enhanced dataset service."""
+        pass
+
     @property
     def db(self):
         """Lazily gets the database connection on first access."""
@@ -36,20 +35,74 @@ class EnhancedDatasetService:
             raise Exception("Database is not connected. Application startup may have failed.")
         return db_conn
 
+    def _generate_content_hash(self, file_content: bytes) -> str:
+        """
+        Generate a SHA-256 hash of the file content for duplicate detection.
+        
+        Args:
+            file_content: The raw file content as bytes
+            
+        Returns:
+            str: SHA-256 hash of the content
+        """
+        return hashlib.sha256(file_content).hexdigest()
+
+    async def _check_duplicate_dataset(self, content_hash: str, user_id: str) -> Optional[Dict]:
+        """
+        Check if a dataset with the same content hash already exists for the user.
+        
+        Args:
+            content_hash: SHA-256 hash of the file content
+            user_id: User ID to check duplicates for
+            
+        Returns:
+            Optional[Dict]: Existing dataset if found, None otherwise
+        """
+        try:
+            existing_dataset = await self.db.datasets.find_one({
+                "user_id": user_id,
+                "content_hash": content_hash,
+                "is_active": True
+            })
+            
+            if existing_dataset:
+                existing_dataset["id"] = str(existing_dataset["_id"])
+                existing_dataset.pop("_id", None)
+                return existing_dataset
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error checking for duplicate dataset: {e}")
+            return None
+
     async def upload_dataset(
         self, file: UploadFile, user_id: str, name: str = None, description: str = None
     ) -> JSONResponse:
         """
-        Handles the initial upload request.
-        1. Saves the file using the file_storage_service.
-        2. Creates an initial dataset record in the database.
-        3. Dispatches a background task to process the dataset and generate metadata.
-        Returns an immediate 'Accepted' response.
+        Handles the initial upload request with duplicate detection.
+        1. Generates content hash for duplicate detection
+        2. Checks if identical dataset already exists
+        3. If duplicate found, returns existing dataset info
+        4. If new, saves file and creates dataset record
+        5. Dispatches background task for processing
         """
         try:
             file_content = await file.read()
-            file_metadata = await file_storage_service.save_file(file_content, file.filename, user_id)
+            content_hash = self._generate_content_hash(file_content)
+            existing_dataset = await self._check_duplicate_dataset(content_hash, user_id)
             
+            if existing_dataset:
+                logger.info(f"Duplicate dataset detected for user {user_id}. Existing dataset: {existing_dataset['id']}")
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "is_duplicate": True,
+                        "existing_dataset": existing_dataset,
+                        "message": "Dataset with identical content already exists."
+                    }
+                )
+            
+            file_metadata = await file_storage_service.save_file(file_content, file.filename, user_id)
             dataset_id = str(uuid.uuid4())
             
             dataset_doc = {
@@ -62,141 +115,205 @@ class EnhancedDatasetService:
                 "file_path": file_metadata["file_path"],
                 "file_size": file_metadata["file_size"],
                 "file_extension": file_metadata["file_extension"],
+                "content_hash": content_hash,
                 "upload_date": datetime.utcnow(),
-                "is_processed": False, # IMPORTANT: Set to False, the worker will update this.
+                "is_processed": False,
                 "is_active": True,
                 "processing_status": "pending",
-                "metadata": {} # Metadata will be populated by the worker.
+                "metadata": {}
             }
             
             await self.db.datasets.insert_one(dataset_doc)
-            
-            # Dispatch the background task for processing
             task = process_dataset_task.delay(dataset_id, file_metadata["file_path"])
             
-            logger.info(f"Dataset {dataset_id} accepted for processing. Task ID: {task.id}")
+            logger.info(f"New dataset {dataset_id} accepted for processing. Task ID: {task.id}")
             
             return JSONResponse(
                 status_code=202,
                 content={
+                    "is_duplicate": False,
                     "dataset_id": dataset_id,
                     "task_id": task.id,
                     "message": "Dataset upload accepted and is now being processed."
                 }
             )
+            
         except HTTPException as e:
-            # Re-raise HTTP exceptions from file validation
             raise e
         except Exception as e:
             logger.error(f"Error in upload_dataset orchestration: {e}")
             raise HTTPException(status_code=500, detail="Failed to initiate dataset upload.")
 
     async def get_user_datasets(self, user_id: str, skip: int = 0, limit: int = 100) -> List[Dict]:
-        """Gets all active datasets for a specific user."""
-        cursor = self.db.datasets.find(
-            {"user_id": user_id, "is_active": True}
-        ).sort("upload_date", -1).skip(skip).limit(limit)
+        """
+        Gets all active datasets for a specific user with proper formatting.
         
-        datasets = []
-        async for doc in cursor:
-            doc["id"] = str(doc["_id"])
-            doc.pop("_id", None)
+        Args:
+            user_id: User ID to fetch datasets for
+            skip: Number of records to skip for pagination
+            limit: Maximum number of records to return
             
-            # Ensure we have the basic fields with fallbacks
-            if not doc.get("name"):
-                doc["name"] = doc.get("original_filename", "Unnamed Dataset")
-            if not doc.get("row_count"):
-                doc["row_count"] = 0
-            if not doc.get("column_count"):
-                doc["column_count"] = 0
-            if not doc.get("created_at"):
-                doc["created_at"] = doc.get("upload_date")
-                
-            datasets.append(doc)
-        return datasets
+        Returns:
+            List[Dict]: List of formatted dataset documents
+        """
+        try:
+            cursor = self.db.datasets.find(
+                {"user_id": user_id, "is_active": True}
+            ).sort("upload_date", -1).skip(skip).limit(limit)
+            
+            datasets = []
+            async for doc in cursor:
+                doc["id"] = str(doc["_id"])
+                doc.pop("_id", None)
+                doc["name"] = doc.get("name") or doc.get("original_filename", "Unnamed Dataset")
+                doc["row_count"] = doc.get("row_count", 0)
+                doc["column_count"] = doc.get("column_count", 0)
+                doc["created_at"] = doc.get("created_at") or doc.get("upload_date")
+                datasets.append(doc)
+            
+            return datasets
+            
+        except Exception as e:
+            logger.error(f"Error fetching user datasets: {e}")
+            raise HTTPException(status_code=500, detail="Failed to fetch datasets.")
 
     async def get_dataset(self, dataset_id: str, user_id: str) -> Dict:
-        """Gets a single, complete dataset document, including its metadata."""
-        # Handle both ObjectId and UUID formats
+        """
+        Gets a single, complete dataset document, including its metadata.
+        
+        Args:
+            dataset_id: Dataset ID (supports both ObjectId and UUID formats)
+            user_id: User ID for ownership verification
+            
+        Returns:
+            Dict: Complete dataset document
+            
+        Raises:
+            HTTPException: If dataset not found or access denied
+        """
         try:
-            # Try ObjectId format first
-            from bson import ObjectId
-            query = {"_id": ObjectId(dataset_id), "user_id": user_id, "is_active": True}
-        except Exception:
-            # If ObjectId fails, treat as string (UUID format)
-            query = {"_id": dataset_id, "user_id": user_id, "is_active": True}
-        
-        dataset = await self.db.datasets.find_one(query)
-        if not dataset:
-            raise HTTPException(status_code=404, detail="Dataset not found.")
-        
-        dataset["id"] = str(dataset["_id"])
-        dataset.pop("_id", None)
-        return dataset
+            try:
+                query = {"_id": ObjectId(dataset_id), "user_id": user_id, "is_active": True}
+            except Exception:
+                query = {"_id": dataset_id, "user_id": user_id, "is_active": True}
+            
+            dataset = await self.db.datasets.find_one(query)
+            if not dataset:
+                raise HTTPException(status_code=404, detail="Dataset not found.")
+            
+            dataset["id"] = str(dataset["_id"])
+            dataset.pop("_id", None)
+            return dataset
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error fetching dataset {dataset_id}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to fetch dataset.")
 
     async def delete_dataset(self, dataset_id: str, user_id: str) -> bool:
-        """Permanently deletes a dataset record and its associated file."""
-        dataset = await self.get_dataset(dataset_id, user_id) # Ensures user owns the dataset
-
-        # Delete the physical file from storage
-        if dataset.get("file_path"):
-            await file_storage_service.delete_file(dataset["file_path"])
-
-        # Delete related conversations
-        await self.db.conversations.delete_many({"dataset_id": dataset_id, "user_id": user_id})
-
-        # Delete the dataset record from MongoDB
-        # Convert string ID to ObjectId for MongoDB query
-        from bson import ObjectId
+        """
+        Permanently deletes a dataset record and its associated file.
+        
+        Args:
+            dataset_id: Dataset ID to delete
+            user_id: User ID for ownership verification
+            
+        Returns:
+            bool: True if deletion successful
+            
+        Raises:
+            HTTPException: If dataset not found or deletion fails
+        """
         try:
-            object_id = ObjectId(dataset_id)
-            query = {"_id": object_id, "user_id": user_id}
-        except Exception:
-            # If ObjectId conversion fails, treat as string (UUID format)
-            query = {"_id": dataset_id, "user_id": user_id}
-        
-        result = await self.db.datasets.delete_one(query)
-        
-        if result.deleted_count == 0:
-            raise HTTPException(status_code=404, detail="Dataset could not be deleted.")
-        
-        logger.info(f"Dataset {dataset_id} permanently deleted by user {user_id}.")
-        return True
+            dataset = await self.get_dataset(dataset_id, user_id)
+
+            if dataset.get("file_path"):
+                await file_storage_service.delete_file(dataset["file_path"])
+
+            await self.db.conversations.delete_many({"dataset_id": dataset_id, "user_id": user_id})
+
+            try:
+                object_id = ObjectId(dataset_id)
+                query = {"_id": object_id, "user_id": user_id}
+            except Exception:
+                query = {"_id": dataset_id, "user_id": user_id}
+            
+            result = await self.db.datasets.delete_one(query)
+            
+            if result.deleted_count == 0:
+                raise HTTPException(status_code=404, detail="Dataset could not be deleted.")
+            
+            logger.info(f"Dataset {dataset_id} permanently deleted by user {user_id}.")
+            return True
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error deleting dataset {dataset_id}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to delete dataset.")
 
     async def get_dataset_data(self, dataset_id: str, user_id: str, page: int = 1, page_size: int = 100) -> Dict:
-        """Gets paginated data directly from the dataset's file."""
-        dataset = await self.get_dataset(dataset_id, user_id)
+        """
+        Gets paginated data directly from the dataset's file.
         
-        # We now always read from the file path via the storage service.
-        offset = (page - 1) * page_size
-        data, total_rows = await file_storage_service.get_paginated_file_data(
-            dataset["file_path"], limit=page_size, offset=offset
-        )
+        Args:
+            dataset_id: Dataset ID to fetch data for
+            user_id: User ID for ownership verification
+            page: Page number (1-based)
+            page_size: Number of records per page
+            
+        Returns:
+            Dict: Paginated data with metadata
+        """
+        try:
+            dataset = await self.get_dataset(dataset_id, user_id)
+            offset = (page - 1) * page_size
+            data, total_rows = await file_storage_service.get_paginated_file_data(
+                dataset["file_path"], limit=page_size, offset=offset
+            )
 
-        return {
-            "data": data,
-            "total_rows": total_rows,
-            "current_page": page,
-            "page_size": page_size,
-            "has_more": (page * page_size) < total_rows
-        }
+            return {
+                "data": data,
+                "total_rows": total_rows,
+                "current_page": page,
+                "page_size": page_size,
+                "has_more": (page * page_size) < total_rows
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error fetching dataset data for {dataset_id}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to fetch dataset data.")
 
     async def load_dataset_data(self, dataset_id: str, user_id: str):
-        """Loads the full dataset as a Polars DataFrame for analysis."""
+        """
+        Loads the full dataset as a Polars DataFrame for analysis.
+        
+        Args:
+            dataset_id: Dataset ID to load
+            user_id: User ID for ownership verification
+            
+        Returns:
+            pl.DataFrame: Polars DataFrame containing the dataset
+            
+        Raises:
+            HTTPException: If dataset not found or loading fails
+        """
         import polars as pl
-        from pathlib import Path
-        
-        dataset = await self.get_dataset(dataset_id, user_id)
-        file_path = dataset.get("file_path")
-        
-        if not file_path:
-            raise HTTPException(status_code=404, detail="Dataset file not found.")
-        
-        path = Path(file_path)
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="Dataset file not found on disk.")
         
         try:
+            dataset = await self.get_dataset(dataset_id, user_id)
+            file_path = dataset.get("file_path")
+            
+            if not file_path:
+                raise HTTPException(status_code=404, detail="Dataset file not found.")
+            
+            path = Path(file_path)
+            if not path.exists():
+                raise HTTPException(status_code=404, detail="Dataset file not found on disk.")
+            
             file_ext = path.suffix.lower()
             if file_ext == ".csv":
                 return pl.read_csv(file_path, infer_schema_length=10000)
@@ -206,6 +323,9 @@ class EnhancedDatasetService:
                 return pl.read_json(file_path)
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported file format: {file_ext}")
+                
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to load dataset from {file_path}: {e}")
             raise HTTPException(status_code=500, detail=f"Could not load dataset: {str(e)}")
@@ -214,13 +334,18 @@ class EnhancedDatasetService:
         """
         Automatically index a dataset to vector database after processing.
         This is called internally when dataset processing is complete.
+        
+        Args:
+            dataset_id: Dataset ID to index
+            user_id: User ID for ownership verification
+            
+        Returns:
+            bool: True if indexing successful, False otherwise
         """
         try:
-            # Get the processed dataset
             dataset_doc = await self.get_dataset(dataset_id, user_id)
             
             if dataset_doc and dataset_doc.get("metadata"):
-                # Index to vector database
                 success = await faiss_vector_service.add_dataset_to_vector_db(
                     dataset_id=dataset_id,
                     dataset_metadata=dataset_doc["metadata"],
@@ -241,5 +366,4 @@ class EnhancedDatasetService:
             logger.error(f"Auto-indexing failed for dataset {dataset_id}: {e}")
             return False
 
-# Singleton instance
 enhanced_dataset_service = EnhancedDatasetService()

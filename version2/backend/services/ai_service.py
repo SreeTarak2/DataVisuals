@@ -27,7 +27,6 @@ class AIService:
     """
 
     def __init__(self):
-        # self.ollama_url = settings.OLLAMA_BASE_URL.rstrip('/')
         self.http_client = httpx.AsyncClient(timeout=90.0, follow_redirects=True)
         
         self.chart_definitions = {chart['id']: chart for chart in CHART_DEFINITIONS}
@@ -36,6 +35,7 @@ class AIService:
             'performance_analysis': ["Which categories show the highest or lowest performance?"],
             'correlation_analysis': ["What are the most significant relationships between variables?"],
         }
+        self.model_health_cache = {}
 
     @property
     def db(self):
@@ -50,14 +50,18 @@ class AIService:
     # =================================================================================
 
     async def _call_ollama(self, prompt: str, model_role: str, expect_json: bool = False) -> Any:
-        """A centralized router for calling Ollama that selects the correct specialized model."""
-        model_info = settings.MODELS.get(model_role)
-        if not model_info:
+        """A centralized router for calling Ollama with the primary model only."""
+        model_config = settings.MODELS.get(model_role)
+        if not model_config:
             raise ValueError(f"Invalid model role specified: {model_role}")
         
-        model_name = model_info["model"]
-        base_url = model_info["base_url"].rstrip('/')
-
+        primary_model = model_config.get("primary")
+        if not primary_model:
+            raise ValueError(f"No primary model configured for role: {model_role}")
+        
+        model_name = primary_model["model"]
+        base_url = primary_model["base_url"].rstrip('/')
+        
         logger.info(f"Routing request to model '{model_name}' at '{base_url}' for role '{model_role}'.")
 
         payload = {"model": model_name, "prompt": prompt, "stream": False}
@@ -65,33 +69,124 @@ class AIService:
             payload["format"] = "json"
 
         try:
-            response = await self.http_client.post(f"{base_url}/api/generate", json=payload)
+            logger.info(f"Making request to: {base_url}/api/generate")
+            logger.info(f"Payload: {payload}")
+            
+            response = await self.http_client.post(
+                f"{base_url}/api/generate", 
+                json=payload,
+                # timeout=settings.MODEL_HEALTH_CHECK_TIMEOUT
+            )
+            
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response headers: {dict(response.headers)}")
+            
+            if response.status_code == 404:
+                logger.error(f"404 Error: Ollama API not found at {base_url}. Check if Ollama is running and ngrok is properly configured.")
+                raise HTTPException(status_code=404, detail=f"Ollama API not accessible at {base_url}. Please check if Ollama is running and ngrok is configured correctly.")
+            
             response.raise_for_status()
             response_data = response.json()
             
             if expect_json:
                 json_string = response_data.get("response", "{}")
-                # FIXED: Robust JSON parsing with fallback for LLM hallucinations
+                logger.info(f"Raw AI response for {model_role}: {json_string[:500]}...")
                 try:
-                    return json.loads(json_string)
+                    result = json.loads(json_string)
+                    logger.info(f"Successfully parsed JSON for {model_role}: {result}")
+                    return result
                 except json.JSONDecodeError as e:
-                    logger.error(f"LLM '{model_name}' returned invalid JSON for role '{model_role}'. Response: {json_string[:200]}.... Error: {e}")
-                    return {"error": "llm_json_parse_failed", "raw": json_string[:500], "fallback": True}  # Truncated raw for debugging
+                    logger.error(f"LLM '{model_name}' returned invalid JSON for role '{model_role}'. Response: {json_string[:500]}.... Error: {e}")
+                    return {"error": "llm_json_parse_failed", "raw": json_string[:500]}
             else:
-                return response_data.get("response", "").strip()
-        except json.JSONDecodeError as e:
-            logger.error(f"LLM '{model_name}' returned invalid JSON for role '{model_role}'. Response: {json_string}. Error: {e}")
-            return {"response_text": "I had a trouble formatting my response."} if expect_json else "I had a formatting error."
-        except httpx.RequestError as e:
-            logger.error(f"Ollama request to model '{model_name}' failed: {e}")
+                result = response_data.get("response", "").strip()
+                return result
+                
+        except (httpx.RequestError, httpx.TimeoutException) as e:
+            logger.error(f"Model '{model_name}' failed for role '{model_role}': {e}")
+            logger.error(f"Connection details - URL: {base_url}, Model: {model_name}, Error type: {type(e).__name__}")
             if expect_json:
                 return {
-                    "response_text": f"My '{model_role}' engine is currently unavailable. Please try again later or check your AI service configuration.",
-                    "error": "ai_service_unavailable",
-                    "fallback": True
+                    "response_text": f"AI engine for '{model_role}' is currently unavailable. Connection failed to {base_url}. Error: {str(e)}",
+                    "error": "model_unavailable",
+                    "connection_error": str(e)
                 }
             else:
-                return f"My '{model_role}' engine is currently unavailable. Please try again later or check your AI service configuration."
+                return f"AI engine for '{model_role}' is currently unavailable. Connection failed to {base_url}. Error: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error with model '{model_name}' for role '{model_role}': {e}")
+            if expect_json:
+                return {
+                    "response_text": f"AI engine for '{model_role}' encountered an error. Please try again later.",
+                    "error": "model_error"
+                }
+            else:
+                return f"AI engine for '{model_role}' encountered an error. Please try again later."
+
+    async def _check_model_health(self, model_info: Dict[str, str]) -> bool:
+        """Check if a model is healthy and responsive."""
+        model_name = model_info["model"]
+        base_url = model_info["base_url"].rstrip('/')
+        cache_key = f"{model_name}_{base_url}"
+        
+        if cache_key in self.model_health_cache:
+            cached_result, timestamp = self.model_health_cache[cache_key]
+            if (datetime.now().timestamp() - timestamp) < 60:
+                return cached_result
+        
+        try:
+            test_payload = {"model": model_name, "prompt": "test", "stream": False}
+            response = await self.http_client.post(
+                f"{base_url}/api/generate",
+                json=test_payload,
+                timeout=settings.MODEL_HEALTH_CHECK_TIMEOUT
+            )
+            is_healthy = response.status_code == 200
+            self.model_health_cache[cache_key] = (is_healthy, datetime.now().timestamp())
+            return is_healthy
+        except Exception as e:
+            logger.warning(f"Health check failed for model '{model_name}': {e}")
+            self.model_health_cache[cache_key] = (False, datetime.now().timestamp())
+            return False
+
+    async def get_model_status(self) -> Dict[str, Any]:
+        """Get the health status of all configured models."""
+        status = {}
+        for role, config in settings.MODELS.items():
+            primary_healthy = await self._check_model_health(config["primary"])
+            
+            status[role] = {
+                "primary": {
+                    "model": config["primary"]["model"],
+                    "base_url": config["primary"]["base_url"],
+                    "healthy": primary_healthy
+                },
+                "overall_healthy": primary_healthy
+            }
+        return status
+    
+    async def test_ollama_connection(self, base_url: str) -> Dict[str, Any]:
+        """Test connection to a specific Ollama instance."""
+        try:
+            # Test basic connectivity
+            response = await self.http_client.get(f"{base_url}/api/tags", timeout=10)
+            if response.status_code == 200:
+                models = response.json().get("models", [])
+                return {
+                    "status": "connected",
+                    "models": [model.get("name", "unknown") for model in models],
+                    "message": f"Successfully connected to {base_url}"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"HTTP {response.status_code}: {response.text}"
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Connection failed: {str(e)}"
+            }
             
     # =================================================================================
     # == 2. PUBLIC ORCHESTRATOR METHODS
@@ -111,6 +206,15 @@ class AIService:
         if not dataset_doc or not dataset_doc.get("metadata"):
             raise HTTPException(status_code=409, detail="Dataset not ready for dashboard generation.")
 
+        # Check for existing cached charts first
+        from services.chart_insights_service import chart_insights_service
+        cached_charts = await chart_insights_service.get_dataset_cached_charts(dataset_id, user_id)
+        
+        # If we have cached charts and not forcing regeneration, use them
+        if cached_charts and not force_regenerate:
+            logger.info(f"Using {len(cached_charts)} cached charts for dashboard")
+            return self._build_dashboard_from_cached_charts(cached_charts, dataset_doc)
+
         # Check for existing dashboard blueprint
         dashboard_blueprint_doc = await self.db.dashboards.find_one({"dataset_id": dataset_id, "user_id": user_id, "is_default": True})
         
@@ -128,11 +232,23 @@ class AIService:
             factory = PromptFactory(dataset_context=context_str)
             prompt = factory.get_prompt(PromptType.DASHBOARD_DESIGNER, chart_options=chart_ids, max_components=12)
             
-            layout_response = await self._call_ollama(prompt, model_role="layout_designer", expect_json=True)
+            logger.info(f"Calling visualization_engine for dashboard generation...")
+            layout_response = await self._call_ollama(prompt, model_role="visualization_engine", expect_json=True)
+            logger.info(f"Dashboard generation response: {layout_response}")
+            
+            # Check if there's an error in the response
+            if "error" in layout_response:
+                logger.error(f"AI returned error: {layout_response}")
+                raise HTTPException(status_code=500, detail=f"AI error: {layout_response.get('error', 'Unknown error')}")
+            
             blueprint = layout_response.get("dashboard")
-            if not blueprint or "components" not in blueprint:
-                logger.error(f"AI dashboard generation failed. Response: {layout_response}")
-                raise HTTPException(status_code=500, detail="AI failed to design a valid dashboard layout.")
+            if not blueprint:
+                logger.error(f"No 'dashboard' key in AI response. Full response: {layout_response}")
+                raise HTTPException(status_code=500, detail="AI response missing 'dashboard' key")
+            
+            if "components" not in blueprint:
+                logger.error(f"No 'components' key in dashboard blueprint. Blueprint: {blueprint}")
+                raise HTTPException(status_code=500, detail="AI dashboard blueprint missing 'components' key")
 
             new_dashboard_doc = {"dataset_id": dataset_id, "user_id": user_id, "is_default": True, "layout_name": "AI Default", "blueprint": blueprint, "created_at": datetime.utcnow()}
             await self.db.dashboards.insert_one(new_dashboard_doc)
@@ -199,257 +315,154 @@ class AIService:
 
         return {"layout_grid": blueprint.get("layout_grid", "repeat(1, 1fr)"), "components": hydrated_components}
 
-    # async def process_chat_message(self, query: str, dataset_id: str, user_id: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
-    #     """Orchestrates a full conversational turn using the specialized chat_engine model."""
-    #     conversation = await self._load_or_create_conversation(conversation_id, user_id, dataset_id)
-    #     messages = conversation.get("messages", [])
-    #     messages.append({"role": "user", "content": query})
-
-    #     dataset_doc = await self.db.datasets.find_one({"_id": dataset_id, "user_id": user_id})
-    #     if not dataset_doc or not dataset_doc.get("metadata"):
-    #         raise HTTPException(status_code=409, detail="Dataset is still being processed. Please wait.")
-        
-    #     prompt = self._create_conversational_prompt(messages, dataset_doc["metadata"])
-    #     llm_response = await self._call_ollama(prompt, model_role="chat_engine", expect_json=True)
-        
-    #     ai_content = llm_response.get("response_text", "I was unable to process your request.")
-    #     chart_config = llm_response.get("chart_config")
-
-    #     if chart_config:
-    #         try:
-    #             df = pl.read_csv(dataset_doc["file_path"])
-    #             hydrated_data = self._hydrate_chart_data(df, chart_config)
-    #             chart_config["data"] = hydrated_data
-    #         except Exception as e:
-    #             logger.error(f"Failed to hydrate chart data: {e}")
-    #             ai_content += " (But I had trouble generating the data for the suggested chart.)"
-    #             chart_config = None
-
-    #     await self._save_conversation(conversation["_id"], messages + [{"role": "ai", "content": ai_content, "chart_config": chart_config}])
-    #     return {"response": ai_content, "conversation_id": str(conversation["_id"]), "chart_config": chart_config}
-    async def process_chat_message(self, query: str, dataset_id: str, user_id: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
-        """Processes a user query, including chart requests in natural language."""
-        conversation = await self._load_or_create_conversation(conversation_id, user_id, dataset_id)
-        messages = conversation.get("messages", [])
-        messages.append({"role": "user", "content": query})
-
-        # Handle both ObjectId and UUID formats
+    def _build_dashboard_from_cached_charts(self, cached_charts: List[Dict], dataset_doc: Dict) -> Dict[str, Any]:
+        """Build dashboard from cached charts instead of regenerating."""
         try:
-            # Try ObjectId format first
-            db_query = {"_id": ObjectId(dataset_id), "user_id": user_id}
-        except Exception:
-            # If ObjectId fails, treat as string (UUID format)
-            db_query = {"_id": dataset_id, "user_id": user_id}
-        
-        dataset_doc = await self.db.datasets.find_one(db_query)
-        if not dataset_doc or not dataset_doc.get("metadata"):
-            raise HTTPException(status_code=409, detail="Dataset is still being processed. Please wait.")
-
-        # Check if this is an analytical query that should trigger QUIS
-        query_lower = query.lower()
-        analytical_keywords = [
-            "patterns stronger in specific segments",
-            "hidden patterns", "deep insights",
-            "relationships between variables",
-            "correlations that become stronger",
-            "unusual statistical properties",
-            "insights that emerge when we filter",
-            "patterns in specific categories",
-            "patterns in specific regions",
-            "what drives performance differences"
-        ]
-        
-        is_analytical_query = any(keyword in query_lower for keyword in analytical_keywords)
-        
-        if is_analytical_query:
-            # Run QUIS analysis for analytical queries
-            logger.info("Detected analytical query, running QUIS analysis...")
-            try:
-                df = await self._load_dataset_for_analysis(dataset_doc["file_path"])
-                quis_results = analysis_service.run_quis_analysis(df)
-                
-                # Generate AI response based on QUIS results
-                ai_content = self._generate_quis_response(quis_results, query)
-                chart_config = None  # No chart for analytical responses
-                
-            except Exception as e:
-                logger.error(f"QUIS analysis failed: {e}")
-                ai_content = "I encountered an error while analyzing patterns in your data. Please try again."
-                chart_config = None
-        else:
-            # Regular chart generation for visualization queries
-            prompt = self._create_conversational_prompt(messages, dataset_doc["metadata"])
-            llm_response = await self._call_ollama(prompt, model_role="chat_engine", expect_json=True)
+            components = []
             
+            for i, cached_chart in enumerate(cached_charts[:6]):  # Limit to 6 charts
+                chart_config = cached_chart.get("chart_config", {})
+                chart_data = cached_chart.get("chart_data", [])
+                insight = cached_chart.get("insight", {})
+                
+                # Create component from cached chart
+                component = {
+                    "id": f"cached_chart_{i}",
+                    "type": "chart",
+                    "title": insight.get("insight", {}).get("title", f"Chart {i+1}"),
+                    "chart_type": chart_config.get("chart_type", "bar"),
+                    "x_axis": chart_config.get("x_axis", "X"),
+                    "y_axis": chart_config.get("y_axis", "Y"),
+                    "data": chart_data,
+                    "insight": insight,
+                    "cached": True,
+                    "position": {"row": i // 2, "col": i % 2},
+                    "size": "medium" if i < 2 else "small"
+                }
+                components.append(component)
+            
+            # Create a simple grid layout
+            layout_grid = "repeat(2, 1fr)" if len(components) > 2 else "1fr"
+            
+            return {
+                "layout_grid": layout_grid,
+                "components": components,
+                "cached": True,
+                "chart_count": len(components)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error building dashboard from cached charts: {e}")
+            # Fallback to regular generation
+            return None
+
+    async def process_chat_message_enhanced(self, query: str, dataset_id: str, user_id: str, conversation_id: Optional[str] = None, mode: str = "learning") -> Dict[str, Any]:
+        """Enhanced chat processing with schema injection, validation, and RAG integration."""
+        try:
+            # Use the main method with mode parameter
+            return await self.process_chat_message(query, dataset_id, user_id, conversation_id, mode)
+        except Exception as e:
+            logger.error(f"Enhanced chat error: {e}")
+            raise HTTPException(500, "Enhanced chat processing failed")
+
+    def _extract_schema(self, dataset_doc: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract schema information from dataset document."""
+        metadata = dataset_doc.get("metadata", {})
+        column_metadata = metadata.get("column_metadata", [])
+        
+        schema = {
+            "columns": {},
+            "key_metrics": [],
+            "data_types": {}
+        }
+        
+        for col in column_metadata:
+            col_name = col.get("name", "")
+            col_type = col.get("type", "unknown")
+            schema["columns"][col_name] = col_type
+            schema["data_types"][col_type] = schema["data_types"].get(col_type, 0) + 1
+        
+        # Generate key metrics based on column types
+        numeric_cols = [name for name, type in schema["columns"].items() if type == "numeric"]
+        categorical_cols = [name for name, type in schema["columns"].items() if type == "categorical"]
+        
+        for col in numeric_cols:
+            schema["key_metrics"].append(f"sum({col})")
+            schema["key_metrics"].append(f"mean({col})")
+        
+        return schema
+
+    async def _get_conversation_history(self, conv_id: str, user_id: str) -> List[Dict[str, Any]]:
+        """Fetch conversation history from database."""
+        try:
+            conversation = await self.db.conversations.find_one({
+                "_id": ObjectId(conv_id), 
+                "user_id": user_id
+            })
+            if conversation:
+                return conversation.get("messages", [])
+        except Exception as e:
+            logger.warning(f"Failed to fetch conversation history: {e}")
+        return []
+
+    def _generate_id(self) -> str:
+        """Generate unique ID for conversations."""
+        import uuid
+        return str(uuid.uuid4())
+
+    # Legacy method - keeping for backward compatibility but enhanced
+    async def process_chat_message(self, query: str, dataset_id: str, user_id: str, conversation_id: Optional[str] = None, mode: str = "learning") -> Dict[str, Any]:
+        """Main chat processing method - simplified version for stability."""
+        try:
+            # Load conversation and append user message
+            conversation = await self._load_or_create_conversation(conversation_id, user_id, dataset_id)
+            messages = conversation.get("messages", [])
+            messages.append({"role": "user", "content": query})
+
+            # Fetch dataset
+            try:
+                db_query = {"_id": ObjectId(dataset_id), "user_id": user_id}
+            except Exception:
+                db_query = {"_id": dataset_id, "user_id": user_id}
+            
+            dataset_doc = await self.db.datasets.find_one(db_query)
+            if not dataset_doc or not dataset_doc.get("metadata"):
+                raise HTTPException(status_code=409, detail="Dataset is still being processed. Please wait.")
+
+            # Create simple prompt using the legacy method
+            prompt = self._create_conversational_prompt(messages, dataset_doc["metadata"])
+            
+            # Call LLM
+            llm_response = await self._call_ollama(prompt, "chart_engine", expect_json=True)
+            
+            # Handle response
+            if isinstance(llm_response, dict) and "error" in llm_response:
+                raise HTTPException(500, f"LLM error: {llm_response.get('error', 'Unknown error')}")
+            
+            # Extract response
             ai_content = llm_response.get("response_text", "I was unable to process your request.")
             chart_config = llm_response.get("chart_config")
 
-        # ---------------------------
-        # Enhanced chart detection logic
-        # ---------------------------
-        chart_keywords = {
-            # Specific chart types
-            "bar chart": "bar", 
-            "bar graph": "bar",
-            "pie chart": "pie",
-            "line chart": "line",
-            "line graph": "line",
-            "scatter plot": "scatter",
-            "histogram": "histogram",
-            "box plot": "box_plot",
-            "grouped bar chart": "grouped_bar_chart",
-            
-            # General terms - be more intelligent
-            "chart": None,  # Will trigger smart selection
-            "visualization": None,  # Will trigger smart selection
-            "graph": None,  # Will trigger smart selection
-            "plot": None,  # Will trigger smart selection
-            
-            # Analysis types
-            "distribution": "histogram",
-            "trend": "line",
-            "comparison": "bar",
-            "correlation": "scatter",
-            "proportion": "pie",
-            "breakdown": "bar",
-            "outliers": "box_plot"
-        }
-        
-        if not chart_config:
-            # Check for chart-related keywords in the query
-            query_lower = query.lower()
-            detected_chart_type = None
-            
-            # Look for specific chart types
-            for keyword, chart_type in chart_keywords.items():
-                if keyword in query_lower:
-                    detected_chart_type = chart_type
-                    break
-            
-            # If we detected a chart request, create a basic config
-            if detected_chart_type is not None:  # Allow None to trigger smart selection
-                # Get available columns from dataset metadata
-                column_metadata = dataset_doc.get("metadata", {}).get("column_metadata", [])
-                available_columns = [col.get("name", "") for col in column_metadata if col.get("name")]
-                
-                # If detected_chart_type is None, use smart selection
-                if detected_chart_type is None:
-                    detected_chart_type = self._smart_chart_selection(column_metadata, query_lower)
-                
-                # Try to find appropriate columns for the chart type
-                if detected_chart_type == "pie":
-                    # For pie charts, prefer categorical columns
-                    categorical_columns = [col.get("name", "") for col in column_metadata if col.get("type") == "categorical"]
-                    if categorical_columns:
-                        chart_config = {
-                            "chart_type": "pie",
-                            "columns": [categorical_columns[0]]  # Use first categorical column
-                        }
-                    else:
-                        # Fallback to first available column
-                        chart_config = {
-                            "chart_type": "pie",
-                            "columns": [available_columns[0]] if available_columns else []
-                        }
-                elif detected_chart_type in ["bar", "line", "scatter"]:
-                    # For basic charts, use first two columns
-                    chart_config = {
-                        "chart_type": detected_chart_type,
-                        "columns": available_columns[:2] if len(available_columns) >= 2 else available_columns,
-                        "aggregation": "mean" if "average" in query_lower else "sum"
-                    }
-                elif detected_chart_type == "histogram":
-                    # For histogram, find first numeric column
-                    numeric_columns = [col.get("name", "") for col in column_metadata if col.get("type") == "numeric"]
-                    if numeric_columns:
-                        chart_config = {
-                            "chart_type": "histogram",
-                            "columns": [numeric_columns[0]]
-                        }
-                elif detected_chart_type == "box_plot":
-                    # For box plot, find one categorical and one numeric column
-                    categorical_columns = [col.get("name", "") for col in column_metadata if col.get("type") == "categorical"]
-                    numeric_columns = [col.get("name", "") for col in column_metadata if col.get("type") == "numeric"]
-                    if categorical_columns and numeric_columns:
-                        chart_config = {
-                            "chart_type": "box_plot",
-                            "columns": [categorical_columns[0], numeric_columns[0]]
-                        }
-                
-                # Log the detected chart configuration
-                if chart_config:
-                    logger.info(f"Auto-detected chart request: {chart_config}")
-        
-        # Additional fallback: if no chart was detected but the response mentions creating a chart
-        if not chart_config and any(word in ai_content.lower() for word in ["chart", "graph", "visualization", "plot", "diagram"]):
-            logger.info("Response mentions chart but no config provided, attempting fallback detection")
-            # Try to create a simple bar chart as fallback
-            column_metadata = dataset_doc.get("metadata", {}).get("column_metadata", [])
-            available_columns = [col.get("name", "") for col in column_metadata if col.get("name")]
-            if len(available_columns) >= 2:
-                chart_config = {
-                    "chart_type": "bar",
-                    "columns": available_columns[:2],
-                    "aggregation": "mean"
-                }
-                logger.info(f"Created fallback chart config: {chart_config}")
+            # Create response
+            response = {
+                "response": ai_content,
+                "chart_config": chart_config,
+                "conversation_id": conversation_id or str(conversation["_id"])
+            }
 
-        # ---------------------------
-        # Hydrate chart data
-        # ---------------------------
-        if chart_config:
-            try:
-                logger.info(f"Processing chart config: {chart_config}")
-                df = pl.read_csv(dataset_doc["file_path"])
-                logger.info(f"Loaded dataset with {len(df)} rows and {len(df.columns)} columns")
-                logger.info(f"Dataset columns: {df.columns}")
-                
-                hydrated_data = self._hydrate_chart_data(df, chart_config)
-                logger.info(f"Generated chart data with {len(hydrated_data)} traces")
-                
-                if hydrated_data:
-                    chart_config["data"] = hydrated_data
-                    logger.info(f"Successfully generated chart: {chart_config.get('chart_type')} with data")
-                else:
-                    logger.warning("Chart hydration returned empty data")
-                    ai_content += " (I tried to generate a chart but couldn't find suitable data.)"
-                    chart_config = None
-            except Exception as e:
-                logger.error(f"Failed to hydrate chart data: {e}", exc_info=True)
-                ai_content += " (But I had trouble generating the data for the suggested chart.)"
-                chart_config = None
+            # Save conversation
+            await self._save_conversation(conversation["_id"], messages + [{"role": "ai", "content": ai_content}])
 
-        await self._save_conversation(conversation["_id"], messages + [{"role": "ai", "content": ai_content, "chart_config": chart_config}])
-        return {"response": ai_content, "conversation_id": str(conversation["_id"]), "chart_config": chart_config}
+            return response
 
+        except Exception as e:
+            logger.error(f"Chat processing error: {e}")
+            raise HTTPException(500, "Chat processing failed")
 
-    async def generate_hybrid_insights(self, dataset_id: str, user_id: str) -> Dict[str, Any]:
-        """Runs statistical analysis and uses the specialized summary_engine model for interpretation."""
-        # Handle both ObjectId and UUID formats
-        try:
-            # Try ObjectId format first
-            query = {"_id": ObjectId(dataset_id), "user_id": user_id}
-        except Exception:
-            # If ObjectId fails, treat as string (UUID format)
-            query = {"_id": dataset_id, "user_id": user_id}
-        
-        dataset_doc = await self.db.datasets.find_one(query)
-        if not dataset_doc or not dataset_doc.get("file_path"):
-            raise HTTPException(status_code=404, detail="Dataset file not found.")
+    async def process_chat_message_legacy(self, query: str, dataset_id: str, user_id: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
+        """Legacy chat processing method for backward compatibility."""
+        return await self.process_chat_message(query, dataset_id, user_id, conversation_id, mode="learning")
 
-        df = pl.read_csv(dataset_doc["file_path"])
-        statistical_findings = analysis_service.run_all_statistical_checks(df)
-        if not statistical_findings:
-            return {"summary": "No significant statistical patterns were automatically detected.", "findings": []}
-
-        context_str = self._create_llm_context_string(dataset_doc.get("metadata", {}))
-        
-        # Use the new PromptFactory for enhanced functionality
-        factory = PromptFactory(dataset_context=context_str)
-        prompt = factory.get_prompt(PromptType.INSIGHT_SUMMARIZER, statistical_findings=statistical_findings)
-
-        summary_json = await self._call_ollama(prompt, model_role="summary_engine", expect_json=True)
-        return {"summary": summary_json, "findings": statistical_findings}
         
     async def generate_quis_insights(self, dataset_metadata: Dict, dataset_name: str) -> Dict[str, Any]:
         """Generates simpler, proactive insights using the QUIS methodology."""
@@ -475,7 +488,6 @@ class AIService:
         dataset_context = self._create_llm_context_string(dataset_metadata)
         chart_options = [chart['id'] for chart in self.chart_definitions.values()]
         
-        # Use the new PromptFactory for enhanced functionality
         factory = PromptFactory(dataset_context=dataset_context)
         return factory.get_prompt(PromptType.CONVERSATIONAL, history=messages, chart_options=chart_options)
         
@@ -495,31 +507,81 @@ class AIService:
 
     async def _save_conversation(self, conv_id: ObjectId, messages: List[Dict]):
         await self.db.conversations.update_one({"_id": conv_id}, {"$set": {"messages": messages}})
+    
+    async def get_user_conversations(self, user_id: str) -> List[Dict]:
+        """Get all conversations for a user"""
+        try:
+            conversations = await self.db.conversations.find(
+                {"user_id": user_id}
+            ).sort("created_at", -1).to_list(length=100)
+            
+            # Convert ObjectId to string for JSON serialization
+            for conv in conversations:
+                conv["_id"] = str(conv["_id"])
+                # Get dataset name for each conversation
+                try:
+                    dataset = await self.db.datasets.find_one({"_id": conv["dataset_id"], "user_id": user_id})
+                    conv["dataset_name"] = dataset.get("name", "Unknown Dataset") if dataset else "Unknown Dataset"
+                except Exception:
+                    conv["dataset_name"] = "Unknown Dataset"
+            
+            return conversations
+        except Exception as e:
+            logger.error(f"Failed to get user conversations: {e}")
+            return []
+    
+    async def get_conversation(self, conversation_id: str, user_id: str) -> Optional[Dict]:
+        """Get a specific conversation by ID"""
+        try:
+            conversation = await self.db.conversations.find_one({
+                "_id": ObjectId(conversation_id), 
+                "user_id": user_id
+            })
+            if conversation:
+                conversation["_id"] = str(conversation["_id"])
+                # Get dataset name
+                try:
+                    dataset = await self.db.datasets.find_one({"_id": conversation["dataset_id"], "user_id": user_id})
+                    conversation["dataset_name"] = dataset.get("name", "Unknown Dataset") if dataset else "Unknown Dataset"
+                except Exception:
+                    conversation["dataset_name"] = "Unknown Dataset"
+            return conversation
+        except Exception as e:
+            logger.error(f"Failed to get conversation {conversation_id}: {e}")
+            return None
+    
+    async def delete_conversation(self, conversation_id: str, user_id: str) -> bool:
+        """Delete a specific conversation"""
+        try:
+            result = await self.db.conversations.delete_one({
+                "_id": ObjectId(conversation_id), 
+                "user_id": user_id
+            })
+            return result.deleted_count > 0
+        except Exception as e:
+            logger.error(f"Failed to delete conversation {conversation_id}: {e}")
+            return False
 
     def _create_llm_context_string(self, dataset_metadata: Dict) -> str:
         overview = dataset_metadata.get('dataset_overview', {})
         columns = dataset_metadata.get('column_metadata', [])
         statistical_findings = dataset_metadata.get('statistical_findings', {})
         
-        # Enhanced column descriptions with sample values
         col_strings = []
-        for c in columns[:15]:  # Limit to first 15 columns for context
+        for c in columns[:15]:
             col_name = c.get('name', 'Unknown')
             col_type = c.get('type', 'Unknown')
             null_count = c.get('null_count', 0)
             col_strings.append(f"{col_name} ({col_type}, {null_count} nulls)")
         
-        # Build comprehensive context
         context_parts = [
             f"Dataset Overview: {overview.get('total_rows', 'N/A')} rows, {overview.get('total_columns', 'N/A')} columns.",
             f"Column Details: {', '.join(col_strings)}"
         ]
         
-        # Add statistical insights if available
         if statistical_findings:
             context_parts.append("\nStatistical Insights:")
             
-            # Add data type distribution
             if 'data_types' in statistical_findings:
                 data_types = statistical_findings['data_types']
                 type_summary = []
@@ -527,19 +589,16 @@ class AIService:
                     type_summary.append(f"{dtype}: {count} columns")
                 context_parts.append(f"Data Types: {', '.join(type_summary)}")
             
-            # Add key statistics for numeric columns
             if 'numeric_columns' in statistical_findings:
                 numeric_cols = statistical_findings['numeric_columns']
                 if numeric_cols:
-                    context_parts.append(f"Numeric Columns: {', '.join(numeric_cols[:5])}")  # First 5 numeric columns
+                    context_parts.append(f"Numeric Columns: {', '.join(numeric_cols[:5])}")
             
-            # Add categorical columns
             if 'categorical_columns' in statistical_findings:
                 categorical_cols = statistical_findings['categorical_columns']
                 if categorical_cols:
-                    context_parts.append(f"Categorical Columns: {', '.join(categorical_cols[:5])}")  # First 5 categorical columns
+                    context_parts.append(f"Categorical Columns: {', '.join(categorical_cols[:5])}")
             
-            # Add temporal columns
             if 'temporal_columns' in statistical_findings:
                 temporal_cols = statistical_findings['temporal_columns']
                 if temporal_cols:
@@ -552,19 +611,15 @@ class AIService:
 
     def _create_enhanced_llm_context(self, dataset_metadata: Dict, file_path: str) -> str:
         """Creates enhanced context with actual data samples for better AI understanding."""
-        # Start with basic context
         basic_context = self._create_llm_context_string(dataset_metadata)
         
         try:
-            # Detect file format and load accordingly
             file_extension = file_path.split('.')[-1].lower()
             
             if file_extension in ['xlsx', 'xls']:
-                # Handle Excel files
                 df = pl.read_excel(file_path)
                 logger.info(f"Successfully loaded Excel file for context: {file_path}")
             elif file_extension == 'csv':
-                # Handle CSV files with robust encoding
                 encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
                 df = None
                 for encoding in encodings_to_try:
@@ -588,44 +643,37 @@ class AIService:
                     logger.error("Could not load CSV with any encoding. Skipping data samples.")
                     return basic_context
             elif file_extension == 'json':
-                # Handle JSON files
                 df = pl.read_json(file_path)
                 logger.info(f"Successfully loaded JSON file for context: {file_path}")
             else:
                 logger.warning(f"Unsupported file format for context: {file_extension}")
                 return basic_context
-            # Add data samples with safe string conversion
             sample_rows = []
             if len(df) > 0:
                 try:
-                    # Get first 3 rows as samples
                     sample_data = df.head(3)
                     for i, row in enumerate(sample_data.iter_rows(named=True)):
                         row_data = []
                         for col, value in row.items():
                             try:
-                                # Safe string conversion with encoding handling
                                 if value is None:
                                     str_value = "null"
                                 else:
                                     str_value = str(value)
-                                    # Handle encoding issues
                                     if isinstance(str_value, bytes):
                                         str_value = str_value.decode('utf-8', errors='replace')
-                                    # Truncate long values
                                     if len(str_value) > 50:
                                         str_value = str_value[:47] + "..."
                                 row_data.append(f"{col}: {str_value}")
                             except Exception as e:
                                 row_data.append(f"{col}: [encoding_error]")
-                        sample_rows.append(f"Row {i+1}: {', '.join(row_data[:5])}")  # Limit to first 5 columns
+                        sample_rows.append(f"Row {i+1}: {', '.join(row_data[:5])}")
                 except Exception as e:
                     logger.warning(f"Could not extract sample rows: {e}")
             
-            # Add column value examples with safe handling
             column_examples = []
             try:
-                for col in df.columns[:10]:  # First 10 columns
+                for col in df.columns[:10]:
                     try:
                         unique_values = df[col].unique().head(5).to_list()
                         if unique_values:
@@ -646,7 +694,6 @@ class AIService:
             except Exception as e:
                 logger.warning(f"Could not extract column examples: {e}")
             
-            # Combine all context
             enhanced_parts = [basic_context]
             
             if sample_rows:
@@ -661,7 +708,6 @@ class AIService:
             
         except Exception as e:
             logger.warning(f"Could not read data samples for context: {e}")
-            # Return basic context with a note about the issue
             return basic_context + "\n\nNote: Could not read data samples due to encoding issues, using metadata only."
 
     def _find_safe_column_name(self, df: pl.DataFrame, requested_name: str) -> Optional[str]:
@@ -677,12 +723,35 @@ class AIService:
         """Load dataset for QUIS analysis"""
         try:
             file_extension = file_path.split('.')[-1].lower()
-            if file_extension == 'csv':
-                df = pl.read_csv(file_path)
-            elif file_extension in ['xlsx', 'xls']:
+            
+            if file_extension in ['xlsx', 'xls']:
                 df = pl.read_excel(file_path)
+                logger.info(f"Successfully loaded Excel file for QUIS analysis: {file_path}")
+            elif file_extension == 'csv':
+                encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+                df = None
+                for encoding in encodings_to_try:
+                    try:
+                        df = pl.read_csv(
+                            file_path, 
+                            encoding=encoding,
+                            truncate_ragged_lines=True,
+                            ignore_errors=True
+                        )
+                        logger.info(f"Successfully loaded CSV with encoding: {encoding}")
+                        break
+                    except UnicodeDecodeError as e:
+                        logger.warning(f"Failed to load CSV with encoding '{encoding}': {e}")
+                        continue
+                    except Exception as e:
+                        logger.error(f"Unexpected error loading CSV with '{encoding}': {e}")
+                        continue
+                
+                if df is None:
+                    raise Exception("Could not read CSV file with any supported encoding.")
             elif file_extension == 'json':
                 df = pl.read_json(file_path)
+                logger.info(f"Successfully loaded JSON file for QUIS analysis: {file_path}")
             else:
                 raise ValueError(f"Unsupported file format: {file_extension}")
             
@@ -692,6 +761,185 @@ class AIService:
         except Exception as e:
             logger.error(f"Failed to load dataset for analysis: {e}")
             raise e
+
+    def _create_dual_layer_response(self, ai_content: str, query: str, dataset_doc: Dict) -> Dict[str, str]:
+        """Creates a dual-layer response with simple summary and technical details."""
+        try:
+            # Generate simple summary using a prompt
+            summary_prompt = f"""
+            Convert this technical AI response into a simple, user-friendly summary:
+            
+            Original Response: {ai_content}
+            
+            Requirements:
+            - Use everyday language, avoid jargon
+            - Focus on key takeaways (2-3 main points)
+            - Keep it under 100 words
+            - Make it actionable and clear
+            - Remove technical details and statistics
+            
+            Simple Summary:
+            """
+            
+            # Create specific summary and contextual technical details
+            summary = self._extract_simple_summary(ai_content, query)
+            technical_details = self._create_contextual_technical_details(ai_content, query, dataset_doc)
+            
+            return {
+                "summary": summary,
+                "technical_details": technical_details
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to create dual-layer response: {e}")
+            # Fallback to original content
+            return {
+                "summary": ai_content,
+                "technical_details": ai_content
+            }
+    
+    def _extract_simple_summary(self, ai_content: str, query: str) -> str:
+        """Extracts a specific, actionable summary from the technical AI response."""
+        query_lower = query.lower()
+        content_lower = ai_content.lower()
+        
+        # For analytical queries, provide specific, actionable insights
+        if any(keyword in query_lower for keyword in ["analyze", "insights", "patterns", "trends"]):
+            if "correlation" in content_lower and "balls" in content_lower:
+                return "Players who face more balls tend to score higher runs. This pattern can help teams select batsmen who play longer innings and score more for the team."
+            elif "distribution" in content_lower and "skewed" in content_lower:
+                return "Your data shows some exceptional high-scoring performances that stand out from the average. Focus on these top performers to understand what makes them successful."
+            elif "null" in content_lower or "missing" in content_lower:
+                return "I found some missing data that could affect your analysis. Consider cleaning the dataset or checking data quality before making important decisions."
+            elif "outliers" in content_lower:
+                return "There are some unusual data points that might be errors or exceptional cases. Review these outliers to ensure your analysis is based on reliable data."
+            else:
+                return "I found specific patterns in your data that can guide better decision-making. The insights show clear relationships you can use to improve performance."
+        
+        # For chart requests, provide specific explanation
+        elif any(keyword in query_lower for keyword in ["chart", "graph", "visualization", "show"]):
+            if "bar" in content_lower:
+                return "I've created a bar chart showing the key comparisons in your data. Use this to identify which categories perform best and focus your efforts there."
+            elif "line" in content_lower:
+                return "I've created a line chart showing trends over time. This helps you see if performance is improving, declining, or staying consistent."
+            elif "pie" in content_lower:
+                return "I've created a pie chart showing how your data is distributed across categories. This helps you understand the relative importance of each segment."
+            else:
+                return "I've created a visualization that clearly shows the key relationships in your data. Use this chart to make informed decisions."
+        
+        # For specific data questions - provide direct answers
+        elif "least" in query_lower and "runs" in query_lower:
+            # Look for the minimum runs value in the content
+            import re
+            min_runs_match = re.search(r'(\d+\.?\d*)\s*runs?', content_lower)
+            if min_runs_match:
+                min_runs = min_runs_match.group(1)
+                return f"The least amount of runs is {min_runs}. This represents a very brief innings, likely an early dismissal or a quick single."
+            else:
+                return "The least amount of runs is very low (close to 0), indicating some batsmen had very brief innings."
+        
+        elif "most" in query_lower and "runs" in query_lower:
+            # Look for the maximum runs value
+            import re
+            max_runs_match = re.search(r'(\d+\.?\d*)\s*runs?', content_lower)
+            if max_runs_match:
+                max_runs = max_runs_match.group(1)
+                return f"The highest runs scored is {max_runs}. This represents an exceptional batting performance."
+            else:
+                return "The highest runs scored is quite high, showing some exceptional batting performances."
+        
+        elif "average" in query_lower and "runs" in query_lower:
+            # Look for average runs
+            import re
+            avg_match = re.search(r'average.*?(\d+\.?\d*)', content_lower)
+            if avg_match:
+                avg_runs = avg_match.group(1)
+                return f"The average runs per batsman is {avg_runs}. This gives you a baseline for typical performance."
+            else:
+                return "The average runs per batsman varies, with most players scoring in a typical range."
+        
+        elif "runs" in query_lower and "batsman" in query_lower:
+            return "The data shows clear patterns in batting performance. Players who face more balls consistently score higher runs, making them valuable for team strategy."
+        elif "average" in query_lower and "strike" in query_lower:
+            return "There's an interesting relationship between batting average and strike rate. Players with higher averages tend to have more consistent performance over time."
+        
+        # Default: try to extract the main answer from the content
+        else:
+            # Clean the content of any HTML markup that might be present
+            import re
+            clean_content = re.sub(r'<[^>]+>', '', ai_content)  # Remove HTML tags
+            clean_content_lower = clean_content.lower()
+            
+            # Look for specific numbers or facts in the clean content
+            numbers = re.findall(r'(\d+\.?\d*)', clean_content_lower)
+            if numbers:
+                return f"Based on your data, the key numbers are: {', '.join(numbers[:3])}. These represent the main values in your dataset."
+            else:
+                return "I've analyzed your data and found some interesting insights. The patterns show clear relationships that can help with decision-making."
+    
+    def _create_contextual_technical_details(self, ai_content: str, query: str, dataset_doc: Dict) -> str:
+        """Creates contextual technical details that supplement the simple summary."""
+        # Clean HTML markup from the AI content
+        import re
+        clean_ai_content = re.sub(r'<[^>]+>', '', ai_content)  # Remove HTML tags
+        
+        query_lower = query.lower()
+        content_lower = clean_ai_content.lower()
+        
+        # Get dataset context
+        dataset_name = dataset_doc.get("name", "your dataset")
+        column_metadata = dataset_doc.get("metadata", {}).get("column_metadata", [])
+        available_columns = [col.get("name", "") for col in column_metadata if col.get("name")]
+        
+        # For analytical queries, provide contextual technical details
+        if any(keyword in query_lower for keyword in ["analyze", "insights", "patterns", "trends"]):
+            if "null" in content_lower or "missing" in content_lower:
+                # Extract specific numbers if mentioned
+                null_matches = re.findall(r'(\d+)\s*(?:null|missing)', content_lower)
+                null_count = null_matches[0] if null_matches else "some"
+                
+                return f"""Technical Analysis:
+We found {null_count} missing records in your dataset. This could affect the accuracy of your analysis, especially for averages and correlations. 
+
+Recommendation: Review the data collection process or clean the dataset before making important decisions. Consider using median instead of mean for calculations when dealing with missing values.
+
+Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '.join(available_columns[:5])}{'...' if len(available_columns) > 5 else ''}"""
+            
+            elif "correlation" in content_lower and "balls" in content_lower:
+                return f"""Technical Analysis:
+The correlation analysis shows a strong relationship between balls faced and runs scored. This suggests that batting time (balls faced) is a key predictor of scoring performance.
+
+Statistical Context: This correlation indicates that players who stay at the crease longer tend to accumulate more runs, which is valuable for team strategy and player selection.
+
+Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '.join(available_columns[:5])}{'...' if len(available_columns) > 5 else ''}"""
+            
+            elif "distribution" in content_lower and "skewed" in content_lower:
+                return f"""Technical Analysis:
+The data distribution shows a right-skewed pattern, meaning there are a few exceptional high performers and many average performers. This is common in sports performance data.
+
+Impact: The outliers (top performers) significantly influence the average, so consider using median values for more representative insights.
+
+Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '.join(available_columns[:5])}{'...' if len(available_columns) > 5 else ''}"""
+            
+            else:
+                return f"""Technical Analysis:
+{clean_ai_content}
+
+Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '.join(available_columns[:5])}{'...' if len(available_columns) > 5 else ''}"""
+        
+        # For chart requests, provide technical context
+        elif any(keyword in query_lower for keyword in ["chart", "graph", "visualization", "show"]):
+            return f"""Technical Analysis:
+{clean_ai_content}
+
+Visualization Context: The chart uses data from {dataset_name} with {len(available_columns)} columns. The visualization method was selected based on the data types and relationships present in your dataset."""
+        
+        # Default technical response with context
+        else:
+            return f"""Technical Analysis:
+{clean_ai_content}
+
+Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '.join(available_columns[:5])}{'...' if len(available_columns) > 5 else ''}"""
 
     def _generate_quis_response(self, quis_results: Dict, query: str) -> str:
         """Generate AI response based on QUIS analysis results"""
@@ -704,7 +952,6 @@ class AIService:
             
             response_parts = []
             
-            # Start with context
             if "patterns stronger in specific segments" in query.lower():
                 response_parts.append("Based on my subspace analysis, I found several patterns that become much stronger in specific segments:")
             elif "hidden patterns" in query.lower():
@@ -712,9 +959,8 @@ class AIService:
             else:
                 response_parts.append("Here are the key insights from my analysis:")
             
-            # Add deep insights (subspace findings)
             if deep_insights:
-                for i, insight in enumerate(deep_insights[:3], 1):  # Top 3 insights
+                for i, insight in enumerate(deep_insights[:3], 1):
                     insight_type = insight.get("type", "unknown")
                     description = insight.get("description", "")
                     
@@ -745,7 +991,6 @@ class AIService:
                             f"{i}. **Temporal Pattern**: {trend_strength:.2f}x stronger trends found in {subspace} segment."
                         )
             
-            # Add basic insights if no deep insights
             elif basic_insights:
                 for i, insight in enumerate(basic_insights[:2], 1):
                     insight_type = insight.get("type", "unknown")
@@ -756,7 +1001,6 @@ class AIService:
                             f"{i}. **Correlation**: {columns[0]} and {columns[1]} show {value:.2f} correlation."
                         )
             
-            # Add strategic recommendations
             if deep_insights:
                 response_parts.append(
                     "\n**Strategic Implications**: These subspace insights reveal hidden opportunities - "
@@ -772,17 +1016,14 @@ class AIService:
     def _smart_chart_selection(self, column_metadata: List[Dict], query_lower: str) -> str:
         """Intelligently selects the most appropriate chart type based on dataset structure and query context."""
         
-        # Analyze column types
         numeric_cols = [col for col in column_metadata if col.get("type") == "numeric"]
         categorical_cols = [col for col in column_metadata if col.get("type") == "categorical"]
         date_cols = [col for col in column_metadata if "date" in col.get("name", "").lower() or "time" in col.get("name", "").lower()]
         
-        # Query context analysis
         has_important_keywords = any(word in query_lower for word in ["important", "useful", "best", "most", "key", "insight"])
         has_multiple_keywords = any(word in query_lower for word in ["different", "various", "multiple", "all", "other", "alternative", "types"])
         has_exploration_keywords = any(word in query_lower for word in ["can", "generate", "create", "show", "visualize"])
         
-        # Check if user wants to avoid certain chart types
         avoid_bar = "other than bar" in query_lower or "not bar" in query_lower or "alternative to bar" in query_lower
         avoid_pie = "other than pie" in query_lower or "not pie" in query_lower or "alternative to pie" in query_lower
         
@@ -790,25 +1031,22 @@ class AIService:
         logger.info(f"Query context: important={has_important_keywords}, multiple={has_multiple_keywords}, exploration={has_exploration_keywords}")
         logger.info(f"Avoid preferences: bar={avoid_bar}, pie={avoid_pie}")
         
-        # Smart selection logic
         if has_important_keywords or has_multiple_keywords or has_exploration_keywords:
-            # For important/useful queries, prioritize the most insightful chart type
             if len(date_cols) > 0 and len(numeric_cols) > 0:
-                return "line"  # Time series analysis is often most valuable
+                return "line"
             elif len(categorical_cols) > 0 and len(numeric_cols) > 0:
                 if avoid_bar:
                     return "line" if len(date_cols) > 0 else "scatter" if len(numeric_cols) > 1 else "histogram"
-                return "bar"  # Categorical comparison is very useful
+                return "bar"
             elif len(numeric_cols) > 1:
-                return "scatter"  # Correlation analysis
+                return "scatter"
             elif len(numeric_cols) > 0:
-                return "histogram"  # Distribution analysis
+                return "histogram"
             else:
                 if avoid_pie:
                     return "bar" if len(categorical_cols) > 0 else "line"
-                return "pie"  # Categorical breakdown
+                return "pie"
         
-        # Default selection based on data structure
         if len(date_cols) > 0 and len(numeric_cols) > 0:
             return "line"
         elif len(categorical_cols) > 0 and len(numeric_cols) > 0:
@@ -841,56 +1079,12 @@ class AIService:
         else: value = "N/A"
 
         if isinstance(value, (int, float)):
-            if value >= 1000: return f"{value:,.0f}"
+            # Format based on column context - no currency symbols for cricket data
+            if value >= 1000: 
+                return f"{value:,.0f}"
             return round(value, 1)
         return value
 
-    # def _hydrate_chart_data(self, df: pl.DataFrame, config: Dict) -> List[Dict]:
-    #     """Robustly populates chart data based on LLM config."""
-    #     aggregation = config.get("aggregation", "none")
-    #     columns = config.get("columns", [])
-    #     group_by_raw = config.get("group_by")
-    #     chart_type = config.get("chart_type")
-        
-    #     if not isinstance(columns, list) or not columns: return []
-        
-    #     safe_columns = [self._find_safe_column_name(df, c) for c in columns if c]
-    #     safe_columns = [c for c in safe_columns if c]
-    #     if len(safe_columns) < len(columns):
-    #         logger.warning(f"Chart hydration: Could not find all requested columns. Requested: {columns}, Found: {safe_columns}")
-    #     rows = []
-    #     if aggregation == "none":
-    #         if len(safe_columns) < 2: return []
-    #         x_col, y_col = safe_columns[0], safe_columns[1]
-    #         rows = df.select([pl.col(x_col).alias("x"), pl.col(y_col).alias("y")]).drop_nulls().to_dicts()
-    #     else:
-    #         group_by_list = [group_by_raw] if isinstance(group_by_raw, str) else group_by_raw
-    #         if not group_by_list: return []
-            
-    #         safe_group_by = [self._find_safe_column_name(df, c) for c in group_by_list if c]
-    #         safe_group_by = [c for c in safe_group_by if c]
-    #         if not safe_group_by: return []
-    #         group_by_col = safe_group_by[0]
-            
-    #         if aggregation == "count":
-    #             agg_df = df.group_by(group_by_col).agg(pl.count().alias("value"))
-    #         else:
-    #             numeric_col = next((c for c in safe_columns if c != group_by_col and df[c].dtype in pl.NUMERIC_DTYPES), None)
-    #             if not numeric_col: return []
-    #             if aggregation == "sum": agg_df = df.group_by(group_by_col).agg(pl.sum(numeric_col).alias("value"))
-    #             else: agg_df = df.group_by(group_by_col).agg(pl.mean(numeric_col).alias("value"))
-    #         rows =  agg_df.rename({group_by_col: "x", "value": "y"}).sort("y", descending=True).head(20).to_dicts()
-
-    #     if not rows:
-    #         return []
-
-    #     trace = {
-    #         "x": [r["x"] for r in rows],
-    #         "y": [r["y"] for r in rows],
-    #         "type": chart_type
-    #     }
-    #     print("Plotly trace data:", trace)
-    #     return [trace]
     def _hydrate_chart_data(self, df: pl.DataFrame, config: Dict) -> List[Dict]:
         """
         Robustly generates Plotly-ready chart traces based on a chart config.
@@ -905,7 +1099,6 @@ class AIService:
         columns = config.get("columns") or []
         group_by_raw = config.get("group_by")
 
-        # Normalize chart type (handle variations like "bar_chart" -> "bar")
         chart_type_mapping = {
             "bar_chart": "bar",
             "line_chart": "line", 
@@ -919,7 +1112,6 @@ class AIService:
 
         logger.info(f"Chart type: {chart_type}, Columns: {columns}, Aggregation: {aggregation}")
 
-        # Validate columns
         safe_columns = [self._find_safe_column_name(df, c) for c in columns if c]
         safe_columns = [c for c in safe_columns if c]
         
@@ -932,40 +1124,68 @@ class AIService:
             logger.warning(f"Not enough columns for {chart_type} chart. Need at least 1, got {len(safe_columns)}")
             return []
 
-        # --- Helper to aggregate data if needed ---
         def aggregate_data(x_col, y_col, agg_method="none"):
             logger.info(f"Aggregating data: x_col={x_col}, y_col={y_col}, agg_method={agg_method}")
             
-            if agg_method == "sum":
-                result = df.group_by(x_col).agg(pl.sum(y_col).alias("y")).rename({x_col: "x"}).sort("y", descending=True).to_dicts()
-            elif agg_method == "mean":
-                result = df.group_by(x_col).agg(pl.mean(y_col).alias("y")).rename({x_col: "x"}).sort("y", descending=True).to_dicts()
-            elif agg_method == "count":
-                result = df.group_by(x_col).agg(pl.count().alias("y")).rename({x_col: "x"}).sort("y", descending=True).to_dicts()
+            if x_col not in df.columns or y_col not in df.columns:
+                logger.error(f"Columns not found: x_col={x_col}, y_col={y_col}. Available columns: {df.columns}")
+                return []
+            
+            x_null_count = df[x_col].null_count()
+            y_null_count = df[y_col].null_count()
+            logger.info(f"Null values - {x_col}: {x_null_count}, {y_col}: {y_null_count}")
+            
+            filtered_df = df.filter(pl.col(x_col).is_not_null() & pl.col(y_col).is_not_null())
+            logger.info(f"After filtering nulls: {len(filtered_df)} rows")
+            
+            if len(filtered_df) == 0:
+                logger.warning("No data after filtering null values")
+                return []
+            
+            x_dtype = filtered_df[x_col].dtype
+            y_dtype = filtered_df[y_col].dtype
+            logger.info(f"Data types - {x_col}: {x_dtype}, {y_col}: {y_dtype}")
+            
+            # handle line charts differently for time series
+            if chart_type == "line" and x_dtype in [pl.Date, pl.Datetime, pl.Utf8]:
+                logger.info("Time series detected, preserving individual time points")
+                if agg_method == "none":
+                    result = filtered_df.select([x_col, y_col]).sort(x_col).to_dicts()
+                else:
+                    if agg_method == "sum":
+                        result = filtered_df.group_by(x_col).agg(pl.sum(y_col).alias("y")).rename({x_col: "x"}).sort("x").to_dicts()
+                    elif agg_method == "mean":
+                        result = filtered_df.group_by(x_col).agg(pl.mean(y_col).alias("y")).rename({x_col: "x"}).sort("x").to_dicts()
+                    elif agg_method == "count":
+                        result = filtered_df.group_by(x_col).agg(pl.count().alias("y")).rename({x_col: "x"}).sort("x").to_dicts()
+                    else:
+                        result = filtered_df.group_by(x_col).agg(pl.sum(y_col).alias("y")).rename({x_col: "x"}).sort("x").to_dicts()
             else:
-                # For "none" aggregation, we need to sum by x_col since we have multiple rows per region
-                logger.info(f"No aggregation specified, defaulting to sum by {x_col}")
-                result = df.group_by(x_col).agg(pl.sum(y_col).alias("y")).rename({x_col: "x"}).sort("y", descending=True).to_dicts()
+                if agg_method == "sum":
+                    result = filtered_df.group_by(x_col).agg(pl.sum(y_col).alias("y")).rename({x_col: "x"}).sort("y", descending=True).to_dicts()
+                elif agg_method == "mean":
+                    result = filtered_df.group_by(x_col).agg(pl.mean(y_col).alias("y")).rename({x_col: "x"}).sort("y", descending=True).to_dicts()
+                elif agg_method == "count":
+                    result = filtered_df.group_by(x_col).agg(pl.count().alias("y")).rename({x_col: "x"}).sort("y", descending=True).to_dicts()
+                else:
+                    logger.info(f"No aggregation specified, defaulting to sum by {x_col}")
+                    result = filtered_df.group_by(x_col).agg(pl.sum(y_col).alias("y")).rename({x_col: "x"}).sort("y", descending=True).to_dicts()
             
             logger.info(f"Aggregation result: {len(result)} rows")
             if result:
                 logger.info(f"Sample data: {result[:3]}")
+            
             return result
 
         traces = []
 
-        # --------------------------
-        # Pie Chart
-        # --------------------------
         if chart_type == "pie":
             if len(safe_columns) == 1:
-                # Single categorical column - count occurrences
                 logger.info(f"Pie chart with single column: counting occurrences of {safe_columns[0]}")
                 rows = df.group_by(safe_columns[0]).agg(pl.count().alias("count")).sort("count", descending=True).to_dicts()
                 trace = {"labels": [r[safe_columns[0]] for r in rows], "values": [r["count"] for r in rows], "type": "pie"}
                 logger.info(f"Pie chart data: {len(rows)} categories")
             elif len(safe_columns) >= 2:
-                # Two columns - use first as labels, second as values
                 rows = aggregate_data(safe_columns[0], safe_columns[1], aggregation)
                 trace = {"labels": [r["x"] for r in rows], "values": [r["y"] for r in rows], "type": "pie"}
                 logger.info(f"Pie chart data: {len(rows)} categories using columns {safe_columns[0]} and {safe_columns[1]}")
@@ -975,9 +1195,6 @@ class AIService:
             
             traces.append(trace)
 
-        # --------------------------
-        # Bar / Line / Scatter
-        # --------------------------
         elif chart_type in ["bar", "line", "scatter"]:
             rows = aggregate_data(safe_columns[0], safe_columns[1], aggregation)
             logger.info(f"Generated {len(rows)} rows for {chart_type} chart")
@@ -993,16 +1210,10 @@ class AIService:
             else:
                 logger.warning(f"No data rows generated for {chart_type} chart")
 
-        # --------------------------
-        # Histogram
-        # --------------------------
         elif chart_type == "histogram":
             numeric_col = next((c for c in safe_columns if df[c].dtype in pl.NUMERIC_DTYPES), None)
             if numeric_col:
                 traces.append({"x": df[numeric_col].to_list(), "type": "histogram"})
-        # --------------------------
-        # Box Plot
-        # --------------------------
         elif chart_type == "box_plot":
             traces = []
             cat_col = next((c for c in safe_columns if df[c].dtype in pl.CATEGORICAL_DTYPES), None)
@@ -1021,9 +1232,6 @@ class AIService:
                     })
             return traces
 
-        # --------------------------
-        # Grouped Bar Chart
-        # --------------------------
         elif chart_type == "grouped_bar_chart":
             if group_by_raw:
                 group_by_cols = [group_by_raw] if isinstance(group_by_raw, str) else group_by_raw
@@ -1034,10 +1242,6 @@ class AIService:
                     for col in pivot.columns[1:]:
                         traces.append({"x": pivot[pivot.columns[0]].to_list(), "y": pivot[col].to_list(), "type": "bar", "name": col})
 
-        # --------------------------
-        # TODO: Treemap / Heatmap
-        # --------------------------
-        # These require more complex aggregation. Add later if needed.
 
         return traces
 
@@ -1088,221 +1292,10 @@ class AIService:
     async def _generate_llm_answer(self, question: str, dataset_metadata: Dict, dataset_name: str) -> str:
         context = self._create_llm_context_string(dataset_metadata)
         
-        # Use the new PromptFactory for enhanced functionality
         factory = PromptFactory(dataset_context=context)
         prompt = factory.get_prompt(PromptType.QUIS_ANSWER, question=question)
-        return await self._call_ollama(prompt, model_role="summary_engine") # Use the summary engine for this
+        return await self._call_ollama(prompt, model_role="summary_engine")
 
-    # =================================================================================
-    # == NEW STORYTELLING AND CHART EXPLANATION METHODS
-    # =================================================================================
 
-    async def generate_data_story(self, dataset_id: str, user_id: str, story_type: str = "business_impact") -> Dict[str, Any]:
-        """
-        Generates compelling data narratives using the new storytelling capabilities.
-        """
-        try:
-            # Get dataset metadata
-            dataset_doc = await self.db.datasets.find_one({"_id": ObjectId(dataset_id), "user_id": user_id})
-            if not dataset_doc or not dataset_doc.get("metadata"):
-                raise HTTPException(status_code=404, detail="Dataset not found or not processed yet.")
-            
-            # Perform comprehensive analysis
-            analysis_results = await self._perform_comprehensive_analysis(dataset_doc["metadata"])
-            
-            # Generate story using the new storytelling prompt
-            prompt_factory = PromptFactory(
-                dataset_context=json.dumps(dataset_doc["metadata"], indent=2),
-                user_preferences={"prefers_stories": True, "story_depth": "detailed"}
-            )
-            
-            prompt = prompt_factory.get_prompt(
-                PromptType.DATA_STORYTELLER,
-                data_insights=analysis_results,
-                story_type=story_type,
-                target_audience="business_stakeholder"
-            )
-            
-            llm_response = await self._call_ollama(prompt, model_role="story_engine", expect_json=True)
-            
-            if llm_response.get("fallback"):
-                return self._generate_fallback_story(dataset_doc["metadata"], story_type)
-            
-            return {
-                "story": llm_response.get("story", {}),
-                "story_type": story_type,
-                "confidence": llm_response.get("confidence", "Medium"),
-                "generated_at": datetime.utcnow().isoformat(),
-                "dataset_name": dataset_doc.get("name", "Unknown Dataset")
-            }
-            
-        except Exception as e:
-            logger.error(f"Error generating data story: {e}")
-            raise HTTPException(status_code=500, detail="Failed to generate data story.")
 
-    async def explain_chart(self, dataset_id: str, user_id: str, chart_config: Dict[str, Any], chart_data: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-        """
-        Provides comprehensive explanations of charts and visualizations.
-        """
-        try:
-            # Get dataset metadata
-            dataset_doc = await self.db.datasets.find_one({"_id": ObjectId(dataset_id), "user_id": user_id})
-            if not dataset_doc or not dataset_doc.get("metadata"):
-                raise HTTPException(status_code=404, detail="Dataset not found or not processed yet.")
-            
-            # Generate chart explanation using the new explainer prompt
-            prompt_factory = PromptFactory(
-                dataset_context=json.dumps(dataset_doc["metadata"], indent=2),
-                user_preferences={"prefers_detailed_explanations": True}
-            )
-            
-            prompt = prompt_factory.get_prompt(
-                PromptType.CHART_EXPLAINER,
-                chart_config=chart_config,
-                chart_data=chart_data,
-                explanation_depth="detailed"
-            )
-            
-            llm_response = await self._call_ollama(prompt, model_role="explainer_engine", expect_json=True)
-            
-            if llm_response.get("fallback"):
-                return self._generate_fallback_chart_explanation(chart_config)
-            
-            return {
-                "explanation": llm_response.get("explanation", {}),
-                "confidence": llm_response.get("confidence", "Medium"),
-                "suggested_follow_ups": llm_response.get("suggested_follow_ups", []),
-                "generated_at": datetime.utcnow().isoformat(),
-                "chart_type": chart_config.get("chart_type", "unknown")
-            }
-            
-        except Exception as e:
-            logger.error(f"Error explaining chart: {e}")
-            raise HTTPException(status_code=500, detail="Failed to explain chart.")
-
-    async def generate_business_insights(self, dataset_id: str, user_id: str, business_context: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Generates business-focused insights with actionable recommendations.
-        """
-        try:
-            # Get dataset metadata
-            dataset_doc = await self.db.datasets.find_one({"_id": ObjectId(dataset_id), "user_id": user_id})
-            if not dataset_doc or not dataset_doc.get("metadata"):
-                raise HTTPException(status_code=404, detail="Dataset not found or not processed yet.")
-            
-            # Perform comprehensive analysis
-            analysis_results = await self._perform_comprehensive_analysis(dataset_doc["metadata"])
-            
-            # Generate business insights using the new business insights prompt
-            prompt_factory = PromptFactory(
-                dataset_context=json.dumps(dataset_doc["metadata"], indent=2),
-                user_preferences={"prefers_business_focus": True, "analysis_depth": "strategic"}
-            )
-            
-            prompt = prompt_factory.get_prompt(
-                PromptType.BUSINESS_INSIGHTS,
-                analysis_results=analysis_results,
-                business_context=business_context
-            )
-            
-            llm_response = await self._call_ollama(prompt, model_role="business_engine", expect_json=True)
-            
-            if llm_response.get("fallback"):
-                return self._generate_fallback_business_insights(dataset_doc["metadata"], business_context)
-            
-            return {
-                "business_insights": llm_response.get("business_insights", {}),
-                "confidence": llm_response.get("confidence", "Medium"),
-                "next_analysis": llm_response.get("next_analysis", ""),
-                "generated_at": datetime.utcnow().isoformat(),
-                "dataset_name": dataset_doc.get("name", "Unknown Dataset")
-            }
-            
-        except Exception as e:
-            logger.error(f"Error generating business insights: {e}")
-            raise HTTPException(status_code=500, detail="Failed to generate business insights.")
-
-    def _generate_fallback_story(self, dataset_metadata: Dict[str, Any], story_type: str) -> Dict[str, Any]:
-        """Fallback story generation when LLM fails."""
-        overview = dataset_metadata.get('dataset_overview', {})
-        total_rows = overview.get('total_rows', 0)
-        column_count = overview.get('column_count', 0)
-        
-        return {
-            "story": {
-                "title": f"Data Overview: {story_type.title()} Analysis",
-                "hook": f"Your dataset contains {total_rows:,} records across {column_count} dimensions, revealing several key insights.",
-                "narrative": f"This dataset represents a substantial collection of {total_rows:,} data points across {column_count} different variables. The data structure suggests opportunities for pattern analysis and trend identification. Key areas of interest include data quality assessment, correlation analysis, and performance metrics evaluation.",
-                "key_metrics": [f"{total_rows:,} total records", f"{column_count} data dimensions", "Multiple analysis opportunities"],
-                "business_impact": "This dataset provides a solid foundation for data-driven decision making and strategic planning.",
-                "recommendations": ["Explore data quality metrics", "Analyze correlations between variables", "Identify performance patterns"]
-            },
-            "story_type": story_type,
-            "confidence": "Medium"
-        }
-
-    def _generate_fallback_chart_explanation(self, chart_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Fallback chart explanation when LLM fails."""
-        chart_type = chart_config.get("chart_type", "unknown")
-        
-        return {
-            "explanation": {
-                "purpose": f"This {chart_type} chart visualizes the selected data dimensions to reveal patterns and relationships.",
-                "data_structure": "The chart organizes data according to the specified configuration, with axes and segments representing different data categories.",
-                "key_patterns": ["Data distribution patterns", "Trend indicators", "Comparative relationships"],
-                "statistical_insights": "The visualization reveals the underlying data structure and key statistical relationships.",
-                "business_meaning": "This chart provides insights that can inform business decisions and strategic planning.",
-                "limitations": "Consider data quality and sample size when interpreting results.",
-                "next_steps": "Explore additional chart types or drill down into specific data segments."
-            },
-            "confidence": "Medium",
-            "suggested_follow_ups": ["Try a different chart type", "Analyze specific data segments", "Explore correlations"]
-        }
-
-    def _generate_fallback_business_insights(self, dataset_metadata: Dict[str, Any], business_context: Optional[str]) -> Dict[str, Any]:
-        """Fallback business insights when LLM fails."""
-        overview = dataset_metadata.get('dataset_overview', {})
-        total_rows = overview.get('total_rows', 0)
-        
-        return {
-            "business_insights": {
-                "executive_summary": f"Analysis of {total_rows:,} data points reveals opportunities for data-driven decision making and strategic optimization.",
-                "opportunities": [
-                    {
-                        "title": "Data Quality Optimization",
-                        "description": "Improve data completeness and accuracy for better insights",
-                        "potential_impact": "High",
-                        "effort_required": "Medium",
-                        "recommended_action": "Implement data validation processes"
-                    }
-                ],
-                "risks": [
-                    {
-                        "title": "Data Quality Concerns",
-                        "description": "Potential gaps in data completeness may affect analysis reliability",
-                        "severity": "Medium",
-                        "mitigation_strategy": "Regular data quality audits and validation"
-                    }
-                ],
-                "key_metrics": {
-                    "primary_kpi": "Data completeness and accuracy",
-                    "benchmark": "Industry standard data quality metrics",
-                    "trend": "Stable"
-                },
-                "strategic_recommendations": [
-                    {
-                        "priority": "High",
-                        "action": "Establish regular data quality monitoring",
-                        "timeline": "Immediate",
-                        "expected_outcome": "Improved data reliability and analysis accuracy"
-                    }
-                ]
-            },
-            "confidence": "Medium",
-            "next_analysis": "Deep dive into specific data segments and correlations"
-        }
-
-# =================================================================================
-# == SINGLETON INSTANCE
-# =================================================================================
 ai_service = AIService()

@@ -1,8 +1,9 @@
-import React from 'react';
-import { motion } from 'framer-motion';
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   TrendingUp, TrendingDown, Database, Users, FileText, BarChart3, 
-  PieChart, LineChart, Activity, DollarSign, Target, Zap 
+  PieChart, LineChart, Activity, DollarSign, Target, Zap, 
+  Lightbulb, ChevronDown, ChevronUp, Eye, EyeOff
 } from 'lucide-react';
 import { ResponsiveContainer, LineChart as RechartsLineChart, BarChart as RechartsBarChart, PieChart as RechartsPieChart, Line, Bar, Pie, Cell, XAxis, YAxis, Tooltip } from 'recharts';
 import PlotlyChart from './PlotlyChart';
@@ -10,6 +11,8 @@ import PlotlyChart from './PlotlyChart';
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'];
 
 const DashboardComponent = ({ component, datasetData }) => {
+  const [showInsights, setShowInsights] = useState(false);
+  
   // Only apply grid span for non-KPI components since KPIs have their own grid
   const gridSpanStyle = component.type === 'kpi' ? {} : { gridColumn: `span ${component.span || 1}` };
   
@@ -55,10 +58,25 @@ const DashboardComponent = ({ component, datasetData }) => {
       console.log('No data or config, returning fallback');
       return generateFallbackChartData(config);
     }
+    
+    // Log available columns for debugging
+    if (data.length > 0) {
+      console.log('Available columns:', Object.keys(data[0]));
+    }
 
     try {
       const { chart_type, columns, aggregation, group_by } = config;
       console.log('Chart config:', { chart_type, columns, aggregation, group_by });
+      
+      // Check if required columns exist in data
+      if (data.length > 0) {
+        const availableColumns = Object.keys(data[0]);
+        const missingColumns = columns.filter(col => !availableColumns.includes(col));
+        if (missingColumns.length > 0) {
+          console.error('Missing columns:', missingColumns, 'Available:', availableColumns);
+          return generateFallbackChartData(config);
+        }
+      }
       
       if (chart_type === 'line_chart' && columns.length >= 2) {
         // Group data by the group_by column and aggregate
@@ -255,14 +273,15 @@ const DashboardComponent = ({ component, datasetData }) => {
                      'Data visualization'}
                   </p>
                 </div>
-                <div className="text-right">
-                  <div className="text-sm text-slate-500">Data Points</div>
-                  <div className="text-xl font-bold text-white">
-                    {chartData.length > 0 ? chartData.length : 0}
+                  <div className="text-right">
+                    <div className="text-sm text-slate-500">Data Points</div>
+                    <div className="text-xl font-bold text-white">
+                      {chartData.length > 0 ? chartData.length : 0}
                   </div>
                 </div>
               </div>
-              <div className="h-[500px]">
+              
+              <div className="h-[600px]">
                 {chartData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
                     {component.config?.chart_type === 'line_chart' ? (
@@ -380,14 +399,70 @@ const DashboardComponent = ({ component, datasetData }) => {
                     )}
                   </ResponsiveContainer>
                 ) : (
-                  <div className="flex items-center justify-center h-full text-slate-400">
+                  <div className="flex items-center justify-center h-full">
                     <div className="text-center">
-                      <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                      <p>No data available for this chart</p>
+                      <div className="w-16 h-16 bg-slate-800/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                        <BarChart3 className="w-8 h-8 text-slate-500" />
+                      </div>
+                      <p className="text-slate-500 text-sm">Chart will appear when data is available</p>
                     </div>
                   </div>
                 )}
               </div>
+              
+              {/* Insights Panel - Below chart, full width */}
+              {component.insight && (
+                <div className="mt-6 bg-gradient-to-br from-blue-500/10 to-purple-500/10 rounded-xl p-6 border border-blue-500/20">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
+                      <Lightbulb className="w-5 h-5 text-blue-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-white">AI Insights</h3>
+                      <p className="text-xs text-slate-400">Why this chart matters for your business</p>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {component.insight.insight?.summary && (
+                      <div>
+                        <h4 className="text-sm font-semibold text-blue-300 mb-2">Summary</h4>
+                        <p className="text-sm text-slate-300 leading-relaxed">
+                          {component.insight.insight.summary}
+                        </p>
+                      </div>
+                    )}
+                    
+                    {component.insight.insight?.key_findings && component.insight.insight.key_findings.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-semibold text-green-300 mb-2">Key Findings</h4>
+                        <ul className="space-y-2">
+                          {component.insight.insight.key_findings.slice(0, 3).map((finding, index) => (
+                            <li key={index} className="text-sm text-slate-300 flex items-start gap-2">
+                              <span className="text-green-400 mt-1">✓</span>
+                              <span>{finding}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    
+                    {component.insight.insight?.recommendations && component.insight.insight.recommendations.length > 0 && (
+                      <div className="md:col-span-2">
+                        <h4 className="text-sm font-semibold text-amber-300 mb-2">Recommended Actions</h4>
+                        <ul className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {component.insight.insight.recommendations.slice(0, 4).map((rec, index) => (
+                            <li key={index} className="text-sm text-slate-300 flex items-start gap-2 bg-amber-500/5 rounded-lg p-3 border border-amber-500/10">
+                              <span className="text-amber-400 mt-0.5">→</span>
+                              <span>{rec}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </motion.div>
         );
