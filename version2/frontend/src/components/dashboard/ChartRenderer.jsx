@@ -31,12 +31,12 @@ const ChartRenderer = ({
   const renderChart = () => {
     if (!data || data.length === 0) {
       return (
-        <div className="flex items-center justify-center h-48 text-slate-400">
+        <div className="flex items-center justify-center h-48">
           <div className="text-center">
-            <div className="w-12 h-12 bg-slate-800 rounded-lg flex items-center justify-center mx-auto mb-3">
+            <div className="w-16 h-16 bg-slate-800/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
               {getChartIcon()}
             </div>
-            <p className="text-sm">No data available</p>
+            <p className="text-slate-500 text-sm">Chart will appear when data is available</p>
           </div>
         </div>
       )

@@ -13,11 +13,11 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   const navItems = [
-    { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
-    { icon: Database, label: 'Datasets', path: '/datasets' },
-    { icon: MessageSquare, label: 'AI Chat', path: '/chat' },
-    { icon: BarChart3, label: 'Charts', path: '/charts' },
-    { icon: History, label: 'Chat History', path: '/chat-history', isButton: true, onClick: () => setShowHistoryModal(true) },
+    { icon: LayoutDashboard, label: 'Dashboard', path: '/app/dashboard' },
+    { icon: Database, label: 'Datasets', path: '/app/datasets' },
+    { icon: MessageSquare, label: 'AI Chat', path: '/app/chat' },
+    { icon: BarChart3, label: 'Charts', path: '/app/charts' },
+    { icon: History, label: 'Chat History', path: '/app/chat-history', isButton: true, onClick: () => setShowHistoryModal(true) },
   ];
 
   return (
@@ -152,8 +152,8 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
                 <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
               </motion.div>
             </div>
-            <NavLink
-              to="/settings"
+            {/* <NavLink
+              to="/app/settings"
               className={({ isActive }) =>
                 cn(
                   "flex items-center gap-3 px-4 py-3 mt-2 rounded-lg transition-all duration-200 focus-visible-ring w-full",
@@ -168,7 +168,7 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
               <span className={cn("whitespace-nowrap", !(isOpen || onHover) && "hidden")}>
                 Settings
               </span>
-            </NavLink>
+            </NavLink> */}
             <button
               onClick={logout}
               className={cn(

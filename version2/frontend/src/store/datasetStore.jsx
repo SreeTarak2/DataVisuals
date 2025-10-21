@@ -56,7 +56,7 @@ const useDatasetStore = create(
         }
       },
       
-      // Rest unchanged (upload, delete, etc.)
+      // Enhanced upload with duplicate detection
       uploadDataset: async (file, name = '', description = '') => {
         const uploadToast = toast.loading('Uploading...');
         set({ isUploading: true, uploadProgress: 0, error: null });
@@ -71,8 +71,29 @@ const useDatasetStore = create(
             toast.loading(`Uploading: ${progress}%`, { id: uploadToast });
           });
           
-          // The upload response contains dataset_id, not the full dataset
-          const { dataset_id } = response.data;
+          const responseData = response.data;
+          
+          // Check if it's a duplicate
+          if (responseData.is_duplicate) {
+            toast.dismiss(uploadToast);
+            toast.error('Dataset already exists! This file has been uploaded before.', {
+              duration: 5000,
+              style: {
+                background: '#fef2f2',
+                color: '#dc2626',
+                border: '1px solid #fecaca'
+              }
+            });
+            set({ isUploading: false, uploadProgress: 0 });
+            return { 
+              success: false, 
+              isDuplicate: true, 
+              existingDataset: responseData.existing_dataset 
+            };
+          }
+          
+          // New dataset uploaded successfully
+          const { dataset_id } = responseData;
           
           // Fetch the full dataset data
           const datasetResponse = await datasetAPI.getDataset(dataset_id);
@@ -84,8 +105,9 @@ const useDatasetStore = create(
             uploadProgress: 100,
           }));
           
-          toast.success('Dataset uploaded!', { id: uploadToast });
+          toast.success('Dataset uploaded successfully!', { id: uploadToast });
           return { success: true, dataset: newDataset };
+          
         } catch (error) {
           const errMsg = error.response?.data?.detail || 'Upload failed';
           set({ error: errMsg, isUploading: false, uploadProgress: 0 });

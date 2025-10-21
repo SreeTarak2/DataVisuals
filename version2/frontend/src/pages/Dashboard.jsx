@@ -28,6 +28,29 @@ const Dashboard = () => {
   const [layoutLoading, setLayoutLoading] = useState(false);
   const [datasetData, setDatasetData] = useState([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [typedGreeting, setTypedGreeting] = useState('');
+
+  // Derive username for greeting
+  const username = (user?.name || user?.username || (user?.email ? user.email.split('@')[0] : '') || 'User').toString();
+
+  // Typewriter effect for greeting
+  useEffect(() => {
+    const fullText = `Welcome ${username}`;
+    let index = 0;
+    setTypedGreeting('');
+    const interval = setInterval(() => {
+      setTypedGreeting(prev => {
+        const next = fullText.slice(0, index + 1);
+        index += 1;
+        if (index >= fullText.length) {
+          clearInterval(interval);
+        }
+        return next;
+      });
+    }, 80);
+
+    return () => clearInterval(interval);
+  }, [username]);
 
   // Icon mapping for insights
   const iconMap = {
@@ -159,7 +182,6 @@ const Dashboard = () => {
                 loadDashboardData();
               }
             } catch (error) {
-              console.error('Error polling for dataset updates:', error);
             }
           }, 3000);
           
@@ -193,7 +215,6 @@ const Dashboard = () => {
             column_count: selectedDataset.column_count || 9
           });
         } else {
-          console.log('Using fallback KPI data');
           setKpiData(fallbackKpis);
           setDatasetInfo({
             name: selectedDataset.name,
@@ -207,7 +228,6 @@ const Dashboard = () => {
           const insightsData = await insightsRes.value.json();
           setInsights(insightsData.insights || fallbackInsights);
         } else {
-          console.log('Using fallback insights data');
           setInsights(fallbackInsights);
         }
 
@@ -216,7 +236,6 @@ const Dashboard = () => {
           const chartsData = await chartsRes.value.json();
           setChartData(chartsData.charts || fallbackCharts);
         } else {
-          console.log('Using fallback chart data');
           setChartData(fallbackCharts);
         }
 
@@ -226,7 +245,6 @@ const Dashboard = () => {
         }
 
       } catch (err) {
-        console.error('Dashboard load failed:', err);
         // Use fallback data on complete failure
         const { fallbackKpis, fallbackCharts, fallbackInsights } = generateFallbackData();
         setKpiData(fallbackKpis);
@@ -284,7 +302,6 @@ const Dashboard = () => {
         throw new Error('Failed to generate AI dashboard');
       }
     } catch (error) {
-      console.error('AI Dashboard generation failed:', error);
       toast.error('Failed to generate AI dashboard');
     } finally {
       setLayoutLoading(false);
@@ -299,13 +316,11 @@ const Dashboard = () => {
   // Load data preview
   const loadDataPreview = async (datasetId, token) => {
     if (!datasetId) {
-      console.warn('loadDataPreview: No dataset ID provided');
       return;
     }
     
     try {
       setPreviewLoading(true);
-      console.log('Loading data preview for dataset:', datasetId);
       
       const response = await fetch(`/api/datasets/${datasetId}/preview?limit=10`, {
         headers: {
@@ -314,19 +329,14 @@ const Dashboard = () => {
         }
       });
 
-      console.log('Data preview response status:', response.status);
       
       if (response.ok) {
         const data = await response.json();
-        console.log('Data preview response:', data);
         setDataPreview(data.rows || []);
       } else {
-        console.warn('Could not load data preview, response status:', response.status);
         const errorText = await response.text();
-        console.warn('Error response:', errorText);
         
         // Fallback to regular data endpoint
-        console.log('Trying fallback to regular data endpoint...');
         try {
           const fallbackResponse = await fetch(`/api/datasets/${datasetId}/data?page=1&page_size=10`, {
             headers: {
@@ -337,19 +347,15 @@ const Dashboard = () => {
           
           if (fallbackResponse.ok) {
             const fallbackData = await fallbackResponse.json();
-            console.log('Fallback data response:', fallbackData);
             setDataPreview(fallbackData.data || []);
           } else {
-            console.warn('Fallback also failed, status:', fallbackResponse.status);
             setDataPreview([]);
           }
         } catch (fallbackErr) {
-          console.warn('Fallback error:', fallbackErr);
           setDataPreview([]);
         }
       }
     } catch (err) {
-      console.warn('Data preview loading error:', err);
       setDataPreview([]);
     } finally {
       setPreviewLoading(false);
@@ -435,7 +441,6 @@ const Dashboard = () => {
 
       toast.success('Dashboard refreshed successfully');
     } catch (err) {
-      console.error('Refresh failed:', err);
       toast.error('Failed to refresh dashboard');
     } finally {
       setLoading(false);
@@ -475,7 +480,8 @@ const Dashboard = () => {
         <div className="space-y-2">
           <h1 className="text-4xl font-bold text-white tracking-tight flex items-center gap-3">
             <Sparkles className="w-10 h-10 text-emerald-400" />
-            DataSage AI
+            <span>{typedGreeting}</span>
+            <span className="inline-block w-1 h-6 bg-white/80 animate-pulse translate-y-0.5" />
         </h1>
           <p className="text-slate-400 text-lg">
             {selectedDataset?.name ? (
@@ -525,7 +531,7 @@ const Dashboard = () => {
         /* No Dataset State */
         <div className="text-center py-20 bg-slate-800/50 border border-slate-700 rounded-xl">
           <Database className="w-16 h-16 mx-auto text-slate-500 mb-6" />
-          <h3 className="text-2xl font-semibold text-white mb-3">Welcome to DataSage AI</h3>
+          <h3 className="text-2xl font-semibold text-white mb-3">Welcome {username}</h3>
           <p className="text-slate-400 mb-8 max-w-md mx-auto">
             Upload your first dataset to begin your AI-powered data exploration journey. 
             Our intelligent system will automatically analyze and create beautiful visualizations for you.
@@ -722,7 +728,6 @@ const Dashboard = () => {
                         <BarChart3 className="w-6 h-6 opacity-50" />
                       </div>
                       <p className="text-sm">No data preview available</p>
-                      <p className="text-xs mt-1">Check browser console for debugging info</p>
                       <button 
                         onClick={() => {
                           const token = localStorage.getItem('datasage-token');
@@ -1297,7 +1302,6 @@ const Dashboard = () => {
                     <BarChart3 className="w-6 h-6 opacity-50" />
                   </div>
                   <p className="text-sm">No data preview available</p>
-                  <p className="text-xs mt-1">Check browser console for debugging info</p>
                   <button 
                     onClick={() => {
                       const token = localStorage.getItem('datasage-token');

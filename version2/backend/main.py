@@ -1,6 +1,6 @@
 # backend/main.py
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, status, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, status, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any
@@ -78,6 +78,24 @@ async def health_check():
         "cors_origins": settings.ALLOWED_ORIGINS,
         "version": "3.0.0"
     }
+
+@app.get("/api/models/status")
+async def get_model_status():
+    """Get the health status of all AI models"""
+    try:
+        status = await ai_service.get_model_status()
+        return {
+            "status": "success",
+            "models": status,
+            "fallback_enabled": settings.MODEL_FALLBACK_ENABLED
+        }
+    except Exception as e:
+        logger.error(f"Error getting model status: {e}")
+        return {
+            "status": "error",
+            "message": "Failed to get model status",
+            "error": str(e)
+        }
 
 @app.get("/api/auth/me", response_model=User)
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
@@ -164,32 +182,180 @@ async def get_dataset_preview(
         logger.error(f"Error getting dataset preview: {e}")
         raise HTTPException(status_code=500, detail="Failed to get dataset preview")
 
+@app.get("/api/datasets/{dataset_id}/columns")
+async def get_dataset_columns(
+    dataset_id: str, current_user: dict = Depends(get_current_user)
+):
+    """
+    Get dataset columns with their data types for chart configuration.
+    """
+    try:
+        # Get dataset info
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Load dataset data
+        df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
+        if df is None:
+            raise HTTPException(status_code=404, detail="Dataset data not found")
+        
+        # Get column information
+        columns = []
+        for col in df.columns:
+            dtype = df[col].dtype
+            is_numeric = dtype in pl.NUMERIC_DTYPES
+            is_categorical = dtype in [pl.Utf8, pl.Categorical]
+            is_temporal = dtype in [pl.Date, pl.Datetime]
+            
+            columns.append({
+                "name": col,
+                "type": str(dtype),
+                "is_numeric": is_numeric,
+                "is_categorical": is_categorical,
+                "is_temporal": is_temporal,
+                "sample_values": df[col].head(5).to_list() if len(df) > 0 else []
+            })
+        
+        return {
+            "success": True,
+            "columns": columns,
+            "dataset_info": {
+                "name": dataset["name"],
+                "row_count": len(df),
+                "column_count": len(df.columns)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting dataset columns: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get dataset columns")
+
 # --- NEW AND REFACTORED AI & ANALYSIS ENDPOINTS ---
 
 @app.post("/api/datasets/{dataset_id}/chat")
 async def process_chat(
     dataset_id: str, 
     request: ChatRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    mode: str = Query("learning", description="Chat mode: learning, quick, deep, or forecast")
 ):
+    # Validate mode parameter
+    valid_modes = ["learning", "quick", "deep", "forecast"]
+    if mode not in valid_modes:
+        raise HTTPException(status_code=422, detail=f"Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}")
     """
-    Handles conversational chat with memory. The frontend must pass back
-    the `conversation_id` on subsequent messages in the same chat thread.
+    Enhanced conversational chat with pedagogical approach, RAG integration, and validation.
+    The frontend must pass back the `conversation_id` on subsequent messages in the same chat thread.
+    
+    Modes:
+    - "learning": Enhanced pedagogical approach with analogies and learning arcs
+    - "quick": Fast responses for simple queries
+    - "deep": Comprehensive analysis for complex queries
+    - "forecast": Predictive analysis mode
     """
     try:
-        # Use AI service for chat processing
-        response = await ai_service.process_chat_message(
+        # Use enhanced AI service for chat processing
+        response = await ai_service.process_chat_message_enhanced(
             query=request.message,
             dataset_id=dataset_id,
             user_id=current_user["id"],
-            conversation_id=request.conversation_id
+            conversation_id=request.conversation_id,
+            mode=mode
         )
         return response
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Chat processing error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process chat query.")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/chat/conversations")
+async def get_chat_conversations(current_user: dict = Depends(get_current_user)):
+    """Get all chat conversations for the current user"""
+    try:
+        conversations = await ai_service.get_user_conversations(current_user["id"])
+        return {"conversations": conversations}
+    except Exception as e:
+        logger.error(f"Failed to get conversations: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get chat conversations")
+
+@app.get("/api/chat/conversations/{conversation_id}")
+async def get_conversation(
+    conversation_id: str, 
+    current_user: dict = Depends(get_current_user)
+):
+    """Get a specific conversation by ID"""
+    try:
+        conversation = await ai_service.get_conversation(conversation_id, current_user["id"])
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"conversation": conversation}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get conversation: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get conversation")
+
+@app.delete("/api/chat/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str, 
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete a specific conversation"""
+    try:
+        success = await ai_service.delete_conversation(conversation_id, current_user["id"])
+        if not success:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"message": "Conversation deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete conversation: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete conversation")
+
+@app.get("/api/datasets/{dataset_id}/cached-charts")
+async def get_cached_charts(
+    dataset_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all cached charts for a dataset"""
+    try:
+        from services.chart_insights_service import chart_insights_service
+        cached_charts = await chart_insights_service.get_dataset_cached_charts(dataset_id, current_user["id"])
+        return {"cached_charts": cached_charts}
+    except Exception as e:
+        logger.error(f"Failed to get cached charts: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cached charts")
+
+@app.post("/api/datasets/{dataset_id}/generate-chart-insight")
+async def generate_chart_insight(
+    dataset_id: str,
+    request: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Generate AI insights for a specific chart"""
+    try:
+        from services.chart_insights_service import chart_insights_service
+        
+        # Get dataset metadata
+        dataset_doc = await ai_service.db.datasets.find_one({"_id": ObjectId(dataset_id), "user_id": current_user["id"]})
+        if not dataset_doc or not dataset_doc.get("metadata"):
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        chart_config = request.get("chart_config", {})
+        chart_data = request.get("chart_data", [])
+        
+        insight = await chart_insights_service.generate_chart_insight(
+            chart_config, chart_data, dataset_doc["metadata"]
+        )
+        
+        return {"insight": insight}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate chart insight: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate chart insight")
 
 
 @app.post("/api/ai/generate-quis-insights")
@@ -649,9 +815,12 @@ async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(g
             total_value = df[primary_col].sum()
             mean_value = df[primary_col].mean()
             
+            # Only add dollar signs for actual financial/currency columns
+            is_currency = any(keyword in primary_col.lower() for keyword in ["price", "revenue", "sales", "cost", "amount", "dollar", "currency", "money"])
+            
             kpis.append({
                 "title": f"Total {primary_col}",
-                "value": f"${total_value:,.2f}" if "price" in primary_col.lower() or "revenue" in primary_col.lower() or "sales" in primary_col.lower() else f"{total_value:,.0f}",
+                "value": f"${total_value:,.2f}" if is_currency else f"{total_value:,.0f}",
                 "change": 0,  # Would need historical data for real change
                 "color": "success",
                 "trendData": []  # Would need time series data
@@ -659,7 +828,7 @@ async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(g
             
             kpis.append({
                 "title": f"Average {primary_col}",
-                "value": f"${mean_value:,.2f}" if "price" in primary_col.lower() or "revenue" in primary_col.lower() or "sales" in primary_col.lower() else f"{mean_value:,.0f}",
+                "value": f"${mean_value:,.2f}" if is_currency else f"{mean_value:,.0f}",
                 "change": 0,
                 "color": "info",
                 "trendData": []
@@ -825,7 +994,7 @@ async def generate_analytics_chart(
     request: Dict[str, Any],
     current_user: dict = Depends(get_current_user)
 ):
-    """Generate chart data for analytics studio"""
+    """Generate chart data for analytics studio using upgraded Plotly-compatible renderer"""
     try:
         dataset_id = request.get("dataset_id")
         chart_type = request.get("chart_type", "bar")
@@ -833,8 +1002,13 @@ async def generate_analytics_chart(
         y_axis = request.get("y_axis")
         aggregation = request.get("aggregation", "sum")
         
-        if not dataset_id or not x_axis or not y_axis:
-            raise HTTPException(status_code=400, detail="dataset_id, x_axis, and y_axis are required")
+        if not dataset_id or not x_axis:
+            raise HTTPException(status_code=400, detail="dataset_id and x_axis are required")
+        
+        # For charts that require y_axis, validate it
+        charts_requiring_y = ["bar", "line", "pie", "scatter", "area", "timeseries", "bubble", "heatmap"]
+        if chart_type in charts_requiring_y and not y_axis:
+            raise HTTPException(status_code=400, detail=f"y_axis is required for {chart_type} charts")
         
         # Get dataset
         dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
@@ -849,99 +1023,34 @@ async def generate_analytics_chart(
         # Validate that the requested columns exist
         if x_axis not in df.columns:
             raise HTTPException(status_code=400, detail=f"Column '{x_axis}' not found in dataset")
-        if y_axis not in df.columns:
+        if y_axis and y_axis not in df.columns:
             raise HTTPException(status_code=400, detail=f"Column '{y_axis}' not found in dataset")
         
+        # Check data types for better error messages
+        x_dtype = df[x_axis].dtype
+        y_dtype = df[y_axis].dtype if y_axis else None
+        
+        # Warn about potential issues
+        if y_dtype and y_dtype not in pl.NUMERIC_DTYPES and aggregation != "count":
+            logger.warning(f"Y-axis column '{y_axis}' is not numeric, aggregation '{aggregation}' may not work as expected")
+        
         # Log column types for debugging
-        logger.info(f"Chart generation - X-axis: {x_axis} (type: {df[x_axis].dtype}), Y-axis: {y_axis} (type: {df[y_axis].dtype})")
+        logger.info(f"Chart generation - X-axis: {x_axis} (type: {df[x_axis].dtype}), Y-axis: {y_axis} (type: {df[y_axis].dtype if y_axis else 'N/A'})")
         
-        # Generate chart data based on type
-        chart_data = []
+        # Prepare chart configuration for the new service
+        # Note: columns[0] should be the value column (Y-axis), group_by should be the category column (X-axis)
         
-        # Helper function to safely convert values to numeric
-        def safe_to_numeric(value):
-            if value is None:
-                return 0
-            try:
-                # Try to convert to float first
-                return float(value)
-            except (ValueError, TypeError):
-                # If conversion fails, try to extract numeric part or use count
-                if isinstance(value, str):
-                    # Try to extract numbers from string
-                    import re
-                    numbers = re.findall(r'-?\d+\.?\d*', str(value))
-                    if numbers:
-                        return float(numbers[0])
-                # If all else fails, return 0
-                return 0
+        chart_config = {
+            "chart_type": chart_type,
+            "columns": [y_axis] if y_axis else [x_axis],  # Value column (Y-axis)
+            "group_by": x_axis,  # Category column (X-axis)
+            "aggregation": aggregation  # Use the requested aggregation
+        }
         
-        # Helper function to safely convert values to string
-        def safe_to_string(value):
-            if value is None:
-                return "Unknown"
-            return str(value)
+        logger.info(f"Using {aggregation} aggregation for {chart_type} chart")
         
-        if chart_type == "pie":
-            # For pie charts, group by x-axis and aggregate y-axis
-            # Check if y_axis is numeric, if not use count
-            try:
-                # Try to use the requested aggregation
-                grouped = df.group_by(x_axis).agg([
-                    getattr(pl.col(y_axis), aggregation)().alias("value")
-                ]).sort("value", descending=True).limit(10)
-            except Exception:
-                # If aggregation fails (e.g., sum on strings), use count instead
-                grouped = df.group_by(x_axis).agg([
-                    pl.col(y_axis).count().alias("value")
-                ]).sort("value", descending=True).limit(10)
-            
-            chart_data = [
-                {
-                    "name": safe_to_string(row[x_axis]),
-                    "value": safe_to_numeric(row["value"])
-                }
-                for row in grouped.to_dicts()
-            ]
-        else:
-            # For other charts, check if Y-axis is numeric or categorical
-            # If Y-axis is categorical, group by X-axis and count Y-axis values
-            try:
-                # Try to determine if Y-axis is numeric by attempting aggregation
-                test_agg = df.select(pl.col(y_axis).sum()).item()
-                is_numeric = True
-            except Exception:
-                is_numeric = False
-            
-            if is_numeric:
-                # For numeric Y-axis, use the data as-is
-                sample_data = df.limit(100)  # Limit to 100 rows for performance
-                chart_data = [
-                    {
-                        "name": safe_to_string(row[x_axis]),
-                        x_axis: safe_to_string(row[x_axis]),
-                        y_axis: safe_to_numeric(row[y_axis]),
-                        "x": i,
-                        "y": safe_to_numeric(row[y_axis])
-                    }
-                    for i, row in enumerate(sample_data.to_dicts())
-                ]
-            else:
-                # For categorical Y-axis, group by X-axis and count occurrences
-                grouped = df.group_by(x_axis).agg([
-                    pl.col(y_axis).count().alias("count")
-                ]).sort("count", descending=True).limit(20)
-                
-                chart_data = [
-                    {
-                        "name": safe_to_string(row[x_axis]),
-                        x_axis: safe_to_string(row[x_axis]),
-                        y_axis: safe_to_numeric(row["count"]),
-                        "x": i,
-                        "y": safe_to_numeric(row["count"])
-                    }
-                    for i, row in enumerate(grouped.to_dicts())
-                ]
+        # Generate chart data using the new service
+        chart_data = await chart_render_service.render_chart_from_config(chart_config, dataset["file_path"])
         
         return {
             "chart_data": chart_data,
@@ -1332,6 +1441,121 @@ async def get_ai_dashboard_layout(
     except Exception as e:
         logger.error(f"Error generating AI dashboard layout: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate AI dashboard layout")
+
+@app.get("/api/debug/ollama-status")
+async def debug_ollama_status(current_user: dict = Depends(get_current_user)):
+    """Debug endpoint to check Ollama connection status."""
+    try:
+        from services.ai_service import ai_service
+        
+        # Test both URLs
+        llama_status = await ai_service.test_ollama_connection("https://09acb44ee9fa.ngrok-free.app")
+        llava_status = await ai_service.test_ollama_connection("https://wilber-unremarried-reversibly.ngrok-free.dev")
+        
+        return {
+            "llama_status": llama_status,
+            "llava_status": llava_status,
+            "model_configs": {
+                "llama_url": "https://09acb44ee9fa.ngrok-free.app",
+                "llava_url": "https://wilber-unremarried-reversibly.ngrok-free.dev"
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error checking Ollama status: {e}")
+        return {"error": str(e)}
+
+@app.get("/api/debug/test-ngrok")
+async def test_ngrok():
+    """Simple test to check if ngrok URL is accessible."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get("https://09acb44ee9fa.ngrok-free.app/api/tags")
+            return {
+                "status": "success",
+                "status_code": response.status_code,
+                "response": response.text[:500] if response.text else "No response body"
+            }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "error_type": type(e).__name__
+        }
+
+@app.get("/api/datasets/{dataset_id}/column-importance")
+async def get_column_importance(
+    dataset_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get column importance analysis using QUIS system.
+    Uses the existing QUIS subspace search to identify important columns.
+    """
+    try:
+        from services.ai_service import ai_service
+        
+        # Get dataset
+        dataset_doc = await db.datasets.find_one({"_id": dataset_id, "user_id": current_user["_id"]})
+        if not dataset_doc:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Use QUIS to analyze column importance
+        query = "What are the most important columns in this dataset and why are they crucial for analysis?"
+        
+        # Call QUIS analysis
+        quis_response = await ai_service.analyze_with_quis(
+            query=query,
+            dataset_doc=dataset_doc,
+            current_user=current_user
+        )
+        
+        return {
+            "analysis": quis_response.get("response_text", "Analysis completed"),
+            "insights": quis_response.get("insights", []),
+            "method": "QUIS Subspace Search",
+            "recommendation": "Use QUIS Q&A system to ask specific questions about column importance and relationships."
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing column importance with QUIS: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze column importance: {str(e)}")
+
+@app.get("/api/debug/test-dashboard-generation")
+async def test_dashboard_generation(dataset_id: str, current_user: dict = Depends(get_current_user)):
+    """Test dashboard generation step by step."""
+    try:
+        from services.ai_service import ai_service
+        from core.prompts import PromptFactory, PromptType
+        
+        # Get dataset
+        dataset_doc = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        if not dataset_doc or not dataset_doc.get("metadata"):
+            return {"error": "Dataset not found or not ready"}
+        
+        # Test context creation
+        context_str = ai_service._create_enhanced_llm_context(dataset_doc["metadata"], dataset_doc["file_path"])
+        
+        # Test prompt creation
+        chart_ids = [chart['id'] for chart in ai_service.chart_definitions.values()]
+        factory = PromptFactory(dataset_context=context_str)
+        prompt = factory.get_prompt(PromptType.DASHBOARD_DESIGNER, chart_options=chart_ids, max_components=12)
+        
+        # Test AI call
+        logger.info("Testing dashboard generation AI call...")
+        layout_response = await ai_service._call_ollama(prompt, model_role="visualization_engine", expect_json=True)
+        
+        return {
+            "context_length": len(context_str),
+            "chart_options_count": len(chart_ids),
+            "prompt_length": len(prompt),
+            "ai_response": layout_response,
+            "has_dashboard": "dashboard" in layout_response,
+            "has_components": "components" in layout_response.get("dashboard", {})
+        }
+    except Exception as e:
+        logger.error(f"Dashboard generation test failed: {e}")
+        return {"error": str(e), "error_type": type(e).__name__}
 
 
 if __name__ == "__main__":
