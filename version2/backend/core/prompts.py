@@ -94,6 +94,16 @@ class PromptFactory:
             
             parsed = json.loads(json_str)
             
+            # Echo Detection - Check if model copied template text
+            response_text = parsed.get("response_text", "")
+            if ("pedagogical approach" in response_text and "150-250 words" in response_text) or "[ORIGINAL" in response_text:
+                return {
+                    "valid": False,
+                    "parsed": None,
+                    "error": "Echo detected - model copied template text instead of generating original content",
+                    "suggestion": "Retry with simplified prompt"
+                }
+            
             # Validate against ConversationalResponse schema for conversational prompts
             if prompt_type == PromptType.CONVERSATIONAL:
                 validation_result = ConversationalResponse(**parsed)
@@ -185,15 +195,19 @@ class PromptFactory:
         - Builds learning arcs: hook → explain → reflect → next
         - Compresses history for token efficiency
         """
-        history_summary = self._summarize_history(history[-2:])  # Compress to recent exchanges
+        history_summary = self._summarize_history(history[-2:] if len(history) >= 2 else history)  # Compress to recent exchanges
         chart_options_str = ", ".join(chart_options)
         hints_str = ", ".join(query_type_hints) if query_type_hints else ""
         few_shots = self.load_rag_few_shots(query, "current_dataset", 2)  # RAG integration
-        few_shots_str = "\n".join([f"Q: {fs['query']} → R: {fs['response'][:50]}..." for fs in few_shots])
+        few_shots_str = "\n".join([f"Q: {fs.get('query', '')} → R: {fs.get('response', '')[:50]}..." for fs in few_shots])
 
         # Query Rewrite if Vague
         if len(query.split()) < 3:  # Simple heuristic
-            query = f"Summarize key insights from {list(self.schema.get('columns', {}).keys())[0]} in a fun way."
+            columns = list(self.schema.get('columns', {}).keys())
+            if columns:
+                query = f"Summarize key insights from {columns[0]} in a fun way."
+            else:
+                query = "Summarize key insights from this dataset in a fun way."
 
         # Enhanced Common Rules with Pedagogy
         common_rules = """
@@ -206,46 +220,18 @@ class PromptFactory:
         """
 
         template = f"""
-        {common_rules}
+        Analyze the dataset and answer: {query}
 
-        --- DATASET SCHEMA (Dynamic) ---
-        {{schema}}
-        --- END ---
+        Dataset Schema: {{schema}}
 
-        --- COMPRESSED HISTORY ---
-        {history_summary}
-        --- END ---
-
-        Final Query (Rewritten if Vague): {query}
-        Mode: {mode} | Hints: {hints_str}
-
-        **CLASSIFICATION & ARC:**
-        ANALYTICAL: Build learning arc (hook/analogy/reflect).
-        VISUAL: Explain chart story + why it teaches.
-
-        **RAG FEW-SHOTS (Learn from Similar Chats):**
-        {few_shots_str}
-
-        **OUTPUT FORMAT (STRICT JSON SCHEMA):**
+        Provide a JSON response with:
         {{
-            "response_text": "Engaging response with pedagogical approach (150-250 words). Structure: Hook → Analogy → Explanation → Reflection question. Be conversational and delightful.",
-            "chart_config": null (analytical) OR {{"chart_type": "bar|line|...", "columns": ["col1"], "aggregation": "sum", "group_by": ["col2"]}} (visual),
-            "story_elements": {{
-                "hook": "Direct answer or fascinating fact",
-                "key_findings": ["Finding 1", "Finding 2", "Finding 3"],
-                "business_impact": "Why this matters for decision-making",
-                "next_questions": ["Follow-up question 1", "Follow-up question 2"]
-            }},
-            "confidence": "High|Med|Low",
-            "learning_arc": {{
-                "hook": "Engaging opening or fascinating fact",
-                "analogy": "Simple analogy to explain the concept",
-                "explanation": "Clear technical explanation",
-                "reflection": "Thought-provoking question for user"
-            }}
+            "response_text": "Your analysis and insights about the data trends (150-200 words). Include specific findings and what they mean.",
+            "chart_config": null OR {{"chart_type": "bar|line|pie", "columns": ["Column1", "Column2"], "aggregation": "sum"}},
+            "confidence": "High|Med|Low"
         }}
 
-        Provide ONLY the JSON object. No extra text.
+        Use actual column names from the schema. Generate original, engaging content.
         """
         return self._render_template(
             template,

@@ -16,7 +16,7 @@ class Settings:
     # OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "https://3aa913b93b79.ngrok-free.app/")
     # OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "mistral:7b")
 
-    LLAMA_BASE_URL = "https://e0e504f6703f.ngrok-free.app/"
+    LLAMA_BASE_URL = "https://6b6cb7783656.ngrok-free.app/"
     QWEN_BASE_URL = "https://wilber-unremarried-reversibly.ngrok-free.dev/"
 
     MODELS = {

@@ -1038,15 +1038,15 @@ async def generate_analytics_chart(
         logger.info(f"Chart generation - X-axis: {x_axis} (type: {df[x_axis].dtype}), Y-axis: {y_axis} (type: {df[y_axis].dtype if y_axis else 'N/A'})")
         
         # Prepare chart configuration for the new service
-        # Note: columns[0] should be the value column (Y-axis), group_by should be the category column (X-axis)
+        # For bar charts: columns[0] = X-axis (category), columns[1] = Y-axis (value)
         
         chart_config = {
             "chart_type": chart_type,
-            "columns": [y_axis] if y_axis else [x_axis],  # Value column (Y-axis)
-            "group_by": x_axis,  # Category column (X-axis)
+            "columns": [x_axis, y_axis] if y_axis else [x_axis],  # [X-axis, Y-axis] for proper mapping
             "aggregation": aggregation  # Use the requested aggregation
         }
         
+        logger.info(f"Chart config: {chart_config}")
         logger.info(f"Using {aggregation} aggregation for {chart_type} chart")
         
         # Generate chart data using the new service
