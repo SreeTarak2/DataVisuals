@@ -68,8 +68,8 @@ const ChatHistoryModal = ({ isOpen, onClose }) => {
       // Set the current conversation in the store
       setCurrentConversation(chatId);
       
-      // Navigate to the chat page with the conversation ID
-      navigate(`/chat?chatId=${chatId}`);
+      // Navigate to the chat page with the conversation ID (correct route path)
+      navigate(`/app/chat?chatId=${chatId}`);
       
       // Close the modal
       onClose();

@@ -386,11 +386,14 @@ const Charts = () => {
         // Check if backend returned x/y arrays (for scatter, area, line charts)
         if (item.x && item.y && Array.isArray(item.x) && Array.isArray(item.y)) {
           console.log(`Creating data points from x/y arrays`);
+          console.log(`x array length: ${item.x.length}, y array length: ${item.y.length}`);
           item.x.forEach((xValue, xIndex) => {
-            transformedData.push({
+            const dataPoint = {
               [xAxis]: xValue,
               [yAxis]: item.y[xIndex]
-            });
+            };
+            console.log(`Created data point:`, dataPoint);
+            transformedData.push(dataPoint);
           });
         }
         // Check if this item has the expected structure
@@ -424,6 +427,11 @@ const Charts = () => {
       });
       
       console.log('Bar/Line chart data:', transformedData);
+      console.log('Transformed data length:', transformedData.length);
+      if (transformedData.length > 0) {
+        console.log('First transformed item:', transformedData[0]);
+        console.log('First item keys:', Object.keys(transformedData[0]));
+      }
       return transformedData;
     }
     

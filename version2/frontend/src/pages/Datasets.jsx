@@ -61,7 +61,7 @@ const Datasets = () => {
   };
 
   const handleDatasetClick = (dataset) => {
-    navigate(`/chat?dataset=${dataset.id}`);
+    navigate(`/app/chat?dataset=${dataset.id}`);
   };
 
   const filteredDatasets = datasets.filter(dataset =>

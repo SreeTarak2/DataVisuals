@@ -27,7 +27,7 @@ class AIService:
     """
 
     def __init__(self):
-        self.http_client = httpx.AsyncClient(timeout=90.0, follow_redirects=True)
+        self.http_client = httpx.AsyncClient(timeout=180.0, follow_redirects=True)
         
         self.chart_definitions = {chart['id']: chart for chart in CHART_DEFINITIONS}
         self.quis_question_templates = {
@@ -54,14 +54,14 @@ class AIService:
         model_config = settings.MODELS.get(model_role)
         if not model_config:
             raise ValueError(f"Invalid model role specified: {model_role}")
-        
+
         primary_model = model_config.get("primary")
         if not primary_model:
             raise ValueError(f"No primary model configured for role: {model_role}")
-        
+
         model_name = primary_model["model"]
         base_url = primary_model["base_url"].rstrip('/')
-        
+
         logger.info(f"Routing request to model '{model_name}' at '{base_url}' for role '{model_role}'.")
 
         payload = {"model": model_name, "prompt": prompt, "stream": False}
@@ -71,23 +71,26 @@ class AIService:
         try:
             logger.info(f"Making request to: {base_url}/api/generate")
             logger.info(f"Payload: {payload}")
-            
+
             response = await self.http_client.post(
-                f"{base_url}/api/generate", 
+                f"{base_url}/api/generate",
                 json=payload,
                 # timeout=settings.MODEL_HEALTH_CHECK_TIMEOUT
             )
-            
+
             logger.info(f"Response status: {response.status_code}")
             logger.info(f"Response headers: {dict(response.headers)}")
-            
+
             if response.status_code == 404:
                 logger.error(f"404 Error: Ollama API not found at {base_url}. Check if Ollama is running and ngrok is properly configured.")
-                raise HTTPException(status_code=404, detail=f"Ollama API not accessible at {base_url}. Please check if Ollama is running and ngrok is configured correctly.")
-            
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Ollama API not accessible at {base_url}. Please check if Ollama is running and ngrok is configured correctly."
+                )
+
             response.raise_for_status()
             response_data = response.json()
-            
+
             if expect_json:
                 json_string = response_data.get("response", "{}")
                 logger.info(f"Raw AI response for {model_role}: {json_string[:500]}...")
@@ -99,20 +102,31 @@ class AIService:
                     logger.error(f"LLM '{model_name}' returned invalid JSON for role '{model_role}'. Response: {json_string[:500]}.... Error: {e}")
                     return {"error": "llm_json_parse_failed", "raw": json_string[:500]}
             else:
-                result = response_data.get("response", "").strip()
-                return result
-                
+                return response_data.get("response", "").strip()
+
         except (httpx.RequestError, httpx.TimeoutException) as e:
             logger.error(f"Model '{model_name}' failed for role '{model_role}': {e}")
             logger.error(f"Connection details - URL: {base_url}, Model: {model_name}, Error type: {type(e).__name__}")
+
             if expect_json:
-                return {
-                    "response_text": f"AI engine for '{model_role}' is currently unavailable. Connection failed to {base_url}. Error: {str(e)}",
-                    "error": "model_unavailable",
-                    "connection_error": str(e)
-                }
+                if isinstance(e, httpx.TimeoutException):
+                    return {
+                        "response_text": f"AI engine for '{model_role}' timed out after 180 seconds. The model may be overloaded or the request is too complex. Please try again with a simpler query.",
+                        "error": "model_timeout",
+                        "connection_error": str(e)
+                    }
+                else:
+                    return {
+                        "response_text": f"AI engine for '{model_role}' is currently unavailable. Connection failed to {base_url}. Error: {str(e)}",
+                        "error": "model_unavailable",
+                        "connection_error": str(e)
+                    }
             else:
-                return f"AI engine for '{model_role}' is currently unavailable. Connection failed to {base_url}. Error: {str(e)}"
+                if isinstance(e, httpx.TimeoutException):
+                    return f"AI engine for '{model_role}' timed out after 180 seconds. The model may be overloaded or the request is too complex. Please try again with a simpler query."
+                else:
+                    return f"AI engine for '{model_role}' is currently unavailable. Connection failed to {base_url}. Error: {str(e)}"
+
         except Exception as e:
             logger.error(f"Unexpected error with model '{model_name}' for role '{model_role}': {e}")
             if expect_json:
@@ -419,7 +433,7 @@ class AIService:
             messages = conversation.get("messages", [])
             messages.append({"role": "user", "content": query})
 
-            # Fetch dataset
+                # Fetch dataset
             try:
                 db_query = {"_id": ObjectId(dataset_id), "user_id": user_id}
             except Exception:
@@ -437,23 +451,52 @@ class AIService:
             
             # Handle response
             if isinstance(llm_response, dict) and "error" in llm_response:
-                raise HTTPException(500, f"LLM error: {llm_response.get('error', 'Unknown error')}")
-            
-            # Extract response
-            ai_content = llm_response.get("response_text", "I was unable to process your request.")
-            chart_config = llm_response.get("chart_config")
+                # Provide fallback response instead of raising error
+                error_type = llm_response.get("error", "unknown")
+                if error_type == "model_timeout":
+                    ai_content = "I'm experiencing some delays processing your request. The AI model is currently overloaded. Please try again in a moment with a simpler query, or I can help you with basic data analysis in the meantime."
+                elif error_type == "model_unavailable":
+                    ai_content = "I'm temporarily unable to connect to the AI model. Please try again in a few moments, or I can help you with basic data analysis."
+                else:
+                    ai_content = "I encountered an issue processing your request. Please try again, or I can help you with basic data analysis."
+                chart_config = None
+            else:
+                # Extract response
+                ai_content = llm_response.get("response_text", "I was unable to process your request.")
+                chart_config = llm_response.get("chart_config")
 
-            # Create response
-            response = {
-                "response": ai_content,
-                "chart_config": chart_config,
-                "conversation_id": conversation_id or str(conversation["_id"])
-            }
+                # Echo Detection - Check if model copied template text
+                if ("Your analysis and insights about the data trends" in ai_content and "150-200 words" in ai_content) or "[ORIGINAL" in ai_content:
+                    logger.warning("Echo detected in LLM response, retrying with simplified prompt")
+                    # Retry with a simplified prompt
+                    simple_prompt = f"""
+                    Analyze the dataset and answer: {query}
+                    
+                    Dataset Schema: {json.dumps(self._extract_schema(dataset_doc), indent=2)}
+                    
+                    Provide a JSON response with:
+                    {{
+                        "response_text": "Your analysis and insights about the data trends",
+                        "chart_config": null,
+                        "confidence": "High|Med|Low"
+                    }}
+                    """
+                    llm_response = await self._call_ollama(simple_prompt, "chart_engine", expect_json=True)
+                    if isinstance(llm_response, dict) and "error" not in llm_response:
+                        ai_content = llm_response.get("response_text", "I was unable to process your request.")
+                        chart_config = llm_response.get("chart_config")
 
-            # Save conversation
-            await self._save_conversation(conversation["_id"], messages + [{"role": "ai", "content": ai_content}])
+                # Create response
+                response = {
+                    "response": ai_content,
+                    "chart_config": chart_config,
+                    "conversation_id": conversation_id or str(conversation["_id"])
+                }
 
-            return response
+                # Save conversation
+                await self._save_conversation(conversation["_id"], messages + [{"role": "ai", "content": ai_content}])
+
+                return response
 
         except Exception as e:
             logger.error(f"Chat processing error: {e}")
@@ -488,8 +531,28 @@ class AIService:
         dataset_context = self._create_llm_context_string(dataset_metadata)
         chart_options = [chart['id'] for chart in self.chart_definitions.values()]
         
-        factory = PromptFactory(dataset_context=dataset_context)
+        # Extract schema from dataset metadata
+        schema = self._extract_schema_from_metadata(dataset_metadata)
+        
+        factory = PromptFactory(dataset_context=dataset_context, schema=schema)
         return factory.get_prompt(PromptType.CONVERSATIONAL, history=messages, chart_options=chart_options)
+    
+    def _extract_schema_from_metadata(self, dataset_metadata: Dict) -> Dict:
+        """Extract schema information from dataset metadata."""
+        columns = dataset_metadata.get('column_metadata', [])
+        schema = {
+            "columns": {},
+            "key_metrics": [],
+            "data_types": {}
+        }
+        
+        for col in columns:
+            col_name = col.get("name", "")
+            col_type = col.get("type", "unknown")
+            schema["columns"][col_name] = col_type
+            schema["data_types"][col_type] = schema["data_types"].get(col_type, 0) + 1
+        
+        return schema
         
     async def _load_or_create_conversation(self, conv_id: Optional[str], user_id: str, dataset_id: str) -> Dict:
         if conv_id:
@@ -997,9 +1060,10 @@ Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '
                     if insight_type == "correlation":
                         columns = insight.get("columns", [])
                         value = insight.get("value", 0)
-                        response_parts.append(
-                            f"{i}. **Correlation**: {columns[0]} and {columns[1]} show {value:.2f} correlation."
-                        )
+                        if len(columns) >= 2:
+                            response_parts.append(
+                                f"{i}. **Correlation**: {columns[0]} and {columns[1]} show {value:.2f} correlation."
+                            )
             
             if deep_insights:
                 response_parts.append(
@@ -1196,7 +1260,11 @@ Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '
             traces.append(trace)
 
         elif chart_type in ["bar", "line", "scatter"]:
-            rows = aggregate_data(safe_columns[0], safe_columns[1], aggregation)
+            if len(safe_columns) >= 2:
+                rows = aggregate_data(safe_columns[0], safe_columns[1], aggregation)
+            else:
+                logger.warning(f"Not enough columns for {chart_type} chart")
+                return []
             logger.info(f"Generated {len(rows)} rows for {chart_type} chart")
             
             if rows:
@@ -1237,7 +1305,7 @@ Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '
                 group_by_cols = [group_by_raw] if isinstance(group_by_raw, str) else group_by_raw
                 safe_group_by = [self._find_safe_column_name(df, c) for c in group_by_cols if c]
                 safe_group_by = [c for c in safe_group_by if c]
-                if len(safe_group_by) >= 2:
+                if len(safe_group_by) >= 2 and len(safe_columns) >= 1:
                     pivot = df.pivot(index=safe_group_by[0], columns=safe_group_by[1], values=safe_columns[0], aggregate_function="sum").fill_null(0)
                     for col in pivot.columns[1:]:
                         traces.append({"x": pivot[pivot.columns[0]].to_list(), "y": pivot[col].to_list(), "type": "bar", "name": col})
