@@ -62,7 +62,7 @@ const PlotlyChart = ({ data, layout, config }) => {
 
       // Merge with provided layout
       const finalLayout = { ...defaultLayout, ...layout };
-      
+
       Plotly.newPlot(plotRef.current, data, finalLayout, {
         responsive: true,
         displayModeBar: true,
@@ -620,8 +620,8 @@ const Charts = () => {
 
     // Convert chart data to Plotly format
     const getPlotlyData = () => {
-      switch (chartType) {
-        case 'bar':
+    switch (chartType) {
+      case 'bar':
           return [{
             x: chartData.map(item => item[xKey]),
             y: chartData.map(item => item[yKey]),
@@ -635,8 +635,8 @@ const Charts = () => {
             },
             name: yAxis
           }];
-        
-        case 'line':
+
+      case 'line':
           return [{
             x: chartData.map(item => item[xKey]),
             y: chartData.map(item => item[yKey]),
@@ -652,9 +652,9 @@ const Charts = () => {
             },
             name: yAxis
           }];
-        
-        case 'pie':
-          const filteredData = chartData.filter(item => item.value > 0);
+
+      case 'pie':
+        const filteredData = chartData.filter(item => item.value > 0);
           return [{
             labels: filteredData.map(item => item.name),
             values: filteredData.map(item => item.value),
@@ -665,8 +665,8 @@ const Charts = () => {
             textinfo: 'label+percent',
             textposition: 'outside'
           }];
-        
-        case 'scatter':
+
+      case 'scatter':
           return [{
             x: chartData.map(item => item[xKey]),
             y: chartData.map(item => item[yKey]),
@@ -679,8 +679,8 @@ const Charts = () => {
             },
             name: yAxis
           }];
-        
-        case 'area':
+
+      case 'area':
           return [{
             x: chartData.map(item => item[xKey]),
             y: chartData.map(item => item[yKey]),
@@ -694,8 +694,8 @@ const Charts = () => {
             fillcolor: 'rgba(16, 185, 129, 0.3)',
             name: yAxis
           }];
-        
-        case 'radar':
+
+      case 'radar':
           return [{
             r: chartData.map(item => item[yKey]),
             theta: chartData.map(item => item[xKey]),
@@ -707,8 +707,8 @@ const Charts = () => {
             fillcolor: 'rgba(59, 130, 246, 0.3)',
             name: yAxis
           }];
-        
-        case 'histogram':
+
+      case 'histogram':
           return [{
             x: chartData.map(item => item[xKey]),
             type: 'histogram',
@@ -721,8 +721,8 @@ const Charts = () => {
             },
             name: xAxis
           }];
-        
-        case 'boxplot':
+
+      case 'boxplot':
           return [{
             y: chartData.map(item => item[yKey]),
             type: 'box',
@@ -731,8 +731,8 @@ const Charts = () => {
             },
             name: yAxis
           }];
-        
-        case 'heatmap':
+
+      case 'heatmap':
           // For heatmap, we need to restructure the data
           const heatmapData = chartData[0];
           if (heatmapData && heatmapData.x && heatmapData.y && heatmapData.z) {
@@ -745,8 +745,8 @@ const Charts = () => {
             }];
           }
           return [];
-        
-        case 'bubble':
+
+      case 'bubble':
           const bubbleData = chartData[0];
           if (bubbleData && bubbleData.x && bubbleData.y && bubbleData.marker) {
             return [{
@@ -755,7 +755,7 @@ const Charts = () => {
               mode: 'markers',
               marker: {
                 size: bubbleData.marker.size,
-                color: '#3b82f6',
+                    color: '#3b82f6',
                 opacity: 0.7
               },
               type: 'scatter',
@@ -763,13 +763,13 @@ const Charts = () => {
             }];
           }
           return [];
-        
+
         default:
           return [{
             x: chartData.map(item => item[xKey]),
             y: chartData.map(item => item[yKey]),
             type: 'bar',
-            marker: {
+                  marker: {
               color: '#3b82f6'
             },
             name: yAxis
@@ -779,15 +779,15 @@ const Charts = () => {
 
     const getPlotlyLayout = () => {
       const baseLayout = {
-        title: {
-          text: chartTitle,
+                  title: {
+                    text: chartTitle,
           font: {
             color: '#e2e8f0',
             size: 20
           },
           x: 0.5
-        },
-        xaxis: {
+                  },
+                  xaxis: {
           title: xAxis,
           color: '#64748b',
           showgrid: false,
@@ -795,8 +795,8 @@ const Charts = () => {
           showline: true,
           linecolor: '#374151',
           linewidth: 1
-        },
-        yaxis: {
+                  },
+                  yaxis: {
           title: yAxis,
           color: '#64748b',
           showgrid: false,
@@ -828,8 +828,8 @@ const Charts = () => {
       return baseLayout;
     };
 
-    return (
-      <div>
+        return (
+          <div>
         {/* Debug panel - remove this in production */}
         {process.env.NODE_ENV === 'development' && (
           <div className="mb-4 p-3 bg-slate-800/50 rounded-lg border border-slate-600/50 text-xs">
@@ -842,754 +842,117 @@ const Charts = () => {
             </div>
           </div>
         )}
-        <div className="h-[600px]">
-          <PlotlyChart 
-            data={getPlotlyData()} 
-            layout={getPlotlyLayout()} 
-            config={{
+            <div className="h-[600px]">
+              <PlotlyChart 
+            data={getPlotlyData()}
+            layout={getPlotlyLayout()}
+                config={{
               responsive: true,
-              displayModeBar: true,
-              modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+                  displayModeBar: true,
+                  modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
               displaylogo: false
-            }}
-          />
-        </div>
-      </div>
-    );
-      case 'line':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-green-400 to-blue-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <ResponsiveContainer width="100%" height={900}>
-              <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border)/0.3)" />
-                <XAxis 
-                  dataKey={xKey} 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                  label={{ value: xAxis, position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: 'hsl(var(--muted-foreground))', fontSize: '14px', fontWeight: '600' } }}
-                />
-                <YAxis 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                  label={{ value: yAxis, angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: 'hsl(var(--muted-foreground))', fontSize: '14px', fontWeight: '600' } }}
-                />
-                <Tooltip 
-                  contentStyle={{
-                    backgroundColor: 'hsl(var(--card))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '12px',
-                    boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
-                    color: 'hsl(var(--foreground))',
-                    fontSize: '14px',
-                    padding: '12px 16px'
-                  }}
-                  labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: '600', marginBottom: '8px' }}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey={yKey} 
-                  stroke="url(#lineGradient)" 
-                  strokeWidth={4}
-                  dot={{ 
-                    fill: '#3b82f6', 
-                    strokeWidth: 2, 
-                    r: 6
-                  }}
-                  activeDot={{ 
-                    r: 8, 
-                    stroke: '#3b82f6', 
-                    strokeWidth: 2, 
-                    fill: '#fff'
-                  }}
-                />
-                <defs>
-                  <linearGradient id="lineGradient" x1="0" y1="0" x2="1" y2="0">
-                    <stop offset="0%" stopColor="#10b981" />
-                    <stop offset="100%" stopColor="#3b82f6" />
-                  </linearGradient>
-                </defs>
-            </LineChart>
-          </ResponsiveContainer>
-          </div>
-        );
-      case 'pie':
-        console.log('Rendering pie chart with data:', chartData);
-        // Filter out zero values for better visualization
-        const filteredData = chartData.filter(item => item.value > 0);
-        console.log('Filtered pie chart data:', filteredData);
-        
-        if (filteredData.length === 0) {
-          return (
-            <div className="h-[600px] flex items-center justify-center">
-              <div className="text-center space-y-4">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-pink-500/20 to-purple-600/20 border border-pink-500/30 flex items-center justify-center mx-auto">
-                  <PieIcon className="w-8 h-8 text-pink-400" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-white mb-2">No Data to Display</h3>
-                  <p className="text-sm text-slate-400">All values are zero or empty</p>
-                </div>
-              </div>
-            </div>
-          );
-        }
-        
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-pink-400 to-purple-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <ResponsiveContainer width="100%" height={900}>
-            <PieChart>
-              <Pie
-                data={filteredData}
-                dataKey="value" 
-                nameKey="name" 
-                cx="50%"
-                cy="50%"
-                  outerRadius={140}
-                  innerRadius={60}
-                fill="#8884d8"
-                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                  labelLine={false}
-              >
-                {filteredData.map((entry, index) => (
-                  <Cell 
-                    key={`cell-${index}`} 
-                      fill={['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'][index % 8]}
-                  />
-                ))}
-              </Pie>
-                <Tooltip 
-                  contentStyle={{
-                    backgroundColor: '#1e293b',
-                    border: '1px solid #475569',
-                    borderRadius: '12px',
-                    boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)',
-                    color: '#ffffff',
-                    fontSize: '14px',
-                    padding: '12px 16px'
-                  }}
-                  labelStyle={{ 
-                    color: '#ffffff', 
-                    fontWeight: '600', 
-                    marginBottom: '8px',
-                    fontSize: '16px'
-                  }}
-                  formatter={(value, name) => [
-                    `${value} (${((value / filteredData.reduce((sum, item) => sum + item.value, 0)) * 100).toFixed(1)}%)`,
-                    name
-                  ]}
-                />
-            </PieChart>
-          </ResponsiveContainer>
-          </div>
-        );
-      case 'scatter':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-orange-400 to-red-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <ResponsiveContainer width="100%" height={900}>
-              <ScatterChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border)/0.3)" />
-                <XAxis 
-                  type="number" 
-                  dataKey="x" 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                  label={{ value: xAxis, position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: 'hsl(var(--muted-foreground))', fontSize: '14px', fontWeight: '600' } }}
-                />
-                <YAxis 
-                  type="number" 
-                  dataKey="y" 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                  label={{ value: yAxis, angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: 'hsl(var(--muted-foreground))', fontSize: '14px', fontWeight: '600' } }}
-                />
-                <Tooltip 
-                  contentStyle={{
-                    backgroundColor: 'hsl(var(--card))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '12px',
-                    boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
-                    color: 'hsl(var(--foreground))',
-                    fontSize: '14px',
-                    padding: '12px 16px'
-                  }}
-                  labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: '600', marginBottom: '8px' }}
-                />
-                <Scatter 
-                  dataKey="y" 
-                  fill="url(#scatterGradient)"
-                  stroke="#f97316"
-                  strokeWidth={2}
-                />
-                <defs>
-                  <radialGradient id="scatterGradient" cx="50%" cy="50%" r="50%">
-                    <stop offset="0%" stopColor="#f97316" />
-                    <stop offset="100%" stopColor="#dc2626" />
-                  </radialGradient>
-                </defs>
-            </ScatterChart>
-          </ResponsiveContainer>
-          </div>
-        );
-      case 'area':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-teal-400 to-cyan-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <ResponsiveContainer width="100%" height={900}>
-              <AreaChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border)/0.3)" />
-                <XAxis 
-                  dataKey={xKey} 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                  label={{ value: xAxis, position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: 'hsl(var(--muted-foreground))', fontSize: '14px', fontWeight: '600' } }}
-                />
-                <YAxis 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                  label={{ value: yAxis, angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: 'hsl(var(--muted-foreground))', fontSize: '14px', fontWeight: '600' } }}
-                />
-                <Tooltip 
-                  contentStyle={{
-                    backgroundColor: 'hsl(var(--card))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '12px',
-                    boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
-                    color: 'hsl(var(--foreground))',
-                    fontSize: '14px',
-                    padding: '12px 16px'
-                  }}
-                  labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: '600', marginBottom: '8px' }}
-                />
-                <Area 
-                  type="monotone" 
-                  dataKey={yKey} 
-                  stroke="url(#areaGradient)" 
-                  fill="url(#areaFillGradient)"
-                  strokeWidth={3}
-                />
-                <defs>
-                  <linearGradient id="areaGradient" x1="0" y1="0" x2="1" y2="0">
-                    <stop offset="0%" stopColor="#14b8a6" />
-                    <stop offset="100%" stopColor="#06b6d4" />
-                  </linearGradient>
-                  <linearGradient id="areaFillGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#14b8a6" stopOpacity={0.4} />
-                    <stop offset="100%" stopColor="#06b6d4" stopOpacity={0.1} />
-                  </linearGradient>
-                </defs>
-            </AreaChart>
-          </ResponsiveContainer>
-          </div>
-        );
-      case 'radar':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <ResponsiveContainer width="100%" height={900}>
-              <RadarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                <PolarGrid stroke="hsl(var(--border)/0.3)" />
-                <PolarAngleAxis 
-                  dataKey={xKey} 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                />
-                <Radar 
-                  dataKey={yKey} 
-                  stroke="url(#radarGradient)" 
-                  fill="url(#radarFillGradient)"
-                  strokeWidth={3}
-                />
-                <Tooltip 
-                  contentStyle={{
-                    backgroundColor: 'hsl(var(--card))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '12px',
-                    boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
-                    color: 'hsl(var(--foreground))',
-                    fontSize: '14px',
-                    padding: '12px 16px'
-                  }}
-                  labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: '600', marginBottom: '8px' }}
-                />
-                <defs>
-                  <linearGradient id="radarGradient" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stopColor="#6366f1" />
-                    <stop offset="100%" stopColor="#8b5cf6" />
-                  </linearGradient>
-                  <linearGradient id="radarFillGradient" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stopColor="#6366f1" stopOpacity={0.3} />
-                    <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0.1} />
-                  </linearGradient>
-                </defs>
-            </RadarChart>
-          </ResponsiveContainer>
-          </div>
-        );
-      case 'histogram':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <ResponsiveContainer width="100%" height={900}>
-              <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border)/0.3)" />
-                <XAxis 
-                  dataKey={xKey} 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                  label={{ value: xAxis, position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: 'hsl(var(--muted-foreground))', fontSize: '14px', fontWeight: '600' } }}
-                />
-                <YAxis 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                  label={{ value: yAxis, angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: 'hsl(var(--muted-foreground))', fontSize: '14px', fontWeight: '600' } }}
-                />
-                <Tooltip 
-                  contentStyle={{
-                    backgroundColor: 'hsl(var(--card))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '12px',
-                    boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
-                    color: 'hsl(var(--foreground))',
-                    fontSize: '14px',
-                    padding: '12px 16px'
-                  }}
-                  labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: '600', marginBottom: '8px' }}
-                />
-                <Bar 
-                  dataKey={yKey} 
-                  fill="url(#histogramGradient)"
-                  radius={[0, 0, 0, 0]}
-                />
-                <defs>
-                  <linearGradient id="histogramGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#6366f1" />
-                    <stop offset="100%" stopColor="#8b5cf6" />
-                  </linearGradient>
-                </defs>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        );
-      case 'boxplot':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-orange-400 to-red-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px] flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-2">Box Plot</h3>
-                <p className="text-sm">Box plot visualization coming soon</p>
-              </div>
-            </div>
-          </div>
-        );
-      case 'heatmap':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-red-400 to-pink-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px] flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-2">Heatmap</h3>
-                <p className="text-sm">Heatmap visualization coming soon</p>
-              </div>
-            </div>
-          </div>
-        );
-      case 'bubble':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px] flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-2">Bubble Chart</h3>
-                <p className="text-sm">Bubble chart visualization coming soon</p>
-              </div>
-            </div>
-          </div>
-        );
-      case 'timeseries':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px]">
-              <PlotlyChart 
-                data={[{
-                  x: chartData.map(item => item.x || item.timestamp),
-                  y: chartData.map(item => item.y || item.value),
-                  type: 'scatter',
-                  mode: 'lines+markers',
-                  name: yAxis,
-                  line: {
-                    color: '#3b82f6',
-                    width: 3
-                  },
-                  marker: {
-                    color: '#3b82f6',
-                    size: 6
-                  }
-                }]}
-                layout={{
-                  title: {
-                    text: chartTitle,
-                    font: { color: '#ffffff', size: 18 }
-                  },
-                  xaxis: {
-                    title: { text: xAxis, font: { color: '#94a3b8' } },
-                    color: '#94a3b8',
-                    gridcolor: '#374151',
-                    linecolor: '#374151'
-                  },
-                  yaxis: {
-                    title: { text: yAxis, font: { color: '#94a3b8' } },
-                    color: '#94a3b8',
-                    gridcolor: '#374151',
-                    linecolor: '#374151'
-                  },
-                  plot_bgcolor: 'rgba(0,0,0,0)',
-                  paper_bgcolor: 'rgba(0,0,0,0)',
-                  font: { color: '#ffffff' },
-                  margin: { l: 60, r: 30, t: 60, b: 60 }
-                }}
-                config={{
-                  displayModeBar: true,
-                  displaylogo: false,
-                  modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
-                  toImageButtonOptions: {
-                    format: 'png',
-                    filename: 'timeseries_chart',
-                    height: 600,
-                    width: 800,
-                    scale: 2
-                  }
                 }}
               />
             </div>
           </div>
         );
-      case 'candlestick':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-green-400 to-emerald-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px]">
-              <PlotlyChart 
-                data={[{
-                  x: chartData.map(item => item.x),
-                  open: chartData.map(item => item.open),
-                  high: chartData.map(item => item.high),
-                  low: chartData.map(item => item.low),
-                  close: chartData.map(item => item.close),
-                  type: 'candlestick',
-                  name: yAxis,
-                  increasing: { line: { color: '#10b981' } },
-                  decreasing: { line: { color: '#ef4444' } }
-                }]}
-                layout={{
-                  title: {
-                    text: chartTitle,
-                    font: { color: '#ffffff', size: 18 }
-                  },
-                  xaxis: {
-                    title: { text: xAxis, font: { color: '#94a3b8' } },
-                    color: '#94a3b8',
-                    gridcolor: '#374151',
-                    linecolor: '#374151'
-                  },
-                  yaxis: {
-                    title: { text: yAxis, font: { color: '#94a3b8' } },
-                    color: '#94a3b8',
-                    gridcolor: '#374151',
-                    linecolor: '#374151'
-                  },
-                  plot_bgcolor: 'rgba(0,0,0,0)',
-                  paper_bgcolor: 'rgba(0,0,0,0)',
-                  font: { color: '#ffffff' },
-                  margin: { l: 60, r: 30, t: 60, b: 60 }
-                }}
-                config={{
-                  displayModeBar: true,
-                  displaylogo: false,
-                  modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
-                  toImageButtonOptions: {
-                    format: 'png',
-                    filename: 'candlestick_chart',
-                    height: 600,
-                    width: 800,
-                    scale: 2
-                  }
-                }}
-              />
-            </div>
-          </div>
-        );
-      case 'funnel':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px] flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-2">Funnel Chart</h3>
-                <p className="text-sm">Funnel chart visualization coming soon</p>
-              </div>
-            </div>
-          </div>
-        );
-      case 'treemap':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-yellow-400 to-orange-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px] flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-2">Treemap</h3>
-                <p className="text-sm">Treemap visualization coming soon</p>
-              </div>
-            </div>
-          </div>
-        );
-      case 'waterfall':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-teal-400 to-cyan-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px] flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-2">Waterfall Chart</h3>
-                <p className="text-sm">Waterfall chart visualization coming soon</p>
-              </div>
-            </div>
-          </div>
-        );
-      case 'contour':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px] flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-2">Contour Plot</h3>
-                <p className="text-sm">Contour plot visualization coming soon</p>
-              </div>
-            </div>
-          </div>
-        );
-      case 'density':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-violet-400 to-purple-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px] flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-2">Density Plot</h3>
-                <p className="text-sm">Density plot visualization coming soon</p>
-              </div>
-            </div>
-          </div>
-        );
-      case 'errorbar':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-rose-400 to-pink-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px] flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-2">Error Bar Chart</h3>
-                <p className="text-sm">Error bar chart visualization coming soon</p>
-              </div>
-            </div>
-          </div>
-        );
-      case 'ternary':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-amber-400 to-yellow-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            <div className="h-[600px] flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-2">Ternary Plot</h3>
-                <p className="text-sm">Ternary plot visualization coming soon</p>
-              </div>
-            </div>
-          </div>
-        );
-      default:
-        return null;
-    }
   };
 
-  if (loading && !selectedDataset) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center p-6">
-        {/* Background Pattern */}
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.1),transparent_50%)] pointer-events-none" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(37,99,235,0.08),transparent_50%)] pointer-events-none" />
-        
-        <div className="relative text-center space-y-4">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 flex items-center justify-center mx-auto">
-            <Loader2 className="animate-spin w-8 h-8 text-blue-400" />
-          </div>
-          <div>
-            <h3 className="text-lg font-semibold text-white mb-2">Loading Charts Studio</h3>
-            <p className="text-sm text-slate-400">Preparing your visualization workspace...</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Load dataset columns on component mount
+  useEffect(() => {
+    if (selectedDataset) {
+      loadDatasetColumns();
+    }
+  }, [selectedDataset]);
 
-  if (!selectedDataset) {
+  // Generate chart data when dependencies change
+  useEffect(() => {
+    if (selectedDataset && xAxis && yAxis) {
+      generateChartData();
+    }
+  }, [selectedDataset, chartType, xAxis, yAxis, aggregation]);
+
   return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center p-6">
-        {/* Background Pattern */}
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.1),transparent_50%)] pointer-events-none" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(37,99,235,0.08),transparent_50%)] pointer-events-none" />
-        
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+      <div className="container mx-auto px-4 py-8">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6 }}
-          className="relative text-center space-y-6 max-w-md mx-auto"
+          className="space-y-8"
         >
-          <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 flex items-center justify-center mx-auto">
-            <Database className="w-12 h-12 text-blue-400" />
-          </div>
-          <div className="space-y-3">
-            <h2 className="text-3xl font-bold bg-gradient-to-r from-white to-blue-100 bg-clip-text text-transparent">
-              No Dataset Selected
-            </h2>
-            <p className="text-lg text-slate-400 leading-relaxed">
-              Please select a dataset from the Dashboard to start creating beautiful visualizations.
-            </p>
-          </div>
-            <motion.button
-              whileTap={{ scale: 0.95 }}
-              whileHover={{ scale: 1.02 }}
-              onClick={() => window.location.href = '/dashboard'}
-            className="px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-500 hover:to-blue-600 transition-all duration-200 font-medium shadow-lg shadow-blue-500/25 hover:shadow-xl hover:shadow-blue-500/30"
+          {/* Header */}
+          <div className="text-center space-y-4">
+            <motion.h1
+              initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="text-4xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent"
             >
-              Go to Dashboard
-            </motion.button>
-        </motion.div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
-      {/* Background Pattern */}
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.1),transparent_50%)] pointer-events-none" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(37,99,235,0.08),transparent_50%)] pointer-events-none" />
-      
-      <div className="relative space-y-8 p-6">
-        {/* Enhanced Header */}
-        <motion.div 
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-          className="flex flex-col lg:flex-row lg:items-center justify-between gap-6"
-        >
-          <div className="space-y-3">
-        <div>
-              <h1 className="text-4xl font-bold bg-gradient-to-r from-white via-blue-100 to-blue-200 bg-clip-text text-transparent">
-                Charts Studio
-              </h1>
-              <div className="flex items-center gap-2 mt-1">
-                {/* <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div> */}
-                {/* <span className="text-sm text-muted-foreground">Live Editor</span> */}
-              </div>
-            </div>
-            <p className="text-lg text-muted-foreground max-w-2xl leading-relaxed">
-              Build professional visualizations like in Power BI—select your data and create stunning charts with intelligent recommendations.
-            </p>
-        </div>
-        
-          {/* Enhanced Action Buttons */}
-          <div className="flex items-center gap-3">
-          <motion.button
-            whileTap={{ scale: 0.95 }}
-            whileHover={{ scale: 1.02 }}
-            onClick={() => toast('Chart saved!')}
-              className="group px-6 py-3 rounded-2xl bg-white/5 border border-white/20 text-white hover:bg-white/10 hover:border-white/30 focus-visible-ring transition-all duration-200 flex items-center gap-2 font-medium backdrop-blur-md shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={!xAxis || !yAxis}
-          >
-              <Save className="w-4 h-4 group-hover:rotate-12 transition-transform duration-200" />
-              Save Chart
-          </motion.button>
-          <motion.button
-            whileTap={{ scale: 0.95 }}
-            whileHover={{ scale: 1.02 }}
-            onClick={() => toast('Exported to PNG')}
-              className="group px-6 py-3 rounded-2xl bg-white/5 border border-white/20 text-white hover:bg-white/10 hover:border-white/30 focus-visible-ring transition-all duration-200 flex items-center gap-2 font-medium backdrop-blur-md shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={!xAxis || !yAxis}
-          >
-              <Download className="w-4 h-4 group-hover:translate-y-0.5 transition-transform duration-200" />
-            Export
-          </motion.button>
-        </div>
-        </motion.div>
-
-      {/* Main Layout - Left Chart, Right Controls */}
-        <motion.div 
+              Chart Studio
+            </motion.h1>
+            <motion.p
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-          className="grid grid-cols-1 lg:grid-cols-3 gap-8"
-        >
-          {/* Enhanced Chart Preview - Takes 2/3 of the space */}
+              transition={{ delay: 0.3 }}
+              className="text-slate-400 text-lg max-w-2xl mx-auto"
+            >
+              Create beautiful, interactive visualizations from your data with our advanced charting tools
+            </motion.p>
+          </div>
+
+          {/* Main Content */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Chart Preview */}
         <div className="lg:col-span-2">
-            <GlassCard className="p-8 bg-gradient-to-br from-slate-900/80 to-slate-800/60 border-slate-700/50 shadow-2xl" elevated>
-              <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 flex items-center justify-center">
-                    <BarChart3 className="w-5 h-5 text-blue-400" />
+              <GlassCard className="p-6">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+                    <BarChart3 className="w-5 h-5 text-white" />
               </div>
-                  <h2 className="text-2xl font-bold bg-gradient-to-r from-white to-blue-100 bg-clip-text text-transparent">
-                    Chart Preview
-                  </h2>
-            </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20">
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
-                    <span className="text-xs text-blue-400 font-medium">Live Preview</span>
-              </div>
-                  <div className="text-xs text-muted-foreground">
-                    {chartData.length} data points
+                  <div>
+                    <h2 className="text-xl font-semibold text-white">Chart Preview</h2>
+                    <div className="flex items-center gap-2 text-sm text-slate-400">
+                      <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                      <span>Live Preview</span>
+                      <span>•</span>
+                      <span>{chartData ? chartData.length : 0} data points</span>
             </div>
                 </div>
               </div>
               
-              {/* Enhanced Chart Container */}
-              <div className="relative">
-                <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-blue-600/5 rounded-2xl blur-xl"></div>
-                <div className="relative bg-slate-950 rounded-2xl p-8 border border-slate-700/50 min-h-[700px] shadow-inner">
-                  <div className="h-full">
-            {renderChart()}
+                {loading ? (
+                  <div className="h-[600px] flex items-center justify-center">
+                    <div className="text-center space-y-4">
+                      <Loader2 className="w-8 h-8 text-blue-400 animate-spin mx-auto" />
+                      <p className="text-slate-400">Generating chart...</p>
               </div>
                 </div>
-                
-            </div>
+                ) : (
+                  renderChart()
+                )}
           </GlassCard>
         </div>
 
-          {/* Enhanced Controls Panel - Takes 1/3 of the space */}
+            {/* Configuration Panel */}
         <div className="space-y-6">
-            {/* Enhanced Chart Type Selector */}
-            <GlassCard className="p-6 bg-gradient-to-br from-slate-900/70 to-slate-800/50 border-slate-700/50 shadow-xl" elevated>
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 flex items-center justify-center">
-                    <BarChart3 className="w-4 h-4 text-blue-400" />
+              {/* Chart Type Selection */}
+              <GlassCard className="p-6">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center">
+                    <BarChart3 className="w-4 h-4 text-white" />
                   </div>
-                  <h3 className="text-lg font-semibold bg-gradient-to-r from-white to-blue-100 bg-clip-text text-transparent">
-                Chart Type
-              </h3>
+                  <div>
+                    <h3 className="text-lg font-semibold text-white">Chart Type</h3>
+                    <p className="text-sm text-slate-400">Choose your visualization</p>
                 </div>
-              {totalPages > 1 && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800/50 border border-slate-600/50">
-                    <span className="text-sm text-muted-foreground">
+                  <div className="ml-auto text-xs text-slate-500">
                   {currentPage + 1} of {totalPages}
-                    </span>
                 </div>
-              )}
             </div>
             
-              {/* Enhanced Chart Types Grid */}
-            <div className="relative">
+                {/* Chart Type Grid */}
+                <div className="space-y-4">
               <AnimatePresence mode="wait">
                 <motion.div
                   key={currentPage}
@@ -1597,13 +960,13 @@ const Charts = () => {
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
                     transition={{ duration: 0.3 }}
-                    className="grid grid-cols-4 gap-3 min-h-[140px]"
+                      className="grid grid-cols-4 gap-3"
                 >
-                  {getCurrentPageChartTypes().map(type => (
+                      {getCurrentPageChartTypes().map((type) => (
                 <motion.button
             key={type.id}
-                      whileTap={{ scale: 0.95 }}
                         whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
                   onClick={() => setChartType(type.id)}
                   className={cn(
                           'group flex flex-col items-center gap-2 p-3 rounded-2xl transition-all text-xs border relative overflow-hidden backdrop-blur-sm',
@@ -1639,7 +1002,6 @@ const Charts = () => {
                         )}>
                   {type.label}
                         </span>
-                        
                 </motion.button>
                   ))}
                   
@@ -1655,32 +1017,32 @@ const Charts = () => {
                   <div className="flex items-center justify-between mt-6 pt-4 border-t border-slate-700/50">
                   {/* Previous Button */}
                   <motion.button
+                        whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={goToPrevPage}
                     disabled={currentPage === 0}
                     className={cn(
-                        'flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all backdrop-blur-sm',
+                          'flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all',
                       currentPage === 0
-                          ? 'text-slate-500 cursor-not-allowed bg-slate-800/30'
-                          : 'text-slate-300 hover:text-white bg-slate-700/50 hover:bg-slate-600/60 border border-slate-600/50 hover:border-slate-500/70'
+                            ? 'bg-slate-700/50 text-slate-500 cursor-not-allowed'
+                            : 'bg-slate-800/60 text-slate-300 hover:bg-slate-700/60 hover:text-white border border-slate-600/50'
                     )}
                   >
                     <ChevronLeft className="w-4 h-4" />
                     Previous
                   </motion.button>
                   
-                    {/* Enhanced Page Indicators */}
+                      {/* Page Indicators */}
                     <div className="flex items-center gap-2">
                     {Array.from({ length: totalPages }, (_, index) => (
-                      <motion.button
+                          <button
                         key={index}
-                        whileTap={{ scale: 0.9 }}
                         onClick={() => goToPage(index)}
                         className={cn(
-                            'w-3 h-3 rounded-full transition-all duration-200',
+                              'w-2 h-2 rounded-full transition-all',
                           currentPage === index
-                              ? 'bg-gradient-to-r from-blue-500 to-blue-600 scale-125 shadow-lg shadow-blue-500/25'
-                              : 'bg-slate-600 hover:bg-slate-500 hover:scale-110'
+                                ? 'bg-blue-400 w-6'
+                                : 'bg-slate-600 hover:bg-slate-500'
                         )}
                       />
                     ))}
@@ -1688,14 +1050,15 @@ const Charts = () => {
                   
                   {/* Next Button */}
                   <motion.button
+                        whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={goToNextPage}
                     disabled={currentPage === totalPages - 1}
                     className={cn(
-                        'flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all backdrop-blur-sm',
+                          'flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all',
                       currentPage === totalPages - 1
-                          ? 'text-slate-500 cursor-not-allowed bg-slate-800/30'
-                          : 'text-slate-300 hover:text-white bg-slate-700/50 hover:bg-slate-600/60 border border-slate-600/50 hover:border-slate-500/70'
+                            ? 'bg-slate-700/50 text-slate-500 cursor-not-allowed'
+                            : 'bg-slate-800/60 text-slate-300 hover:bg-slate-700/60 hover:text-white border border-slate-600/50'
                     )}
                   >
                     Next
@@ -1706,28 +1069,24 @@ const Charts = () => {
       </div>
       </GlassCard>
 
-            {/* Enhanced Axis Configuration */}
-            <GlassCard className="p-6 bg-gradient-to-br from-slate-900/70 to-slate-800/50 border-slate-700/50 shadow-xl" elevated>
+              {/* Data Mapping */}
+              <GlassCard className="p-6">
               <div className="flex items-center gap-3 mb-6">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500/20 to-blue-600/20 border border-blue-500/30 flex items-center justify-center">
-                  <Settings className="w-4 h-4 text-blue-400" />
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-green-500 to-teal-600 flex items-center justify-center">
+                    <Settings className="w-4 h-4 text-white" />
                 </div>
-                <h3 className="text-lg font-semibold bg-gradient-to-r from-white to-blue-100 bg-clip-text text-transparent">
-                  Data Mapping
-                </h3>
+                  <div>
+                    <h3 className="text-lg font-semibold text-white">Data Mapping</h3>
+                    <p className="text-sm text-slate-400">Configure your data axes</p>
+                  </div>
               </div>
               
               <div className="space-y-6">
                 {/* X Axis Selection */}
-                <div className="space-y-2">
+                  <div className="space-y-3">
                   <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
                     <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
                     X Axis
-                    {xAxis && (
-                      <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-1 rounded-full border border-blue-500/30">
-                        {xAxis}
-                      </span>
-                    )}
                   </label>
                 <select
                   value={xAxis}
@@ -1743,15 +1102,10 @@ const Charts = () => {
             </div>
 
                 {/* Y Axis Selection */}
-                <div className="space-y-2">
+                  <div className="space-y-3">
                   <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
                     <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
                     Y Axis
-                    {yAxis && (
-                      <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-1 rounded-full border border-blue-500/30">
-                        {yAxis}
-                      </span>
-                    )}
                   </label>
                 <select
                   value={yAxis}
@@ -1818,6 +1172,7 @@ const Charts = () => {
               </div>
             </div>
         </GlassCard>
+            </div>
           </div>
         </motion.div>
       </div>
