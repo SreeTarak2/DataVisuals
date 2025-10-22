@@ -1,10 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, 
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  ScatterChart, Scatter, AreaChart, Area, RadarChart, Radar, PolarGrid, PolarAngleAxis
-} from 'recharts';
-import { 
   BarChart3, TrendingUp, PieChart as PieIcon, ChartScatter, 
   AreaChart as AreaChartIcon, Radar as RadarIcon, Database, Save, Download, Settings, Loader2,
   ChevronLeft, ChevronRight
@@ -23,7 +18,58 @@ const PlotlyChart = ({ data, layout, config }) => {
 
   React.useEffect(() => {
     if (plotRef.current && data && layout) {
-      Plotly.newPlot(plotRef.current, data, layout, config);
+      // Default layout without grid lines
+      const defaultLayout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: {
+          color: '#e2e8f0',
+          family: 'Inter, system-ui, sans-serif'
+        },
+        xaxis: {
+          color: '#64748b',
+          showgrid: false, // Remove grid lines
+          zeroline: false,
+          showline: true,
+          linecolor: '#374151',
+          linewidth: 1
+        },
+        yaxis: {
+          color: '#64748b',
+          showgrid: false, // Remove grid lines
+          zeroline: false,
+          showline: true,
+          linecolor: '#374151',
+          linewidth: 1
+        },
+        margin: {
+          l: 60,
+          r: 30,
+          t: 30,
+          b: 60
+        },
+        showlegend: true,
+        legend: {
+          x: 1,
+          y: 1,
+          bgcolor: 'rgba(0,0,0,0)',
+          bordercolor: 'rgba(0,0,0,0)',
+          font: {
+            color: '#e2e8f0'
+          }
+        }
+      };
+
+      // Merge with provided layout
+      const finalLayout = { ...defaultLayout, ...layout };
+      
+      Plotly.newPlot(plotRef.current, data, finalLayout, {
+        responsive: true,
+        displayModeBar: true,
+        modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+        displaylogo: false,
+        ...config
+      });
     }
   }, [data, layout, config]);
 
@@ -572,66 +618,244 @@ const Charts = () => {
       hasValidData: hasData
     };
 
-    switch (chartType) {
-      case 'bar':
-        return (
-          <div>
-            <h3 className="text-xl font-bold text-foreground mb-6 text-center bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">{chartTitle}</h3>
-            {/* Debug panel - remove this in production */}
-            {process.env.NODE_ENV === 'development' && (
-              <div className="mb-4 p-3 bg-slate-800/50 rounded-lg border border-slate-600/50 text-xs">
-                <div className="text-slate-300 font-semibold mb-2">Debug Info:</div>
-                <div className="text-slate-400 space-y-1">
-                  <div>Chart: {debugInfo.chartType} | X: {debugInfo.xAxis} | Y: {debugInfo.yAxis}</div>
-                  <div>Aggregation: {debugInfo.aggregation} | Data Points: {debugInfo.dataLength}</div>
-                  <div>Valid Data: {debugInfo.hasValidData ? 'Yes' : 'No'}</div>
-                  <div>First Item: {JSON.stringify(debugInfo.firstItem)}</div>
-                </div>
-              </div>
-            )}
-            <ResponsiveContainer width="100%" height={900}>
-              <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border)/0.3)" />
-                <XAxis 
-                  dataKey={xKey} 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                  label={{ value: xAxis, position: 'insideBottom', offset: -10, style: { textAnchor: 'middle', fill: 'hsl(var(--muted-foreground))', fontSize: '14px', fontWeight: '600' } }}
-                />
-                <YAxis 
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={12}
-                  label={{ value: yAxis, angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: 'hsl(var(--muted-foreground))', fontSize: '14px', fontWeight: '600' } }}
-                />
-                <Tooltip 
-                  contentStyle={{
-                    backgroundColor: 'hsl(var(--card))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '12px',
-                    boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
-                    color: 'hsl(var(--foreground))',
-                    fontSize: '14px',
-                    padding: '12px 16px'
-                  }}
-                  labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: '600', marginBottom: '8px' }}
-                />
-                <Bar 
-                  dataKey={yKey} 
-                  fill="url(#barGradient)"
-                  radius={[4, 4, 0, 0]}
-                  stroke="hsl(var(--primary))"
-                  strokeWidth={1}
-                />
-                <defs>
-                  <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#3b82f6" />
-                    <stop offset="100%" stopColor="#1d4ed8" />
-                  </linearGradient>
-                </defs>
-            </BarChart>
-          </ResponsiveContainer>
+    // Convert chart data to Plotly format
+    const getPlotlyData = () => {
+      switch (chartType) {
+        case 'bar':
+          return [{
+            x: chartData.map(item => item[xKey]),
+            y: chartData.map(item => item[yKey]),
+            type: 'bar',
+            marker: {
+              color: '#3b82f6',
+              line: {
+                color: '#1d4ed8',
+                width: 1
+              }
+            },
+            name: yAxis
+          }];
+        
+        case 'line':
+          return [{
+            x: chartData.map(item => item[xKey]),
+            y: chartData.map(item => item[yKey]),
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: {
+              color: '#10b981',
+              width: 3
+            },
+            marker: {
+              color: '#3b82f6',
+              size: 6
+            },
+            name: yAxis
+          }];
+        
+        case 'pie':
+          const filteredData = chartData.filter(item => item.value > 0);
+          return [{
+            labels: filteredData.map(item => item.name),
+            values: filteredData.map(item => item.value),
+            type: 'pie',
+            marker: {
+              colors: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316']
+            },
+            textinfo: 'label+percent',
+            textposition: 'outside'
+          }];
+        
+        case 'scatter':
+          return [{
+            x: chartData.map(item => item[xKey]),
+            y: chartData.map(item => item[yKey]),
+            type: 'scatter',
+            mode: 'markers',
+            marker: {
+              color: '#3b82f6',
+              size: 8,
+              opacity: 0.7
+            },
+            name: yAxis
+          }];
+        
+        case 'area':
+          return [{
+            x: chartData.map(item => item[xKey]),
+            y: chartData.map(item => item[yKey]),
+            type: 'scatter',
+            mode: 'lines',
+            fill: 'tonexty',
+            line: {
+              color: '#10b981',
+              width: 2
+            },
+            fillcolor: 'rgba(16, 185, 129, 0.3)',
+            name: yAxis
+          }];
+        
+        case 'radar':
+          return [{
+            r: chartData.map(item => item[yKey]),
+            theta: chartData.map(item => item[xKey]),
+            type: 'scatterpolar',
+            fill: 'toself',
+            line: {
+              color: '#3b82f6'
+            },
+            fillcolor: 'rgba(59, 130, 246, 0.3)',
+            name: yAxis
+          }];
+        
+        case 'histogram':
+          return [{
+            x: chartData.map(item => item[xKey]),
+            type: 'histogram',
+            marker: {
+              color: '#3b82f6',
+              line: {
+                color: '#1d4ed8',
+                width: 1
+              }
+            },
+            name: xAxis
+          }];
+        
+        case 'boxplot':
+          return [{
+            y: chartData.map(item => item[yKey]),
+            type: 'box',
+            marker: {
+              color: '#3b82f6'
+            },
+            name: yAxis
+          }];
+        
+        case 'heatmap':
+          // For heatmap, we need to restructure the data
+          const heatmapData = chartData[0];
+          if (heatmapData && heatmapData.x && heatmapData.y && heatmapData.z) {
+            return [{
+              x: heatmapData.x,
+              y: heatmapData.y,
+              z: heatmapData.z,
+              type: 'heatmap',
+              colorscale: 'Viridis'
+            }];
+          }
+          return [];
+        
+        case 'bubble':
+          const bubbleData = chartData[0];
+          if (bubbleData && bubbleData.x && bubbleData.y && bubbleData.marker) {
+            return [{
+              x: bubbleData.x,
+              y: bubbleData.y,
+              mode: 'markers',
+              marker: {
+                size: bubbleData.marker.size,
+                color: '#3b82f6',
+                opacity: 0.7
+              },
+              type: 'scatter',
+              name: yAxis
+            }];
+          }
+          return [];
+        
+        default:
+          return [{
+            x: chartData.map(item => item[xKey]),
+            y: chartData.map(item => item[yKey]),
+            type: 'bar',
+            marker: {
+              color: '#3b82f6'
+            },
+            name: yAxis
+          }];
+      }
+    };
+
+    const getPlotlyLayout = () => {
+      const baseLayout = {
+        title: {
+          text: chartTitle,
+          font: {
+            color: '#e2e8f0',
+            size: 20
+          },
+          x: 0.5
+        },
+        xaxis: {
+          title: xAxis,
+          color: '#64748b',
+          showgrid: false,
+          zeroline: false,
+          showline: true,
+          linecolor: '#374151',
+          linewidth: 1
+        },
+        yaxis: {
+          title: yAxis,
+          color: '#64748b',
+          showgrid: false,
+          zeroline: false,
+          showline: true,
+          linecolor: '#374151',
+          linewidth: 1
+        },
+        margin: {
+          l: 60,
+          r: 30,
+          t: 60,
+          b: 60
+        }
+      };
+
+      // Chart-specific layout adjustments
+      if (chartType === 'pie') {
+        baseLayout.showlegend = true;
+        baseLayout.legend = {
+          x: 1,
+          y: 1,
+          bgcolor: 'rgba(0,0,0,0)',
+          bordercolor: 'rgba(0,0,0,0)',
+          font: { color: '#e2e8f0' }
+        };
+      }
+
+      return baseLayout;
+    };
+
+    return (
+      <div>
+        {/* Debug panel - remove this in production */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="mb-4 p-3 bg-slate-800/50 rounded-lg border border-slate-600/50 text-xs">
+            <div className="text-slate-300 font-semibold mb-2">Debug Info:</div>
+            <div className="text-slate-400 space-y-1">
+              <div>Chart: {debugInfo.chartType} | X: {debugInfo.xAxis} | Y: {debugInfo.yAxis}</div>
+              <div>Aggregation: {debugInfo.aggregation} | Data Points: {debugInfo.dataLength}</div>
+              <div>Valid Data: {debugInfo.hasValidData ? 'Yes' : 'No'}</div>
+              <div>First Item: {JSON.stringify(debugInfo.firstItem)}</div>
+            </div>
           </div>
-        );
+        )}
+        <div className="h-[600px]">
+          <PlotlyChart 
+            data={getPlotlyData()} 
+            layout={getPlotlyLayout()} 
+            config={{
+              responsive: true,
+              displayModeBar: true,
+              modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+              displaylogo: false
+            }}
+          />
+        </div>
+      </div>
+    );
       case 'line':
         return (
           <div>
