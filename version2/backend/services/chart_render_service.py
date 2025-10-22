@@ -592,6 +592,14 @@ class ChartRenderService:
             logger.error(f"Universal aggregation failed ({agg_method}): {e}")
             return []
 
+    def _get_default_agg(self, col_dtype: pl.DataType) -> str:
+        """Returns default aggregation based on dtype."""
+        dtype_str = str(col_dtype).lower()
+        for key, agg in self.default_aggregations.items():
+            if key in dtype_str:
+                return agg
+        return "count"  # Fallback for unknown types
+
     def _get_aggregation_function(self, aggregation: str, dtype) -> callable:
         """Returns the appropriate Polars aggregation function based on aggregation type and data type."""
         if aggregation == "sum":
@@ -831,19 +839,27 @@ class ChartRenderService:
         group_by = config.get("group_by") or config.get("category")
         aggregation = config.get("aggregation", "count")
 
-        if len(columns) < 1 or not group_by:
-            logger.warning("Missing required columns or group_by for pie chart")
+        # Support both old format (group_by + columns) and new format (columns array)
+        if len(columns) < 2:
+            logger.warning("Pie chart requires at least 2 columns: [x_axis, y_axis]")
             return []
 
-        safe_group_by = self._find_safe_column_name(df, group_by)
-        if not safe_group_by:
-            logger.warning(f"Group by column '{group_by}' not found")
-            return []
-
-        value_col = self._find_safe_column_name(df, columns[0])
-        if not value_col:
-            logger.warning(f"Value column '{columns[0]}' not found")
-            return []
+        # For new format: columns[0] = x_axis (categories), columns[1] = y_axis (values)
+        # For old format: group_by = categories, columns[0] = values
+        if group_by:
+            # Old format
+            safe_group_by = self._find_safe_column_name(df, group_by)
+            value_col = self._find_safe_column_name(df, columns[0])
+            if not safe_group_by or not value_col:
+                logger.warning(f"Missing columns for pie chart: group_by={group_by}, value={columns[0]}")
+                return []
+        else:
+            # New format: columns[0] = categories, columns[1] = values
+            safe_group_by = self._find_safe_column_name(df, columns[0])
+            value_col = self._find_safe_column_name(df, columns[1])
+            if not safe_group_by or not value_col:
+                logger.warning(f"Missing columns for pie chart: x_axis={columns[0]}, y_axis={columns[1]}")
+                return []
 
         try:
             # Force count aggregation for pie charts (best practice)
@@ -869,6 +885,10 @@ class ChartRenderService:
             if not labels or not values:
                 logger.warning("No data points generated for pie chart")
                 return []
+            
+            logger.info(f"Pie chart generated with {len(labels)} categories")
+            logger.info(f"Sample labels: {labels[:3]}")
+            logger.info(f"Sample values: {values[:3]}")
             
             return [{
                 "labels": labels,
