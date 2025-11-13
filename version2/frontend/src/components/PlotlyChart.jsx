@@ -6,15 +6,42 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
   useEffect(() => {
     const loadPlotly = async () => {
       try {
-        // Dynamically import Plotly to avoid SSR issues
         const Plotly = (await import('plotly.js-dist-min')).default;
-        
         if (plotRef.current && data) {
-          // Process data based on chart type
           let processedData = data;
-          
-          if (chartType === 'pie' && data.length > 0 && data[0].labels && data[0].values) {
-            // Convert pie chart data to Plotly format
+          let xKey = 'x', yKey = 'y';
+          let xLabel = '', yLabel = '';
+          // Use config.columns if available
+          if ((chartType === 'line' || chartType === 'line_chart' || chartType === 'bar' || chartType === 'bar_chart') && Array.isArray(data) && data.length > 0) {
+            if (config && Array.isArray(config.columns) && config.columns.length >= 2) {
+              xKey = config.columns[0];
+              yKey = config.columns[1];
+              xLabel = config.columns[0];
+              yLabel = config.columns[1];
+            } else {
+              const first = data[0];
+              const keys = Object.keys(first);
+              if (keys.includes('x') && keys.includes('y')) {
+                xKey = 'x';
+                yKey = 'y';
+                xLabel = 'x';
+                yLabel = 'y';
+              } else if (keys.length >= 2) {
+                xKey = keys[0];
+                yKey = keys[1];
+                xLabel = keys[0];
+                yLabel = keys[1];
+              }
+            }
+            processedData = [{
+              x: data.map(row => row[xKey]),
+              y: data.map(row => row[yKey]),
+              type: (chartType === 'bar' || chartType === 'bar_chart') ? 'bar' : 'scatter',
+              mode: (chartType === 'line' || chartType === 'line_chart') ? 'lines+markers' : undefined,
+              marker: { color: '#3b82f6' },
+              name: yLabel
+            }];
+          } else if (chartType === 'pie' && data.length > 0 && data[0].labels && data[0].values) {
             processedData = [{
               labels: data[0].labels,
               values: data[0].values,
@@ -26,7 +53,6 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
               }
             }];
           } else if (chartType === 'donut' && data.length > 0 && data[0].labels && data[0].values) {
-            // Convert donut chart data to Plotly format
             processedData = [{
               labels: data[0].labels,
               values: data[0].values,
@@ -51,13 +77,15 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
               color: '#64748b',
               gridcolor: 'rgba(100, 116, 139, 0.2)',
               showgrid: true,
-              zeroline: false
+              zeroline: false,
+              title: { text: xLabel, font: { color: '#e2e8f0' } }
             },
             yaxis: {
               color: '#64748b',
               gridcolor: 'rgba(100, 116, 139, 0.2)',
               showgrid: true,
-              zeroline: false
+              zeroline: false,
+              title: { text: yLabel, font: { color: '#e2e8f0' } }
             },
             margin: {
               l: 60,
@@ -90,7 +118,6 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
         }
       } catch (error) {
         console.error('Failed to load Plotly:', error);
-        // Fallback: show a simple message
         if (plotRef.current) {
           plotRef.current.innerHTML = `
             <div style="
@@ -115,10 +142,7 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
         }
       }
     };
-
     loadPlotly();
-
-    // Cleanup function
     return () => {
       if (plotRef.current) {
         plotRef.current.innerHTML = '';

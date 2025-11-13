@@ -75,7 +75,7 @@ class AIService:
             response = await self.http_client.post(
                 f"{base_url}/api/generate",
                 json=payload,
-                # timeout=settings.MODEL_HEALTH_CHECK_TIMEOUT
+                timeout=240.0  # Increased timeout for Colab/Ollama
             )
 
             logger.info(f"Response status: {response.status_code}")
@@ -313,19 +313,28 @@ class AIService:
         blueprint = dashboard_blueprint_doc["blueprint"]
         hydrated_components = []
         for component in blueprint.get("components", []):
+            # Some LLM responses may return strings or other non-dict placeholders.
+            if not isinstance(component, dict):
+                logger.warning(f"Skipping component because it's not a dict: {repr(component)[:200]}")
+                continue
             try:
                 hydrated_component = component.copy()
-                if component["type"] == "kpi":
-                    hydrated_component["value"] = self._hydrate_kpi_data(df, component["config"])
-                elif component["type"] == "chart":
-                    hydrated_component["chart_data"] = self._hydrate_chart_data(df, component["config"])
-                elif component["type"] == "table":
-                    hydrated_component["table_data"] = self._hydrate_table_data(df, component["config"])
-                
-                if hydrated_component.get("value") is not None or hydrated_component.get("chart_data") or hydrated_component.get("table_data"):
+                ctype = component.get("type")
+                config = component.get("config", {})
+                if ctype == "kpi":
+                    hydrated_component["value"] = self._hydrate_kpi_data(df, config)
+                elif ctype == "chart":
+                    hydrated_component["chart_data"] = self._hydrate_chart_data(df, config)
+                elif ctype == "table":
+                    hydrated_component["table_data"] = self._hydrate_table_data(df, config)
+
+                # Only append components that have some populated data
+                if (hydrated_component.get("value") is not None) or hydrated_component.get("chart_data") or hydrated_component.get("table_data"):
                     hydrated_components.append(hydrated_component)
             except Exception as e:
-                logger.warning(f"Could not populate dashboard component '{component.get('title')}'. Error: {e}", exc_info=True)
+                # Use safe logging in case component lacks 'title' or other keys
+                title = component.get('title') if isinstance(component, dict) else None
+                logger.warning(f"Could not populate dashboard component '{title}'. Error: {e}")
 
         return {"layout_grid": blueprint.get("layout_grid", "repeat(1, 1fr)"), "components": hydrated_components}
 
@@ -759,6 +768,26 @@ class AIService:
             
             enhanced_parts = [basic_context]
             
+            # Add column type information for better AI understanding
+            column_info = []
+            try:
+                for col in df.columns:
+                    col_type = str(df[col].dtype)
+                    if col_type in ['Int64', 'Float64', 'Int32', 'Float32']:
+                        column_info.append(f"NUMERIC: {col} ({col_type})")
+                    elif col_type in ['Utf8', 'Categorical']:
+                        column_info.append(f"CATEGORICAL: {col} ({col_type})")
+                    elif col_type in ['Date', 'Datetime']:
+                        column_info.append(f"TEMPORAL: {col} ({col_type})")
+                    else:
+                        column_info.append(f"OTHER: {col} ({col_type})")
+            except Exception as e:
+                logger.warning(f"Could not extract column types: {e}")
+            
+            if column_info:
+                enhanced_parts.append("\nCOLUMN TYPES (use these exact names in dashboard):")
+                enhanced_parts.extend(column_info)
+            
             if sample_rows:
                 enhanced_parts.append("\nData Samples:")
                 enhanced_parts.extend(sample_rows)
@@ -869,9 +898,10 @@ class AIService:
         # For analytical queries, provide specific, actionable insights
         if any(keyword in query_lower for keyword in ["analyze", "insights", "patterns", "trends"]):
             if "correlation" in content_lower and "balls" in content_lower:
-                return "Players who face more balls tend to score higher runs. This pattern can help teams select batsmen who play longer innings and score more for the team."
+                # Neutral summary for correlation mentions that reference 'balls' to avoid sports-specific framing
+                return "The analysis indicates a positive relationship between the referenced variables; inspect the original columns for practical implications."
             elif "distribution" in content_lower and "skewed" in content_lower:
-                return "Your data shows some exceptional high-scoring performances that stand out from the average. Focus on these top performers to understand what makes them successful."
+                return "Your data distribution appears skewed, with a few extreme values affecting the mean. Consider using median or inspecting outliers to better understand typical behavior."
             elif "null" in content_lower or "missing" in content_lower:
                 return "I found some missing data that could affect your analysis. Consider cleaning the dataset or checking data quality before making important decisions."
             elif "outliers" in content_lower:
@@ -922,9 +952,9 @@ class AIService:
                 return "The average runs per batsman varies, with most players scoring in a typical range."
         
         elif "runs" in query_lower and "batsman" in query_lower:
-            return "The data shows clear patterns in batting performance. Players who face more balls consistently score higher runs, making them valuable for team strategy."
+            return "The content highlights relationships related to individual performance metrics; review the specific columns mentioned for actionable insights."
         elif "average" in query_lower and "strike" in query_lower:
-            return "There's an interesting relationship between batting average and strike rate. Players with higher averages tend to have more consistent performance over time."
+            return "The analysis suggests a relationship between average-style metrics and rate-style metrics; validate these findings against the original columns for practical significance."
         
         # Default: try to extract the main answer from the content
         else:
@@ -970,9 +1000,7 @@ Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '
             
             elif "correlation" in content_lower and "balls" in content_lower:
                 return f"""Technical Analysis:
-The correlation analysis shows a strong relationship between balls faced and runs scored. This suggests that batting time (balls faced) is a key predictor of scoring performance.
-
-Statistical Context: This correlation indicates that players who stay at the crease longer tend to accumulate more runs, which is valuable for team strategy and player selection.
+The correlation analysis references two variables that appear together in the content, suggesting a potential predictive relationship. Validate the relationship using the original dataset columns and consider domain context when interpreting the result.
 
 Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '.join(available_columns[:5])}{'...' if len(available_columns) > 5 else ''}"""
             
@@ -1121,6 +1149,56 @@ Dataset Context: {dataset_name} contains {len(available_columns)} columns: {', '
             return "histogram"
         else:
             return "pie"
+        
+    async def generate_ai_dashboard(self, dataset_id: str, user_id: str, force_regenerate: bool = False) -> Dict[str, Any]:
+        """Orchestrates DYNAMIC AI dashboard generation with SERVER-SIDE data hydration."""
+        try:
+            query = {"_id": dataset_id, "user_id": user_id}
+            dataset_doc = await self.db.datasets.find_one(query)
+            if not dataset_doc or not dataset_doc.get("metadata"):
+                raise HTTPException(status_code=404, detail="Dataset not ready.")
+        except Exception:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+
+        context_str = self._create_enhanced_llm_context(dataset_doc["metadata"], dataset_doc["file_path"])
+        chart_ids = [chart['id'] for chart in self.chart_definitions.values()]
+        factory = PromptFactory(dataset_context=context_str)
+        prompt = factory.get_prompt(PromptType.DASHBOARD_DESIGNER, chart_options=chart_ids)
+        
+        layout_response = await self._call_ollama(prompt, model_role="visualization_engine", expect_json=True)
+
+        if "error" in layout_response or "dashboard" not in layout_response:
+            raise HTTPException(status_code=500, detail="AI failed to generate a valid dashboard layout.")
+        
+        blueprint = layout_response["dashboard"]
+        if "components" not in blueprint:
+            raise HTTPException(status_code=500, detail="AI-generated dashboard is missing 'components'.")
+
+        df = await self._load_dataset_for_analysis(dataset_doc["file_path"])
+        
+        hydrated_components = []
+        for component in blueprint.get("components", []):
+            if not isinstance(component, dict):
+                logger.warning(f"Skipping component because it's not a dict: {repr(component)[:200]}")
+                continue
+            try:
+                hydrated_component = component.copy()
+                config = component.get("config", {})
+                ctype = component.get("type")
+                if ctype == "kpi":
+                    hydrated_component["value"] = self._hydrate_kpi_data(df, config)
+                elif ctype == "chart":
+                    hydrated_component["chart_data"] = self._hydrate_chart_data(df, config)
+                elif ctype == "table":
+                    hydrated_component["table_data"] = self._hydrate_table_data(df, config)
+
+                hydrated_components.append(hydrated_component)
+            except Exception as e:
+                title = component.get('title') if isinstance(component, dict) else None
+                logger.warning(f"Could not populate component '{title}'. Error: {e}")
+
+        return {"layout_grid": blueprint.get("layout_grid", "repeat(4, 1fr)"), "components": hydrated_components}
+
 
     def _hydrate_kpi_data(self, df: pl.DataFrame, config: Dict) -> Any:
         requested_col = config.get("column")
