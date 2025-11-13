@@ -22,6 +22,11 @@ class AnalysisService:
         self.numeric_dtypes = pl.NUMERIC_DTYPES
         self.categorical_dtypes = [pl.Utf8, pl.Categorical]
         self.temporal_dtypes = [pl.Date, pl.Datetime]
+        # Simple in-memory cache for expensive QUIS results keyed by dataset id
+        # Format: { dataset_id: { 'result': {...}, 'ts': timestamp } }
+        self._quis_cache = {}
+        # Cache TTL in seconds (avoid recomputing too frequently)
+        self._quis_cache_ttl = 30
 
     # ---------------- Basic Statistical Analyses ----------------
 
@@ -39,7 +44,12 @@ class AnalysisService:
                 mask = ~np.isnan(series1) & ~np.isnan(series2)
                 if mask.sum() < 5:
                     continue
-                corr = np.corrcoef(series1[mask], series2[mask])[0, 1]
+                # Guard against zero std deviation which causes divide-by-zero warnings
+                a = series1[mask]
+                b = series2[mask]
+                if np.nanstd(a) == 0 or np.nanstd(b) == 0:
+                    continue
+                corr = np.corrcoef(a, b)[0, 1]
                 if abs(corr) >= threshold:
                     results.append({
                         "type": "correlation",
@@ -513,8 +523,13 @@ class AnalysisService:
             mask = ~np.isnan(series1) & ~np.isnan(series2)
             if mask.sum() < 5:
                 return None
-            
-            corr = np.corrcoef(series1[mask], series2[mask])[0, 1]
+
+            a = series1[mask]
+            b = series2[mask]
+            if np.nanstd(a) == 0 or np.nanstd(b) == 0:
+                return None
+
+            corr = np.corrcoef(a, b)[0, 1]
             return float(corr) if not np.isnan(corr) else None
         except Exception:
             return None
@@ -537,8 +552,13 @@ class AnalysisService:
             mask = ~np.isnan(series1) & ~np.isnan(series2)
             if mask.sum() < 5:
                 return 0.0
-            
-            corr = np.corrcoef(series1[mask], series2[mask])[0, 1]
+
+            a = series1[mask]
+            b = series2[mask]
+            if np.nanstd(a) == 0 or np.nanstd(b) == 0:
+                return 0.0
+
+            corr = np.corrcoef(a, b)[0, 1]
             return abs(float(corr)) if not np.isnan(corr) else 0.0
         except Exception:
             return 0.0
@@ -559,12 +579,20 @@ class AnalysisService:
         findings.append(self.run_kmeans(df))
         return findings
 
-    def run_quis_analysis(self, df: pl.DataFrame) -> Dict[str, Any]:
+    def run_quis_analysis(self, df: pl.DataFrame, dataset_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Master QUIS analysis function that combines basic insights with deep subspace search.
         This is the main entry point for the enhanced QUIS methodology.
         """
         logger.info("Starting comprehensive QUIS analysis...")
+
+        # If a dataset_id is provided, try to use cached results to avoid repeated heavy computation
+        if dataset_id:
+            import time
+            cached = self._quis_cache.get(dataset_id)
+            if cached and (time.time() - cached.get('ts', 0) < self._quis_cache_ttl):
+                logger.info(f"Returning cached QUIS results for dataset {dataset_id}")
+                return cached['result']
         
         # Run basic statistical checks
         basic_insights = self.run_all_statistical_checks(df)
@@ -585,6 +613,11 @@ class AnalysisService:
         }
         
         logger.info(f"QUIS analysis completed: {quis_results['summary']}")
+
+        # Store in cache if dataset_id provided
+        if dataset_id:
+            import time
+            self._quis_cache[dataset_id] = {'result': quis_results, 'ts': time.time()}
         return quis_results
 
 

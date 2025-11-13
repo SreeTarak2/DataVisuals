@@ -90,11 +90,11 @@ export const aiAPI = {
       conversation_id: conversationId
     }),
   
-  // Generate AI dashboard
+  // Generate AI dashboard (legacy)
   generateDashboard: (datasetId, forceRegenerate = false) => 
     api.post(`/ai/${datasetId}/generate-dashboard?force_regenerate=${forceRegenerate}`),
   
-  // Design intelligent dashboard
+  // Design intelligent dashboard (new AI Designer)
   designDashboard: (datasetId, designPreference) => 
     api.post(`/ai/${datasetId}/design-dashboard`, { design_preference: designPreference }),
   
@@ -209,6 +209,21 @@ export const vectorAPI = {
 export const taskAPI = {
   // Get task status
   getTaskStatus: (taskId) => api.get(`/tasks/${taskId}/status`),
+};
+
+// Dashboard API calls
+export const dashboardAPI = {
+  // Get dashboard overview with KPIs
+  getDashboardOverview: (datasetId) => api.get(`/dashboard/${datasetId}/overview`),
+  
+  // Get dashboard charts
+  getDashboardCharts: (datasetId) => api.get(`/dashboard/${datasetId}/charts`),
+  
+  // Get AI dashboard layout
+  getAiDashboardLayout: (datasetId) => api.get(`/dashboard/${datasetId}/ai-layout`),
+  
+  // Get dashboard insights
+  getDashboardInsights: (datasetId) => api.get(`/dashboard/${datasetId}/insights`),
 };
 
 export default api;

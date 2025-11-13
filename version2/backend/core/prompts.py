@@ -43,9 +43,9 @@ class PromptFactory:
 
     def __init__(self, dataset_context: str = "", user_preferences: Optional[Dict[str, Any]] = None, schema: Optional[Dict[str, Any]] = None, rag_service=None):
         self.dataset_context = dataset_context
-        self.user_prefs = user_preferences or {}  # e.g., {"prefers_charts": True, "industry": "sales", "mode": "learning"}
-        self.schema = schema or {}  # Dynamic schema for accurate column/types
-        self.rag_service = rag_service  # Injected FAISS service for few-shots
+        self.user_prefs = user_preferences or {} 
+        self.schema = schema or {} 
+        self.rag_service = rag_service  
 
     def _inject_context(self, template: str) -> str:
         """Helper to inject dataset and user context into templates."""
@@ -64,8 +64,7 @@ class PromptFactory:
         """Compress context to reduce token usage while preserving key information."""
         if len(context) <= max_length:
             return context
-        
-        # Simple compression: keep first part and last part with indicator
+
         first_part = context[:max_length//2]
         last_part = context[-(max_length//2):]
         return f"{first_part}... [compressed] ...{last_part}"
@@ -76,7 +75,7 @@ class PromptFactory:
         try:
             return template_with_context.format(**kwargs)
         except KeyError as e:
-            # Fallback to string replacement for complex templates
+           
             result = template_with_context
             for key, value in kwargs.items():
                 result = result.replace(f"{{{key}}}", str(value))
@@ -85,7 +84,7 @@ class PromptFactory:
     def _validate_output(self, output: str, prompt_type: PromptType) -> Dict[str, Any]:
         """Validate LLM output against expected schema with retry logic."""
         try:
-            # Extract JSON from output if needed
+ 
             json_match = re.search(r'\{.*\}', output, re.DOTALL)
             if json_match:
                 json_str = json_match.group(0)
@@ -94,7 +93,6 @@ class PromptFactory:
             
             parsed = json.loads(json_str)
             
-            # Echo Detection - Check if model copied template text
             response_text = parsed.get("response_text", "")
             if ("pedagogical approach" in response_text and "150-250 words" in response_text) or "[ORIGINAL" in response_text:
                 return {
@@ -139,9 +137,38 @@ class PromptFactory:
         if not self.rag_service:
             return []
         try:
-            # Note: This would need to be called asynchronously in practice
-            # For now, return empty list as the actual implementation would require async/await
-            return []
+            import asyncio
+            import inspect
+
+            search_fn = getattr(self.rag_service, 'search_similar_queries', None)
+            if not callable(search_fn):
+                return []
+
+            if inspect.iscoroutinefunction(search_fn):
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        return []
+                except RuntimeError:
+                    # No current loop, safe to run
+                    pass
+
+                results = asyncio.run(search_fn(query, None, k=limit))
+            else:
+                # sync function - call directly
+                results = search_fn(query, None, k=limit)
+
+            if not results:
+                return []
+
+            # Normalize results to a few-shot format: {query, response}
+            few_shots: List[Dict[str, Any]] = []
+            for r in results[:limit]:
+                few_shots.append({
+                    'query': r.get('query') or r.get('content_preview') or r.get('dataset_id') or '',
+                    'response': r.get('response', '')
+                })
+            return few_shots
         except Exception:
             return []
     
@@ -149,8 +176,7 @@ class PromptFactory:
         """Compress history to key themes for token efficiency."""
         if len(history) <= 2:
             return "\n".join([f"{msg['role'].title()}: {msg['content'][:100]}..." for msg in history])
-        
-        # Summarize recent exchanges
+
         recent = history[-2:]
         summary_parts = []
         for msg in recent:
@@ -177,8 +203,6 @@ class PromptFactory:
         if not method:
             raise ValueError(f"Unknown prompt type: {prompt_type}")
         return method(**kwargs)
-
-    # ---------------- Enhanced Conversational Prompt with Pedagogy ----------------
 
     def _get_conversational_prompt(
         self,
@@ -219,27 +243,47 @@ class PromptFactory:
         5. Use schema for accurate columns/types. Bias to {mode} (e.g., 'learning': more explanations).
         """
 
+        # Detect if user is requesting a chart
+        query_lower = query.lower()
+        is_chart_request = any(keyword in query_lower for keyword in [
+            'chart', 'graph', 'plot', 'visualize', 'show me', 'display', 'bar', 'line', 'pie'
+        ])
+        
         template = f"""
-        Analyze the dataset and answer: {query}
+        Analyze the dataset and answer the user's query.
 
-        Dataset Schema: {{schema}}
+        **USER QUERY:** {query}
 
-        Provide a JSON response with:
+        **DATASET SCHEMA:**
+        {{schema}}
+
+        **IMPORTANT INSTRUCTIONS:**
+        1. Use ONLY actual column names from the schema above
+        2. {"**CHART REQUIRED:** The user is asking for a visualization. You MUST provide a chart_config." if is_chart_request else "Provide chart_config only if visualization would enhance the answer."}
+        3. Do NOT use HTML/Tailwind classes in response_text - use plain text with markdown formatting only
+        4. Make response_text engaging and insightful (150-200 words)
+
+        **CHART TYPES AVAILABLE:**
+        - "bar_chart" or "bar": Compare categories (needs 1 categorical + 1 numeric column)
+        - "line_chart" or "line": Show trends over time (needs 1 date/temporal + 1 numeric column)
+        - "pie_chart" or "pie": Show distribution (needs 1 categorical + 1 numeric column)
+        - "scatter_plot" or "scatter": Show correlation (needs 2 numeric columns)
+        - "histogram": Show distribution of single numeric column
+
+        **OUTPUT FORMAT (JSON only):**
         {{
-            "response_text": "Your analysis and insights about the data trends (150-200 words). Include specific findings and what they mean.",
-            "chart_config": null OR {{"chart_type": "bar|line|pie", "columns": ["Column1", "Column2"], "aggregation": "sum"}},
+            "response_text": "Your engaging analysis without HTML classes - use **bold** and *italic* markdown only",
+            "chart_config": {{"chart_type": "bar", "columns": ["ActualColumnName1", "ActualColumnName2"], "aggregation": "sum", "group_by": "ActualColumnName1"}} OR null,
             "confidence": "High|Med|Low"
         }}
 
-        Use actual column names from the schema. Generate original, engaging content.
+        {"**REMEMBER:** User explicitly requested a chart - chart_config MUST NOT be null!" if is_chart_request else ""}
         """
         return self._render_template(
             template,
             schema=json.dumps(self.schema, indent=2) if self.schema else "No schema available",
             mode=mode
         )
-
-    # ---------------- Enhanced Statistical Insight Summarizer Prompt ----------------
 
     def _get_insight_summarizer_prompt(
         self,
@@ -292,8 +336,6 @@ class PromptFactory:
             focus_str=focus_str
         )
 
-    # ---------------- Enhanced QUIS Prompt ----------------
-
     def _get_quis_answer_prompt(self, question: str, depth_level: int = 1) -> str:
         """
         Enhanced: Adds depth for subspace analysis; context-aware brevity.
@@ -319,8 +361,6 @@ class PromptFactory:
             question=question,
             depth_level=depth_level
         )
-
-    # ---------------- Enhanced Chart Recommendation Prompt ----------------
 
     def _get_chart_recommendation_prompt(
         self,
@@ -362,7 +402,7 @@ class PromptFactory:
             goal_str=goal_str
         )
 
-    # ---------------- Enhanced Dashboard Designer Prompt ----------------
+    # ---------------- Dashboard Designer Prompt ----------------
     def _get_dashboard_designer_prompt(
         self,
         chart_options: List[str],
@@ -376,102 +416,58 @@ class PromptFactory:
         chart_options_str = ", ".join(chart_options)
 
         style_guide_and_example = f"""
-        **Dashboard Design Principles:**
+        You are an expert data analyst creating a dynamic dashboard. Analyze the dataset context below and create a professional dashboard using ONLY the actual column names and data types provided.
 
-        Your task is to design a professional dashboard layout using ONLY the actual column names from the dataset context below.
+        **TASK:**
+        Create a JSON dashboard configuration that uses the EXACT column names from the dataset context. Do NOT use placeholder names or generic examples.
 
-        **Design Guidelines:**
-        1. Create EXACTLY 4 KPI components using numeric columns (Total Sales, Price per Unit, Units Sold)
-        2. Create EXACTLY 5-6 charts using different chart types and combinations
-        3. Include 1 data table at the end showing all columns
-        4. Total: 10-11 components (4 KPIs + 5-6 charts + 1 table)
+        **DASHBOARD REQUIREMENTS:**
+        1. Create 3-4 KPI cards using numeric columns with appropriate aggregations
+        2. Create 4-8 charts using different visualizations based on data types
+        3. Include 1 data table showing all columns
+        4. Use meaningful titles that reflect the actual data domain
 
-        **CRITICAL RULES - READ CAREFULLY:**
-        1. **USE ONLY ACTUAL COLUMN NAMES** - Look at the dataset context and use the exact column names provided
-        2. **DO NOT use placeholders** like [actual_column_name], [date_column], [value_column], etc.
-        3. **DO NOT copy the example** - Create your own dashboard based on the actual data
-        4. **Match column types** - Use numeric columns for KPIs and value columns, categorical for grouping
+        **CHART TYPE SELECTION RULES:**
+        - Use bar_chart for categorical vs numeric comparisons
+        - Use pie_chart for categorical distributions (max 8 categories)
+        - Use line_chart for time series or ordered data
+        - Use scatter_plot for numeric vs numeric relationships
+        - Use histogram for single numeric column distributions
+        - Use area_chart for cumulative trends over time
 
-        **Available Chart Types:** [{chart_options_str}]
-        
-        **Advanced Chart Types Available:**
-        - line_chart: Time-series trends (use with date columns)
-        - bar_chart: Comparisons and rankings
-        - pie_chart: Proportions and distributions
-        - scatter_plot: Correlations and relationships
-        - area_chart: Cumulative trends over time
-        - histogram: Data distribution analysis
-        - heatmap: Pattern visualization
-        - box_plot: Statistical distributions
-        - violin_plot: Advanced distributions
-        - treemap: Hierarchical data
-        - candlestick: Financial data (requires OHLC data - not applicable to this dataset)
+        **KPI SELECTION RULES:**
+        - Use sum() for total values where appropriate
+        - Use mean() for averages
+        - Use count() for record counts
+        - Use max()/min() for extremes
 
-        **For THIS dataset, you MUST use these exact columns:**
-        STRING columns: "Invoice Date", "Product", "Region", "Retailer", "Sales Method", "State"
-        INT64 columns: "Price per Unit", "Total Sales", "Units Sold"
-        
-        **REQUIRED COMPONENTS - Generate EXACTLY these:**
-        
-        1. KPI: Total Sales (sum of "Total Sales" column)
-        2. KPI: Average Price (mean of "Price per Unit" column)
-        3. KPI: Total Units (sum of "Units Sold" column)
-        4. KPI: Total Records (count of "Total Sales" column)
-        
-        5. Chart: Line chart showing "Total Sales" over time by "Invoice Date" (time-series)
-        6. Chart: Bar chart showing "Total Sales" by "Region"
-        7. Chart: Pie chart showing "Total Sales" by "Product"
-        8. Chart: Scatter plot showing "Price per Unit" vs "Total Sales" colored by "Region"
-        9. Chart: Area chart showing "Units Sold" over time by "Invoice Date"
-        10. Chart: Bar chart showing "Total Sales" by "Retailer"
-        11. Chart: Histogram showing distribution of "Price per Unit"
-        12. Chart: Bar chart showing "Units Sold" by "Sales Method"
-        
-        13. Table: Show all columns
-        
-        **COMPLETE WORKING EXAMPLE - Copy this structure:**
+        **TITLE GENERATION RULES:**
+        - Use descriptive titles based on actual column names and data domain
+        - For any data: Use meaningful titles that reflect the actual data content
+        - Avoid including unrelated example domains; rely only on the provided dataset context
+
+        **REQUIRED JSON STRUCTURE:**
         {{
-          "dashboard": {{
-            "layout_grid": "repeat(4, 1fr)",
-            "components": [
-              {{ "type": "kpi", "title": "Total Sales", "span": 1, "config": {{"column": "Total Sales", "aggregation": "sum", "icon": "TrendingUp", "color": "emerald"}} }},
-              {{ "type": "kpi", "title": "Average Price", "span": 1, "config": {{"column": "Price per Unit", "aggregation": "mean", "icon": "Database", "color": "blue"}} }},
-              {{ "type": "kpi", "title": "Total Units", "span": 1, "config": {{"column": "Units Sold", "aggregation": "sum", "icon": "Users", "color": "green"}} }},
-              {{ "type": "kpi", "title": "Total Records", "span": 1, "config": {{"column": "Total Sales", "aggregation": "count", "icon": "FileText", "color": "amber"}} }},
-              
-              {{ "type": "chart", "title": "Sales Over Time", "span": 2, "config": {{"chart_type": "line_chart", "columns": ["Invoice Date", "Total Sales"], "aggregation": "sum", "group_by": "Invoice Date"}} }},
-              {{ "type": "chart", "title": "Sales by Region", "span": 2, "config": {{"chart_type": "bar_chart", "columns": ["Region", "Total Sales"], "aggregation": "sum", "group_by": "Region"}} }},
-              {{ "type": "chart", "title": "Sales by Product", "span": 2, "config": {{"chart_type": "pie_chart", "columns": ["Product", "Total Sales"], "aggregation": "sum", "group_by": "Product"}} }},
-              {{ "type": "chart", "title": "Price vs Sales", "span": 2, "config": {{"chart_type": "scatter_plot", "columns": ["Price per Unit", "Total Sales"], "aggregation": "none", "group_by": "Region"}} }},
-              {{ "type": "chart", "title": "Units Over Time", "span": 2, "config": {{"chart_type": "area_chart", "columns": ["Invoice Date", "Units Sold"], "aggregation": "sum", "group_by": "Invoice Date"}} }},
-              {{ "type": "chart", "title": "Sales by Retailer", "span": 2, "config": {{"chart_type": "bar_chart", "columns": ["Retailer", "Total Sales"], "aggregation": "sum", "group_by": "Retailer"}} }},
-              {{ "type": "chart", "title": "Price Distribution", "span": 2, "config": {{"chart_type": "histogram", "columns": ["Price per Unit"], "aggregation": "none", "group_by": "Price per Unit"}} }},
-              {{ "type": "chart", "title": "Units by Sales Method", "span": 2, "config": {{"chart_type": "bar_chart", "columns": ["Sales Method", "Units Sold"], "aggregation": "sum", "group_by": "Sales Method"}} }},
-              
-              {{ "type": "table", "title": "Data Overview", "span": 4, "config": {{"columns": ["Invoice Date", "Product", "Region", "Retailer", "Sales Method", "State", "Price per Unit", "Total Sales", "Units Sold"]}} }}
-            ]
-          }}
+            "dashboard": {{
+                "layout_grid": "repeat(4, 1fr)",
+                "components": [
+                    // KPI components using actual numeric columns
+                    // chart components using actual column combinations
+                    // table component showing all columns
+                ]
+            }}
         }}
 
-        **CRITICAL INSTRUCTIONS:**
-        1. You MUST include EXACTLY 4 KPIs + 8 CHARTS + 1 TABLE = 13 components total
-        2. DO NOT skip the charts - they are required!
-        3. Use the complete working example above as your template
-        4. Replace the example values with the actual column names from the dataset
-        5. Make sure each chart has the correct chart_type and columns
-        6. Return ONLY the JSON object, no explanations
+        **CRITICAL REQUIREMENTS:**
+        1. Use ONLY the exact column names from the dataset context above
+        2. Create titles that match the actual data domain
+        3. Choose appropriate chart types based on data types
+        4. Use meaningful aggregations for each column
+        5. Return ONLY valid JSON, no explanations
 
-        **MANDATORY: Include these 8 charts:**
-        - Line chart: Sales over time
-        - Bar chart: Sales by Region  
-        - Pie chart: Sales by Product
-        - Scatter plot: Price vs Sales
-        - Area chart: Units over time
-        - Bar chart: Sales by Retailer
-        - Histogram: Price distribution
-        - Bar chart: Units by Sales Method
+        **Available Chart Types:** [{chart_options_str}]
 
-        Provide only the valid JSON object and nothing else.
+        Generate the dashboard now using the actual dataset context provided above.
         """
 
         template = f"""
@@ -493,7 +489,6 @@ class PromptFactory:
         Provide only the valid JSON object and nothing else.
         """
 
-        # ✅ FIX: Avoid using .format() which breaks due to JSON braces in template
         template_formatted = (
             template.replace("{chart_options_str}", chart_options_str)
                     .replace("{max_components}", str(max_components))

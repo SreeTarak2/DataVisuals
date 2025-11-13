@@ -11,32 +11,33 @@ class Settings:
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "50"))
     
-    
-    # # Ollama Configuration
-    # OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "https://3aa913b93b79.ngrok-free.app/")
-    # OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "mistral:7b")
-
-    LLAMA_BASE_URL = "https://6b6cb7783656.ngrok-free.app/"
+    # ollama configuration
+    LLAMA_BASE_URL = "https://16f2df641e78.ngrok-free.app/"
     QWEN_BASE_URL = "https://wilber-unremarried-reversibly.ngrok-free.dev/"
+    # QWEN_BASE_URL = "https://5ce3bc3451f9.ngrok-free.app/"
+    # LLAMA_BASE_URL = "https://wilber-unremarried-reversibly.ngrok-free.dev/"
+    
+    model_name = "llama3.1"
+    # LLAMA_BASE_URL = QWEN_BASE_URL
 
     MODELS = {
         "chat_engine": {
-            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+            "primary": {"model": model_name, "base_url": LLAMA_BASE_URL}
         },
         "layout_designer": {
-            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+            "primary": {"model": model_name, "base_url": LLAMA_BASE_URL}
         },
         "summary_engine": {
-            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+            "primary": {"model": model_name, "base_url": LLAMA_BASE_URL}
         },
         "chart_recommender": {
-            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+            "primary": {"model": model_name, "base_url": LLAMA_BASE_URL}
         },
         "chart_engine": {
-            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+            "primary": {"model": model_name, "base_url": LLAMA_BASE_URL}
         },
         "insight_engine": {
-            "primary": {"model": "llama3.1:latest", "base_url": LLAMA_BASE_URL}
+            "primary": {"model": model_name, "base_url": LLAMA_BASE_URL}
         },
         "visualization_engine": {
             "primary": {"model": "qwen3:0.6b", "base_url": QWEN_BASE_URL}

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { ResponsiveContainer, LineChart as RechartsLineChart, BarChart as RechartsBarChart, PieChart as RechartsPieChart, Line, Bar, Pie, Cell, XAxis, YAxis, Tooltip } from 'recharts';
 import PlotlyChart from './PlotlyChart';
+import IntelligentChartExplanation from './IntelligentChartExplanation';
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'];
 
@@ -38,11 +39,10 @@ const DashboardComponent = ({ component, datasetData }) => {
   const formatValue = (value, aggregation) => {
     if (typeof value === 'number') {
       if (aggregation === 'sum' || aggregation === 'mean') {
+        // Format as number without currency symbol - let the data context determine the unit
         return new Intl.NumberFormat('en-US', {
-          style: 'currency',
-          currency: 'USD',
           minimumFractionDigits: 0,
-          maximumFractionDigits: 0
+          maximumFractionDigits: 2
         }).format(value);
       } else if (aggregation === 'count' || aggregation === 'nunique') {
         return new Intl.NumberFormat('en-US').format(value);
@@ -51,91 +51,216 @@ const DashboardComponent = ({ component, datasetData }) => {
     return value?.toString() || 'N/A';
   };
 
+  // Helper to normalize column names for matching
+  const normalizeCol = col => (typeof col === 'string' ? col.replace(/_/g, ' ').toLowerCase() : '');
+
+  const findActualCol = (col, availableColumns) => {
+    const normCol = normalizeCol(col);
+    if (!normCol) return null;
+
+    // 1) exact normalized match
+    for (const avail of availableColumns) {
+      if (normalizeCol(avail) === normCol) return avail;
+    }
+
+    // 2) available includes requested (e.g., 'invoice date' includes 'date')
+    for (const avail of availableColumns) {
+      const nAvail = normalizeCol(avail);
+      if (nAvail.includes(normCol)) return avail;
+    }
+
+    // 3) requested includes available (e.g., 'date' vs 'order date')
+    for (const avail of availableColumns) {
+      const nAvail = normalizeCol(avail);
+      if (normCol.includes(nAvail)) return avail;
+    }
+
+    // 4) simple synonyms map for common business terms
+    const synonyms = {
+      revenue: ['total sales', 'total_sales', 'sales', 'sales amount', 'amount'],
+      date: ['invoice date', 'invoice_date', 'order date', 'order_date', 'date'],
+      category: ['product', 'region', 'retailer', 'sales method', 'state', 'category'],
+      units: ['units sold', 'units_sold', 'units']
+    };
+
+    if (synonyms[normCol]) {
+      for (const syn of synonyms[normCol]) {
+        for (const avail of availableColumns) {
+          if (normalizeCol(avail) === normalizeCol(syn) || normalizeCol(avail).includes(normalizeCol(syn))) return avail;
+        }
+      }
+    }
+
+    return null;
+  };
+
   const generateChartData = (config, data) => {
     console.log('Generating chart data:', { config, dataLength: data?.length });
-    
-    if (!data || !config) {
+    if (!data || data.length === 0 || !config) {
       console.log('No data or config, returning fallback');
       return generateFallbackChartData(config);
     }
-    
-    // Log available columns for debugging
     if (data.length > 0) {
       console.log('Available columns:', Object.keys(data[0]));
     }
-
     try {
       const { chart_type, columns, aggregation, group_by } = config;
       console.log('Chart config:', { chart_type, columns, aggregation, group_by });
+      // Find actual column names in dataset
+      const availableColumns = data.length > 0 ? Object.keys(data[0]) : [];
       
-      // Check if required columns exist in data
-      if (data.length > 0) {
-        const availableColumns = Object.keys(data[0]);
-        const missingColumns = columns.filter(col => !availableColumns.includes(col));
-        if (missingColumns.length > 0) {
-          console.error('Missing columns:', missingColumns, 'Available:', availableColumns);
+      if (!columns || columns.length === 0) {
+        console.error('No columns specified in config');
+        return generateFallbackChartData(config);
+      }
+      
+      const actualCols = columns.map(col => findActualCol(col, availableColumns));
+      const missingColumns = actualCols.filter(col => !col);
+      if (missingColumns.length > 0) {
+        console.error('Missing columns:', columns, 'Available:', availableColumns);
+        // Try to use any available numeric and categorical columns
+        const numericCols = availableColumns.filter(col => {
+          const val = data[0][col];
+          return typeof val === 'number' || (!isNaN(parseFloat(val)) && isFinite(val));
+        });
+        const categoricalCols = availableColumns.filter(col => {
+          const val = data[0][col];
+          return typeof val === 'string' || val instanceof String;
+        });
+        
+        if (numericCols.length > 0 && categoricalCols.length > 0) {
+          console.log('Using fallback columns:', categoricalCols[0], numericCols[0]);
+          actualCols[0] = categoricalCols[0];
+          actualCols[1] = numericCols[0];
+        } else {
           return generateFallbackChartData(config);
         }
       }
-      
-      if (chart_type === 'line_chart' && columns.length >= 2) {
-        // Group data by the group_by column and aggregate
+      // Use actual column names for mapping
+      const xCol = actualCols[0];
+      const yCol = actualCols[1];
+      const groupCol = group_by ? findActualCol(group_by, availableColumns) : xCol;
+      // Handle different chart types from backend
+      if ((chart_type === 'line_chart' || chart_type === 'line') && actualCols.length >= 2) {
         const grouped = {};
         data.forEach(row => {
-          const key = row[group_by || columns[0]];
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push(row[columns[1]]);
+          const key = row[groupCol];
+          if (key != null && key !== '') {
+            if (!grouped[key]) grouped[key] = [];
+            const value = parseFloat(row[yCol]);
+            if (!isNaN(value)) {
+              grouped[key].push(value);
+            }
+          }
         });
-
         const result = Object.entries(grouped).map(([key, values]) => ({
-          [group_by || columns[0]]: key,  // Use group_by column for X-axis
-          [columns[1]]: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
-                       aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
-                       values.length
-        }));
-        
-        console.log('Generated line chart data:', result);
+          [groupCol]: key,
+          [yCol]: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
+                   aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
+                   aggregation === 'count' ? values.length :
+                   values.length
+        })).slice(0, 50); // Limit to 50 data points for performance
+        console.log('Generated line chart data:', result.length, 'points');
         return result.length > 0 ? result : generateFallbackChartData(config);
-      } else if (chart_type === 'bar_chart' && columns.length >= 2) {
-        // Similar logic for bar charts
+      } else if ((chart_type === 'bar_chart' || chart_type === 'bar') && actualCols.length >= 2) {
         const grouped = {};
         data.forEach(row => {
-          const key = row[group_by || columns[0]];
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push(row[columns[1]]);
+          const key = row[groupCol];
+          if (key != null && key !== '') {
+            if (!grouped[key]) grouped[key] = [];
+            const value = parseFloat(row[yCol]);
+            if (!isNaN(value)) {
+              grouped[key].push(value);
+            }
+          }
         });
-
-        const result = Object.entries(grouped).map(([key, values]) => ({
-          [group_by || columns[0]]: key,  // Use group_by column for X-axis
-          [columns[1]]: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
-                       aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
-                       values.length
-        }));
-        
-        console.log('Generated bar chart data:', result);
+        const result = Object.entries(grouped)
+          .map(([key, values]) => ({
+            [groupCol]: key,
+            [yCol]: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
+                     aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
+                     aggregation === 'count' ? values.length :
+                     values.length
+          }))
+          .sort((a, b) => b[yCol] - a[yCol]) // Sort by value descending
+          .slice(0, 20); // Limit to top 20 categories for readability
+        console.log('Generated bar chart data:', result.length, 'points');
         return result.length > 0 ? result : generateFallbackChartData(config);
-      } else if (chart_type === 'pie_chart' && columns.length >= 2) {
+      } else if ((chart_type === 'pie_chart' || chart_type === 'pie') && actualCols.length >= 2) {
         const grouped = {};
         data.forEach(row => {
-          const key = row[columns[0]];
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push(row[columns[1]]);
+          const key = row[xCol];
+          if (key != null && key !== '') {
+            if (!grouped[key]) grouped[key] = [];
+            const value = parseFloat(row[yCol]);
+            if (!isNaN(value)) {
+              grouped[key].push(value);
+            }
+          }
         });
-
-        const result = Object.entries(grouped).map(([key, values]) => ({
-          name: key,
-          value: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
-                 aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
-                 values.length
-        }));
+        const result = Object.entries(grouped)
+          .map(([key, values]) => ({
+            name: String(key),
+            value: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
+                   aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
+                   aggregation === 'count' ? values.length :
+                   values.length
+          }))
+          .sort((a, b) => b.value - a.value) // Sort by value descending
+          .slice(0, 8); // Limit to top 8 categories for pie chart readability
+        console.log('Generated pie chart data:', result.length, 'slices');
+        return result.length > 0 ? result : generateFallbackChartData(config);
+      } else if ((chart_type === 'scatter_plot' || chart_type === 'scatter') && actualCols.length >= 2) {
+        const result = data
+          .map(row => {
+            const xVal = parseFloat(row[xCol]);
+            const yVal = parseFloat(row[yCol]);
+            if (!isNaN(xVal) && !isNaN(yVal)) {
+              return {
+                x: xVal,
+                y: yVal,
+                [xCol]: xVal,
+                [yCol]: yVal
+              };
+            }
+            return null;
+          })
+          .filter(item => item !== null)
+          .slice(0, 500); // Limit to 500 points for performance
+        console.log('Generated scatter plot data:', result.length, 'points');
+        return result.length > 0 ? result : generateFallbackChartData(config);
+      } else if (chart_type === 'histogram' && actualCols.length >= 1) {
+        const values = data
+          .map(row => parseFloat(row[xCol]))
+          .filter(val => !isNaN(val) && isFinite(val));
         
-        console.log('Generated pie chart data:', result);
+        if (values.length === 0) {
+          return generateFallbackChartData(config);
+        }
+        
+        const bins = {};
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const binSize = (max - min) / 10 || 1;
+        
+        values.forEach(val => {
+          const bin = Math.floor((val - min) / binSize) * binSize + min;
+          bins[bin] = (bins[bin] || 0) + 1;
+        });
+        
+        const result = Object.entries(bins)
+          .map(([bin, count]) => ({
+            bin: parseFloat(bin).toFixed(2),
+            count: count,
+            [xCol]: parseFloat(bin)
+          }))
+          .sort((a, b) => a[xCol] - b[xCol]);
+        console.log('Generated histogram data:', result.length, 'bins');
         return result.length > 0 ? result : generateFallbackChartData(config);
       }
     } catch (error) {
       console.error('Error generating chart data:', error);
     }
-    
     return generateFallbackChartData(config);
   };
 
@@ -172,12 +297,14 @@ const DashboardComponent = ({ component, datasetData }) => {
 
   const generateTableData = (config, data) => {
     if (!data || !config?.columns) return [];
-    
     try {
+      const availableColumns = data.length > 0 ? Object.keys(data[0]) : [];
+      const actualCols = config.columns.map(col => findActualCol(col, availableColumns) || col);
       return data.slice(0, 10).map(row => {
         const filteredRow = {};
-        config.columns.forEach(col => {
-          filteredRow[col] = row[col] || 'N/A';
+        actualCols.forEach((actual, i) => {
+          const displayKey = config.columns?.[i] || actual;
+          filteredRow[displayKey] = row[actual] != null ? row[actual] : 'N/A';
         });
         return filteredRow;
       });
@@ -189,10 +316,10 @@ const DashboardComponent = ({ component, datasetData }) => {
 
   const calculateKPIValue = (config, data) => {
     if (!data || !config?.column) return 0;
-    
     try {
-      const values = data.map(row => row[config.column]).filter(val => val != null);
-      
+      const availableColumns = data.length > 0 ? Object.keys(data[0]) : [];
+      const actualCol = findActualCol(config.column, availableColumns) || config.column;
+      const values = data.map(row => row[actualCol]).filter(val => val != null);
       switch (config.aggregation) {
         case 'sum':
           return values.reduce((a, b) => a + b, 0);
@@ -287,7 +414,7 @@ const DashboardComponent = ({ component, datasetData }) => {
                     {component.config?.chart_type === 'line_chart' ? (
                       <RechartsLineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                         <XAxis 
-                          dataKey={component.config?.group_by || Object.keys(chartData[0] || {})[0]}
+                          dataKey={Object.keys(chartData[0] || {})[0]}
                           stroke="#64748b"
                           fontSize={12}
                           tickLine={false}
@@ -315,17 +442,17 @@ const DashboardComponent = ({ component, datasetData }) => {
                         />
                         <Line 
                           type="monotone" 
-                          dataKey={component.config?.columns?.[1] || Object.keys(chartData[0] || {})[1]}
+                          dataKey={Object.keys(chartData[0] || {})[1]}
                           stroke="#3b82f6" 
                           strokeWidth={4}
                           dot={{ fill: '#3b82f6', strokeWidth: 2, r: 6 }}
                           activeDot={{ r: 8, stroke: '#3b82f6', strokeWidth: 2, fill: '#1e40af' }}
                         />
                       </RechartsLineChart>
-                    ) : component.config?.chart_type === 'bar_chart' ? (
+                    ) : component.config?.chart_type === 'bar_chart' || component.config?.chart_type === 'bar' ? (
                       <RechartsBarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 40 }}>
                         <XAxis 
-                          dataKey={component.config?.group_by || Object.keys(chartData[0] || {})[0]}
+                          dataKey={Object.keys(chartData[0] || {})[0]}
                           stroke="#64748b"
                           fontSize={12}
                           tickLine={false}
@@ -355,22 +482,31 @@ const DashboardComponent = ({ component, datasetData }) => {
                           labelStyle={{ color: '#94a3b8' }}
                         />
                         <Bar 
-                          dataKey={component.config?.columns?.[1] || Object.keys(chartData[0] || {})[1]}
+                          dataKey={Object.keys(chartData[0] || {})[1]}
                           fill="#10b981"
                           radius={[6, 6, 0, 0]}
                           maxBarSize={60}
                         />
                       </RechartsBarChart>
-                    ) : component.config?.chart_type === 'pie_chart' ? (
-                      <RechartsPieChart>
+                    ) : component.config?.chart_type === 'pie_chart' || component.config?.chart_type === 'pie' ? (
+                      <RechartsPieChart width={600} height={400}>
                         <Pie
                           data={chartData}
                           cx="50%"
                           cy="50%"
                           labelLine={false}
-                          label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                          labelStyle={{ fontSize: '14px', fill: '#e2e8f0' }}
-                          outerRadius={180}
+                          label={({ name, percent }) => {
+                            const displayName = name.length > 8 ? name.substring(0, 8) + '...' : name;
+                            return `${displayName} ${(percent * 100).toFixed(0)}%`;
+                          }}
+                          labelStyle={{ 
+                            fontSize: '12px', 
+                            fill: '#e2e8f0',
+                            fontWeight: 'bold',
+                            textShadow: '1px 1px 2px rgba(0,0,0,0.8)'
+                          }}
+                          outerRadius={120}
+                          innerRadius={40}
                           fill="#8884d8"
                           dataKey="value"
                         >
@@ -389,11 +525,55 @@ const DashboardComponent = ({ component, datasetData }) => {
                           formatter={(value, name) => [value.toLocaleString(), name]}
                         />
                       </RechartsPieChart>
+                    ) : component.config?.chart_type === 'scatter_plot' || component.config?.chart_type === 'scatter' ? (
+                      <div className="flex items-center justify-center h-full text-slate-400">
+                        <div className="text-center">
+                          <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                          <p>Scatter plot visualization</p>
+                          <p className="text-sm">Data points: {chartData.length}</p>
+                        </div>
+                      </div>
+                    ) : component.config?.chart_type === 'histogram' ? (
+                      <RechartsBarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                        <XAxis 
+                          dataKey="bin"
+                          stroke="#64748b"
+                          fontSize={12}
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: '#94a3b8' }}
+                        />
+                        <YAxis 
+                          stroke="#64748b"
+                          fontSize={12}
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: '#94a3b8' }}
+                          tickFormatter={(value) => value.toLocaleString()}
+                        />
+                        <Tooltip 
+                          contentStyle={{
+                            backgroundColor: '#1e293b',
+                            border: '1px solid #334155',
+                            borderRadius: '8px',
+                            color: '#f1f5f9',
+                            boxShadow: '0 10px 25px rgba(0,0,0,0.3)'
+                          }}
+                          formatter={(value, name) => [value.toLocaleString(), name]}
+                          labelStyle={{ color: '#94a3b8' }}
+                        />
+                        <Bar 
+                          dataKey="count"
+                          fill="#8b5cf6"
+                          radius={[6, 6, 0, 0]}
+                          maxBarSize={60}
+                        />
+                      </RechartsBarChart>
                     ) : (
                       <div className="flex items-center justify-center h-full text-slate-400">
                         <div className="text-center">
                           <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                          <p>Unsupported chart type</p>
+                          <p>Unsupported chart type: {component.config?.chart_type}</p>
                         </div>
                       </div>
                     )}
@@ -410,59 +590,13 @@ const DashboardComponent = ({ component, datasetData }) => {
                 )}
               </div>
               
-              {/* Insights Panel - Below chart, full width */}
-              {component.insight && (
-                <div className="mt-6 bg-gradient-to-br from-blue-500/10 to-purple-500/10 rounded-xl p-6 border border-blue-500/20">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
-                      <Lightbulb className="w-5 h-5 text-blue-400" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-white">AI Insights</h3>
-                      <p className="text-xs text-slate-400">Why this chart matters for your business</p>
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {component.insight.insight?.summary && (
-                      <div>
-                        <h4 className="text-sm font-semibold text-blue-300 mb-2">Summary</h4>
-                        <p className="text-sm text-slate-300 leading-relaxed">
-                          {component.insight.insight.summary}
-                        </p>
-                      </div>
-                    )}
-                    
-                    {component.insight.insight?.key_findings && component.insight.insight.key_findings.length > 0 && (
-                      <div>
-                        <h4 className="text-sm font-semibold text-green-300 mb-2">Key Findings</h4>
-                        <ul className="space-y-2">
-                          {component.insight.insight.key_findings.slice(0, 3).map((finding, index) => (
-                            <li key={index} className="text-sm text-slate-300 flex items-start gap-2">
-                              <span className="text-green-400 mt-1">✓</span>
-                              <span>{finding}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    
-                    {component.insight.insight?.recommendations && component.insight.insight.recommendations.length > 0 && (
-                      <div className="md:col-span-2">
-                        <h4 className="text-sm font-semibold text-amber-300 mb-2">Recommended Actions</h4>
-                        <ul className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          {component.insight.insight.recommendations.slice(0, 4).map((rec, index) => (
-                            <li key={index} className="text-sm text-slate-300 flex items-start gap-2 bg-amber-500/5 rounded-lg p-3 border border-amber-500/10">
-                              <span className="text-amber-400 mt-0.5">→</span>
-                              <span>{rec}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+              {/* Intelligent Chart Explanation */}
+              {/* <IntelligentChartExplanation 
+                component={component} 
+                datasetData={datasetData}
+                datasetInfo={{ name: 'BMW Dataset' }}
+              /> */}
+
             </div>
           </motion.div>
         );

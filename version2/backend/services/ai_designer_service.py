@@ -105,12 +105,22 @@ class AIDesignerService:
         Creates an intelligent dashboard design based on dataset analysis and design patterns.
         """
         try:
+            # Re-fetch database handle at call-time (in case connect_to_mongo ran after instantiation)
+            db = get_database()
+            # Explicitly compare to None because some DB client objects
+            # do not implement truth-value testing and will raise on `if not db`.
+            if db is None:
+                raise Exception("Database not connected. Ensure MongoDB is reachable and the app has completed startup initialization.")
+
             # Get dataset and metadata
-            dataset_doc = await self.db.datasets.find_one({
-                "_id": ObjectId(dataset_id),
-                "user_id": user_id
-            })
-            
+            # Support both ObjectId and UUID dataset IDs
+            try:
+                query = {"_id": ObjectId(dataset_id), "user_id": user_id}
+            except Exception:
+                query = {"_id": dataset_id, "user_id": user_id}
+
+            dataset_doc = await db.datasets.find_one(query)
+
             if not dataset_doc or not dataset_doc.get("metadata"):
                 raise Exception("Dataset not ready for dashboard design.")
 
@@ -153,7 +163,7 @@ class AIDesignerService:
                 "is_default": True
             }
             
-            await self.db.dashboards.insert_one(design_doc)
+            await db.dashboards.insert_one(design_doc)
             
             return {
                 "dashboard_blueprint": dashboard_blueprint,
@@ -201,6 +211,79 @@ class AIDesignerService:
             # Default to executive pattern
             return "executive_kpi_trend"
 
+    async def _generate_dashboard(self, dataset_id: str, dataset_metadata: Dict, file_path: str) -> Dict:
+                    """
+                    Dynamically generates a dashboard layout and components based on dataset domain and structure.
+                    """
+                    import re
+                    context_str = self._create_enhanced_llm_context(dataset_metadata, file_path)
+
+                    # Dynamic domain inference
+                    domain_prompt = f"""
+                    Analyze these columns: {', '.join([f"{col['name']} ({col['type']})" for col in dataset_metadata.get('column_metadata', [])[:10]])}.
+                    Infer the domain (e.g., 'automotive' for price/model/year; 'healthcare' for patient_id/bmi/diagnosis; 'sales' for revenue/region/date).
+                    Samples: {json.dumps(dataset_metadata.get('data_samples', []), indent=2)}.
+                    Output ONLY: DOMAIN: [inferred_domain] | KEY_METRICS: [3-5 numeric cols for KPIs] | VISUALIZATIONS: [suggested charts e.g., bar for categorical-numeric].
+                    """
+                    domain_res = await ai_service._call_ollama(domain_prompt, model_role="summary_engine", expect_json=False)
+                    inferred_domain = domain_res.split('DOMAIN: ')[1].split(' | ')[0].strip() if 'DOMAIN:' in domain_res else 'general'
+                    key_metrics = domain_res.split('KEY_METRICS: ')[1].split(' | ')[0].split(', ') if 'KEY_METRICS:' in domain_res else ['price', 'year']
+                    viz_suggestions = domain_res.split('VISUALIZATIONS: ')[1].strip().split(', ') if 'VISUALIZATIONS:' in domain_res else ['bar_chart', 'pie_chart']
+
+                    # Main dynamic prompt
+                    template = f"""
+    You are DataSage Designer. Create a dynamic dashboard for {inferred_domain} data.
+
+    CONTEXT: {context_str}
+
+    **INFER & ADAPT:**
+    - Domain: {inferred_domain}
+    - KPIs: Use {', '.join(key_metrics)} for 4 cards
+    - Charts: {', '.join(viz_suggestions)} based on types
+    - Titles: Data-driven
+
+    **MANDATORY JSON (ONLY output this—no text):**
+    {{
+        "dashboard": {{
+            "layout_grid": "repeat(4, 1fr)",
+            "components": [
+                {{"type": "kpi", "title": "Avg {key_metrics[0]}", "span": 1, "config": {{"column": "{key_metrics[0]}", "aggregation": "mean"}}}},
+                {{"type": "kpi", "title": "Total {key_metrics[1] if len(key_metrics)>1 else 'Records'}", "span": 1, "config": {{"column": "{key_metrics[1] if len(key_metrics)>1 else 'id'}", "aggregation": "sum"}}}},
+                {{"type": "kpi", "title": "Count by Category", "span": 1, "config": {{"column": "categorical_col_placeholder", "aggregation": "count"}}}},
+                {{"type": "kpi", "title": "Top Metric", "span": 1, "config": {{"column": "{key_metrics[2] if len(key_metrics)>2 else 'year'}", "aggregation": "max"}}}},
+                {{"type": "bar_chart", "title": "{inferred_domain} Breakdown by Category", "span": 2, "config": {{"x": "first_cat_col", "y": "first_num_col", "aggregation": "mean"}}}},
+                {{"type": "pie_chart", "title": "Category Distribution", "span": 2, "config": {{"categories": "fuelType_or_diagnosis", "values": "count"}}}},
+                {{"type": "line_chart", "title": "Trend Over Time", "span": 3, "config": {{"x": "year_or_date", "y": "price_or_visits", "aggregation": "mean"}}}},
+                {{"type": "scatter_plot", "title": "Correlation View", "span": 1, "config": {{"x": "num1", "y": "num2"}}}},
+                {{"type": "histogram", "title": "Distribution of Key Metric", "span": 2, "config": {{"column": "price_or_age"}}}},
+                {{"type": "table", "title": "Full Dataset View", "span": 4, "config": {{"columns": ["col1", "col2", "..."]}}}}
+            ]
+        }}
+    }}
+
+    Adapt placeholders to EXACT columns (e.g., if 'bmi' exists → "Avg BMI"; if 'region' → pie on region). Use types: categoricals for x/pie, numerics for y/sum.
+                    """
+
+                    dashboard_json = await ai_service._call_ollama(template, model_role="visualization_engine", expect_json=True)
+
+                    # Post-process: Fill placeholders with real cols
+                    real_cols = {col['name']: col['type'] for col in dataset_metadata.get('column_metadata', [])}
+                    num_cols = [k for k, v in real_cols.items() if 'Int' in v or 'Float' in v or v == 'numeric']
+                    cat_cols = [k for k, v in real_cols.items() if 'String' in v or 'Utf8' in v or v == 'categorical']
+
+                    # Replace in JSON (simple example for first KPI)
+                    if dashboard_json.get('dashboard') and dashboard_json['dashboard'].get('components'):
+                            if num_cols:
+                                    dashboard_json['dashboard']['components'][0]['config']['column'] = num_cols[0]
+                            if len(num_cols) > 1:
+                                    dashboard_json['dashboard']['components'][1]['config']['column'] = num_cols[1]
+                            if cat_cols:
+                                    dashboard_json['dashboard']['components'][2]['config']['column'] = cat_cols[0]
+                            if len(num_cols) > 2:
+                                    dashboard_json['dashboard']['components'][3]['config']['column'] = num_cols[2]
+                            # You can further patch other components as needed
+
+                    return dashboard_json
     def _create_designer_prompt(
         self, 
         dataset_metadata: Dict, 

@@ -30,8 +30,6 @@ const Datasets = () => {
   useEffect(() => {
     fetchDatasets();
     
-    // Set up polling to refresh datasets every 5 seconds
-    // This ensures we get updated data after processing completes
     const interval = setInterval(() => {
       fetchDatasets(true); // Force refresh
     }, 5000);
