@@ -1,5 +1,9 @@
 import os
 from typing import List
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 class Settings:
     # MongoDB Configuration
@@ -7,13 +11,13 @@ class Settings:
     DATABASE_NAME: str = os.getenv("DATABASE_NAME", "datasage_ai")
     
     # JWT Configuration
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "")
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "50"))
     
-    # Ollama / local model configuration
-    LLAMA_BASE_URL = os.getenv("LLAMA_BASE_URL", "https://16f2df641e78.ngrok-free.app/")
-    QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "https://wilber-unremarried-reversibly.ngrok-free.dev/")
+    # Ollama / local model configuration (optional, disabled by default)
+    LLAMA_BASE_URL = os.getenv("LLAMA_BASE_URL", "http://localhost:11434")
+    QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "http://localhost:11434")
     model_name = os.getenv("LLM_PRIMARY_MODEL", "llama3.1")
 
     MODELS = {
@@ -44,7 +48,7 @@ class Settings:
     MODEL_FALLBACK_ENABLED = False  # Fallback mechanism removed
 
     # OpenRouter configuration
-    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "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")
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
     OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "alibaba/tongyi-deepresearch-30b-a3b:free")
 
