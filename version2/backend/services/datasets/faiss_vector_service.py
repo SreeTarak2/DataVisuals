@@ -9,8 +9,8 @@ import faiss
 from langchain_huggingface import HuggingFaceEmbeddings
 from bson import ObjectId
 
-from database import get_database
-from config import settings
+from db.database import get_database
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
