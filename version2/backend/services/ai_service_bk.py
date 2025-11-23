@@ -10,11 +10,11 @@ import polars as pl
 from fastapi import HTTPException
 from bson import ObjectId
 
-from database import get_database
+from db.database import get_database
 from core.chart_definitions import CHART_DEFINITIONS, DataType
 from services.analysis_service import analysis_service
 from core.prompts import PromptFactory, PromptType
-from config import settings
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class AIService:
             'correlation_analysis': ["What are the most significant relationships between variables?"],
         }
         self.model_health_cache = {}
+        self.use_openrouter = bool(settings.OPENROUTER_API_KEY)
 
     @property
     def db(self):
@@ -49,8 +50,82 @@ class AIService:
     # == 1. CORE LLM ROUTER
     # =================================================================================
 
+    async def _call_openrouter(self, prompt: str, model_role: str, expect_json: bool = False) -> Any:
+        """Call OpenRouter chat completions API."""
+        headers = {
+            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": settings.OPENROUTER_MODEL or "alibaba/tongyi-deepresearch-30b-a3b:free",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are DataSage AI, an expert analytical assistant. "
+                        "Follow formatting instructions carefully and return valid JSON when requested."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            "stream": False,
+        }
+
+        try:
+            response = await self.http_client.post(
+                f"{settings.OPENROUTER_BASE_URL}",
+                headers=headers,
+                json=payload,
+                timeout=240.0,
+            )
+            logger.info(f"OpenRouter status: {response.status_code}")
+            response.raise_for_status()
+            data = response.json()
+            logger.debug(f"OpenRouter response: {json.dumps(data)[:500]}...")
+
+            choices = data.get("choices", [])
+            if not choices:
+                raise HTTPException(status_code=500, detail="OpenRouter returned no choices")
+            message = choices[0].get("message", {})
+            content = message.get("content", "")
+
+            if expect_json:
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError as exc:
+                    logger.error(f"Failed to parse OpenRouter JSON: {exc}")
+                    return {
+                        "error": "llm_json_parse_failed",
+                        "raw": content[:500],
+                    }
+            return content.strip()
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                f"OpenRouter HTTP error {exc.response.status_code}: {exc.response.text}"
+            )
+            raise HTTPException(status_code=502, detail="OpenRouter request failed")
+        except Exception as exc:
+            logger.error(f"OpenRouter invocation failed: {exc}")
+            raise
+
     async def _call_ollama(self, prompt: str, model_role: str, expect_json: bool = False) -> Any:
-        """A centralized router for calling Ollama with the primary model only."""
+        """A centralized router for calling the configured LLM provider."""
+        if self.use_openrouter:
+            try:
+                return await self._call_openrouter(prompt, model_role, expect_json)
+            except Exception as exc:
+                logger.error(f"OpenRouter primary call failed, attempting fallback. Error: {exc}")
+                # If fallback not enabled, re-raise
+                if not settings.MODEL_FALLBACK_ENABLED:
+                    if isinstance(exc, HTTPException):
+                        raise exc
+                    raise HTTPException(status_code=502, detail="Primary AI provider unavailable")
+                # otherwise continue to local model
+
         model_config = settings.MODELS.get(model_role)
         if not model_config:
             raise ValueError(f"Invalid model role specified: {model_role}")
@@ -206,137 +281,137 @@ class AIService:
     # == 2. PUBLIC ORCHESTRATOR METHODS
     # =================================================================================
 
-    async def generate_ai_dashboard(self, dataset_id: str, user_id: str, force_regenerate: bool = False) -> Dict[str, Any]:
-        """Orchestrates AI dashboard generation with persistence and specialized models."""
-        # Handle both ObjectId and UUID formats
-        try:
-            # Try ObjectId format first
-            query = {"_id": ObjectId(dataset_id), "user_id": user_id}
-        except Exception:
-            # If ObjectId fails, treat as string (UUID format)
-            query = {"_id": dataset_id, "user_id": user_id}
+    # async def generate_ai_dashboard(self, dataset_id: str, user_id: str, force_regenerate: bool = False) -> Dict[str, Any]:
+    #     """Orchestrates AI dashboard generation with persistence and specialized models."""
+    #     # Handle both ObjectId and UUID formats
+    #     try:
+    #         # Try ObjectId format first
+    #         query = {"_id": ObjectId(dataset_id), "user_id": user_id}
+    #     except Exception:
+    #         # If ObjectId fails, treat as string (UUID format)
+    #         query = {"_id": dataset_id, "user_id": user_id}
         
-        dataset_doc = await self.db.datasets.find_one(query)
-        if not dataset_doc or not dataset_doc.get("metadata"):
-            raise HTTPException(status_code=409, detail="Dataset not ready for dashboard generation.")
+    #     dataset_doc = await self.db.datasets.find_one(query)
+    #     if not dataset_doc or not dataset_doc.get("metadata"):
+    #         raise HTTPException(status_code=409, detail="Dataset not ready for dashboard generation.")
 
-        # Check for existing cached charts first
-        from services.chart_insights_service import chart_insights_service
-        cached_charts = await chart_insights_service.get_dataset_cached_charts(dataset_id, user_id)
+    #     # Check for existing cached charts first
+    #     from services.chart_insights_service import chart_insights_service
+    #     cached_charts = await chart_insights_service.get_dataset_cached_charts(dataset_id, user_id)
         
-        # If we have cached charts and not forcing regeneration, use them
-        if cached_charts and not force_regenerate:
-            logger.info(f"Using {len(cached_charts)} cached charts for dashboard")
-            return self._build_dashboard_from_cached_charts(cached_charts, dataset_doc)
+    #     # If we have cached charts and not forcing regeneration, use them
+    #     if cached_charts and not force_regenerate:
+    #         logger.info(f"Using {len(cached_charts)} cached charts for dashboard")
+    #         return self._build_dashboard_from_cached_charts(cached_charts, dataset_doc)
 
-        # Check for existing dashboard blueprint
-        dashboard_blueprint_doc = await self.db.dashboards.find_one({"dataset_id": dataset_id, "user_id": user_id, "is_default": True})
+    #     # Check for existing dashboard blueprint
+    #     dashboard_blueprint_doc = await self.db.dashboards.find_one({"dataset_id": dataset_id, "user_id": user_id, "is_default": True})
         
-        # If force_regenerate is True, delete existing dashboard and regenerate
-        if force_regenerate and dashboard_blueprint_doc:
-            await self.db.dashboards.delete_one({"_id": dashboard_blueprint_doc["_id"]})
-            dashboard_blueprint_doc = None
+    #     # If force_regenerate is True, delete existing dashboard and regenerate
+    #     if force_regenerate and dashboard_blueprint_doc:
+    #         await self.db.dashboards.delete_one({"_id": dashboard_blueprint_doc["_id"]})
+    #         dashboard_blueprint_doc = None
 
-        if not dashboard_blueprint_doc:
-            # Create enhanced context with actual data samples
-            context_str = self._create_enhanced_llm_context(dataset_doc["metadata"], dataset_doc["file_path"])
-            chart_ids = [chart['id'] for chart in self.chart_definitions.values()]
+    #     if not dashboard_blueprint_doc:
+    #         # Create enhanced context with actual data samples
+    #         context_str = self._create_enhanced_llm_context(dataset_doc["metadata"], dataset_doc["file_path"])
+    #         chart_ids = [chart['id'] for chart in self.chart_definitions.values()]
             
-            # Use the new PromptFactory for enhanced functionality
-            factory = PromptFactory(dataset_context=context_str)
-            prompt = factory.get_prompt(PromptType.DASHBOARD_DESIGNER, chart_options=chart_ids, max_components=12)
+    #         # Use the new PromptFactory for enhanced functionality
+    #         factory = PromptFactory(dataset_context=context_str)
+    #         prompt = factory.get_prompt(PromptType.DASHBOARD_DESIGNER, chart_options=chart_ids, max_components=12)
             
-            logger.info(f"Calling visualization_engine for dashboard generation...")
-            layout_response = await self._call_ollama(prompt, model_role="visualization_engine", expect_json=True)
-            logger.info(f"Dashboard generation response: {layout_response}")
+    #         logger.info(f"Calling visualization_engine for dashboard generation...")
+    #         layout_response = await self._call_ollama(prompt, model_role="visualization_engine", expect_json=True)
+    #         logger.info(f"Dashboard generation response: {layout_response}")
             
-            # Check if there's an error in the response
-            if "error" in layout_response:
-                logger.error(f"AI returned error: {layout_response}")
-                raise HTTPException(status_code=500, detail=f"AI error: {layout_response.get('error', 'Unknown error')}")
+    #         # Check if there's an error in the response
+    #         if "error" in layout_response:
+    #             logger.error(f"AI returned error: {layout_response}")
+    #             raise HTTPException(status_code=500, detail=f"AI error: {layout_response.get('error', 'Unknown error')}")
             
-            blueprint = layout_response.get("dashboard")
-            if not blueprint:
-                logger.error(f"No 'dashboard' key in AI response. Full response: {layout_response}")
-                raise HTTPException(status_code=500, detail="AI response missing 'dashboard' key")
+    #         blueprint = layout_response.get("dashboard")
+    #         if not blueprint:
+    #             logger.error(f"No 'dashboard' key in AI response. Full response: {layout_response}")
+    #             raise HTTPException(status_code=500, detail="AI response missing 'dashboard' key")
             
-            if "components" not in blueprint:
-                logger.error(f"No 'components' key in dashboard blueprint. Blueprint: {blueprint}")
-                raise HTTPException(status_code=500, detail="AI dashboard blueprint missing 'components' key")
+    #         if "components" not in blueprint:
+    #             logger.error(f"No 'components' key in dashboard blueprint. Blueprint: {blueprint}")
+    #             raise HTTPException(status_code=500, detail="AI dashboard blueprint missing 'components' key")
 
-            new_dashboard_doc = {"dataset_id": dataset_id, "user_id": user_id, "is_default": True, "layout_name": "AI Default", "blueprint": blueprint, "created_at": datetime.utcnow()}
-            await self.db.dashboards.insert_one(new_dashboard_doc)
-            dashboard_blueprint_doc = new_dashboard_doc
+    #         new_dashboard_doc = {"dataset_id": dataset_id, "user_id": user_id, "is_default": True, "layout_name": "AI Default", "blueprint": blueprint, "created_at": datetime.utcnow()}
+    #         await self.db.dashboards.insert_one(new_dashboard_doc)
+    #         dashboard_blueprint_doc = new_dashboard_doc
         
-        # Load file with proper format detection
-        file_path = dataset_doc["file_path"]
-        file_extension = file_path.split('.')[-1].lower()
+    #     # Load file with proper format detection
+    #     file_path = dataset_doc["file_path"]
+    #     file_extension = file_path.split('.')[-1].lower()
         
-        try:
-            if file_extension in ['xlsx', 'xls']:
-                # Handle Excel files
-                df = pl.read_excel(file_path)
-                logger.info(f"Successfully loaded Excel file for dashboard generation: {file_path}")
-            elif file_extension == 'csv':
-                # Handle CSV files with robust encoding
-                encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
-                df = None
-                for encoding in encodings_to_try:
-                    try:
-                        df = pl.read_csv(
-                            file_path, 
-                            encoding=encoding,
-                            truncate_ragged_lines=True,
-                            ignore_errors=True
-                        )
-                        logger.info(f"Successfully loaded CSV with encoding: {encoding}")
-                        break
-                    except UnicodeDecodeError as e:
-                        logger.warning(f"Failed to load CSV with encoding '{encoding}': {e}")
-                        continue
-                    except Exception as e:
-                        logger.error(f"Unexpected error loading CSV with '{encoding}': {e}")
-                        continue
+    #     try:
+    #         if file_extension in ['xlsx', 'xls']:
+    #             # Handle Excel files
+    #             df = pl.read_excel(file_path)
+    #             logger.info(f"Successfully loaded Excel file for dashboard generation: {file_path}")
+    #         elif file_extension == 'csv':
+    #             # Handle CSV files with robust encoding
+    #             encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+    #             df = None
+    #             for encoding in encodings_to_try:
+    #                 try:
+    #                     df = pl.read_csv(
+    #                         file_path, 
+    #                         encoding=encoding,
+    #                         truncate_ragged_lines=True,
+    #                         ignore_errors=True
+    #                     )
+    #                     logger.info(f"Successfully loaded CSV with encoding: {encoding}")
+    #                     break
+    #                 except UnicodeDecodeError as e:
+    #                     logger.warning(f"Failed to load CSV with encoding '{encoding}': {e}")
+    #                     continue
+    #                 except Exception as e:
+    #                     logger.error(f"Unexpected error loading CSV with '{encoding}': {e}")
+    #                     continue
                 
-                if df is None:
-                    raise HTTPException(status_code=500, detail="Could not read CSV file with any supported encoding.")
-            elif file_extension == 'json':
-                # Handle JSON files
-                df = pl.read_json(file_path)
-                logger.info(f"Successfully loaded JSON file for dashboard generation: {file_path}")
-            else:
-                raise HTTPException(status_code=400, detail=f"Unsupported file format: {file_extension}")
+    #             if df is None:
+    #                 raise HTTPException(status_code=500, detail="Could not read CSV file with any supported encoding.")
+    #         elif file_extension == 'json':
+    #             # Handle JSON files
+    #             df = pl.read_json(file_path)
+    #             logger.info(f"Successfully loaded JSON file for dashboard generation: {file_path}")
+    #         else:
+    #             raise HTTPException(status_code=400, detail=f"Unsupported file format: {file_extension}")
                 
-        except Exception as e:
-            logger.error(f"Failed to load file {file_path}: {e}")
-            raise HTTPException(status_code=500, detail=f"Could not read dataset file: {str(e)}")
-        blueprint = dashboard_blueprint_doc["blueprint"]
-        hydrated_components = []
-        for component in blueprint.get("components", []):
-            # Some LLM responses may return strings or other non-dict placeholders.
-            if not isinstance(component, dict):
-                logger.warning(f"Skipping component because it's not a dict: {repr(component)[:200]}")
-                continue
-            try:
-                hydrated_component = component.copy()
-                ctype = component.get("type")
-                config = component.get("config", {})
-                if ctype == "kpi":
-                    hydrated_component["value"] = self._hydrate_kpi_data(df, config)
-                elif ctype == "chart":
-                    hydrated_component["chart_data"] = self._hydrate_chart_data(df, config)
-                elif ctype == "table":
-                    hydrated_component["table_data"] = self._hydrate_table_data(df, config)
+    #     except Exception as e:
+    #         logger.error(f"Failed to load file {file_path}: {e}")
+    #         raise HTTPException(status_code=500, detail=f"Could not read dataset file: {str(e)}")
+    #     blueprint = dashboard_blueprint_doc["blueprint"]
+    #     hydrated_components = []
+    #     for component in blueprint.get("components", []):
+    #         # Some LLM responses may return strings or other non-dict placeholders.
+    #         if not isinstance(component, dict):
+    #             logger.warning(f"Skipping component because it's not a dict: {repr(component)[:200]}")
+    #             continue
+    #         try:
+    #             hydrated_component = component.copy()
+    #             ctype = component.get("type")
+    #             config = component.get("config", {})
+    #             if ctype == "kpi":
+    #                 hydrated_component["value"] = self._hydrate_kpi_data(df, config)
+    #             elif ctype == "chart":
+    #                 hydrated_component["chart_data"] = self._hydrate_chart_data(df, config)
+    #             elif ctype == "table":
+    #                 hydrated_component["table_data"] = self._hydrate_table_data(df, config)
 
-                # Only append components that have some populated data
-                if (hydrated_component.get("value") is not None) or hydrated_component.get("chart_data") or hydrated_component.get("table_data"):
-                    hydrated_components.append(hydrated_component)
-            except Exception as e:
-                # Use safe logging in case component lacks 'title' or other keys
-                title = component.get('title') if isinstance(component, dict) else None
-                logger.warning(f"Could not populate dashboard component '{title}'. Error: {e}")
+    #             # Only append components that have some populated data
+    #             if (hydrated_component.get("value") is not None) or hydrated_component.get("chart_data") or hydrated_component.get("table_data"):
+    #                 hydrated_components.append(hydrated_component)
+    #         except Exception as e:
+    #             # Use safe logging in case component lacks 'title' or other keys
+    #             title = component.get('title') if isinstance(component, dict) else None
+    #             logger.warning(f"Could not populate dashboard component '{title}'. Error: {e}")
 
-        return {"layout_grid": blueprint.get("layout_grid", "repeat(1, 1fr)"), "components": hydrated_components}
+    #     return {"layout_grid": blueprint.get("layout_grid", "repeat(1, 1fr)"), "components": hydrated_components}
 
     def _build_dashboard_from_cached_charts(self, cached_charts: List[Dict], dataset_doc: Dict) -> Dict[str, Any]:
         """Build dashboard from cached charts instead of regenerating."""
@@ -456,7 +531,8 @@ class AIService:
             prompt = self._create_conversational_prompt(messages, dataset_doc["metadata"])
             
             # Call LLM
-            llm_response = await self._call_ollama(prompt, "chart_engine", expect_json=True)
+            # llm_response = await self._call_ollama(prompt, "chart_engine", expect_json=True)
+            llm_response = await self._call_openrouter(prompt, "chart_engine", expect_json=True)
             
             # Handle response
             if isinstance(llm_response, dict) and "error" in llm_response:
@@ -495,11 +571,18 @@ class AIService:
                         ai_content = llm_response.get("response_text", "I was unable to process your request.")
                         chart_config = llm_response.get("chart_config")
 
+                technical_details = llm_response.get("technical_details")
+                metadata_used = llm_response.get("metadata_used")
+                rag_used = llm_response.get("rag_used")
+
                 # Create response
                 response = {
                     "response": ai_content,
                     "chart_config": chart_config,
-                    "conversation_id": conversation_id or str(conversation["_id"])
+                    "conversation_id": conversation_id or str(conversation["_id"]),
+                    "technical_details": technical_details,
+                    "metadata_used": metadata_used,
+                    "rag_used": rag_used,
                 }
 
                 # Save conversation

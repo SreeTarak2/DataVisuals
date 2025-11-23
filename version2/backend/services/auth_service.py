@@ -6,8 +6,8 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
 import os
-from database import get_database
-from models.schemas import User, UserCreate, UserLogin, Token, TokenData, LoginResponse
+from db.database import get_database
+from db.schemas import User, UserCreate, UserLogin, Token, TokenData, LoginResponse
 import logging
 from bson import ObjectId
 
@@ -85,12 +85,29 @@ class AuthService:
         """Get user by ID"""
         try:
             db = self._get_db()
-            user = await db.users.find_one({"_id": ObjectId(user_id)})
+            try:
+                object_id = ObjectId(user_id)
+            except Exception:
+                object_id = user_id
+            user = await db.users.find_one({"_id": object_id})
             if user:
                 user["id"] = str(user.pop("_id"))
             return user
         except Exception as e:
             logger.error(f"Error getting user by ID: {e}")
+            return None
+    
+    def decode_token(self, token: str) -> Optional[dict]:
+        """Decode a JWT access token without triggering FastAPI dependencies."""
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id: Optional[str] = payload.get("sub")
+            email: Optional[str] = payload.get("email")
+            if not user_id:
+                return None
+            return {"id": user_id, "email": email}
+        except JWTError as exc:
+            logger.warning(f"Failed to decode token: {exc}")
             return None
     
     async def create_user(self, user_data: UserCreate) -> dict:

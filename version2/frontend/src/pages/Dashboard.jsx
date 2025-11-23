@@ -9,6 +9,10 @@ import InsightsPanel from '../components/InsightsPanel';
 import ExecutiveSummary from '../components/ExecutiveSummary';
 import IntelligentChartExplanation from '../components/IntelligentChartExplanation';
 import UploadModal from '../components/UploadModal';
+import ChartIntelligencePanel from '../components/ChartIntelligencePanel';
+import ChartInsightsCard from '../components/ChartInsightsCard';
+import DomainBadge from '../components/DomainBadge';
+import DataQualityIndicator from '../components/DataQualityIndicator';
 import { useAuth } from '../contexts/AuthContext';
 import useDatasetStore from '../store/datasetStore';
 import { toast } from 'react-hot-toast';
@@ -31,6 +35,11 @@ const Dashboard = () => {
   const [datasetData, setDatasetData] = useState([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [prioritizedColumns, setPrioritizedColumns] = useState([]);
+  
+  // New v4.0 state for enhanced metadata
+  const [domainInfo, setDomainInfo] = useState(null);
+  const [qualityMetrics, setQualityMetrics] = useState(null);
+  const [chartIntelligence, setChartIntelligence] = useState({});
 
   // Helpers to derive dataset-aware defaults (avoid hardcoded example columns)
   const getDatasetColumns = () => {
@@ -183,11 +192,28 @@ const Dashboard = () => {
           const overviewData = await overviewRes.json();
           console.log('Dashboard overview data:', overviewData);
           setKpiData(overviewData.kpis || []);
-          setDatasetInfo(overviewData.dataset || {
-            name: selectedDataset.name,
-            row_count: selectedDataset.row_count || 0,
-            column_count: selectedDataset.column_count || 0
-          });
+          
+          const datasetInfo = overviewData.dataset || {};
+          setDatasetInfo(datasetInfo);
+          
+          // Extract v4.0 enhanced metadata if available
+          if (selectedDataset.metadata) {
+            const metadata = selectedDataset.metadata;
+            
+            // Domain detection info
+            if (metadata.dataset_overview) {
+              setDomainInfo({
+                domain: metadata.dataset_overview.domain,
+                confidence: metadata.dataset_overview.domain_confidence,
+                method: metadata.dataset_overview.domain_detection_method
+              });
+            }
+            
+            // Quality metrics
+            if (metadata.data_quality) {
+              setQualityMetrics(metadata.data_quality);
+            }
+          }
         } else {
           console.error('Failed to load overview data:', overviewRes.status);
           setKpiData([]);
@@ -196,16 +222,45 @@ const Dashboard = () => {
             row_count: selectedDataset.row_count || 0,
             column_count: selectedDataset.column_count || 0
           });
+          setDomainInfo(null);
+          setQualityMetrics(null);
         }
 
         // Process charts data - prioritize API data
         if (chartsRes.ok) {
           const chartsData = await chartsRes.json();
           console.log('Dashboard charts data:', chartsData);
-          setChartData(chartsData.charts || {});
+          
+          const charts = chartsData.charts || {};
+          setChartData(charts);
+          
+          // Extract intelligence and insights from charts (v4.0 enhanced structure)
+          const intelligenceMap = {};
+          if (Array.isArray(charts)) {
+            charts.forEach((chart, index) => {
+              if (chart.intelligence) {
+                intelligenceMap[`chart_${index}`] = {
+                  intelligence: chart.intelligence,
+                  insights: chart.insights
+                };
+              }
+            });
+          } else if (typeof charts === 'object') {
+            Object.keys(charts).forEach(key => {
+              const chart = charts[key];
+              if (chart.intelligence) {
+                intelligenceMap[key] = {
+                  intelligence: chart.intelligence,
+                  insights: chart.insights
+                };
+              }
+            });
+          }
+          setChartIntelligence(intelligenceMap);
         } else {
           console.error('Failed to load charts data:', chartsRes.status);
           setChartData({});
+          setChartIntelligence({});
         }
 
         // Process insights data - prioritize API data (this calls Ollama)
@@ -871,6 +926,25 @@ const Dashboard = () => {
               <span className="text-slate-300 font-medium">No data has been uploaded yet</span>
             )}
           </p>
+          
+          {/* v4.0 Enhanced Metadata Display */}
+          {selectedDataset && (domainInfo || qualityMetrics) && (
+            <div className="flex flex-wrap items-center gap-3 mt-3">
+              {domainInfo && (
+                <DomainBadge
+                  domain={domainInfo.domain}
+                  confidence={domainInfo.confidence}
+                  method={domainInfo.method}
+                />
+              )}
+              {qualityMetrics && (
+                <DataQualityIndicator
+                  quality={qualityMetrics}
+                  compact={true}
+                />
+              )}
+            </div>
+          )}
         </div>
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
           <div className="text-right sm:text-left">
@@ -969,6 +1043,17 @@ const Dashboard = () => {
               })}
           </motion.div>
 
+          {/* Data Quality Section (v4.0) */}
+          {qualityMetrics && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+            >
+              <DataQualityIndicator quality={qualityMetrics} compact={false} />
+            </motion.div>
+          )}
+
           {/* Charts and Tables Section */}
           <motion.div
             className="space-y-6"
@@ -1016,10 +1101,25 @@ const Dashboard = () => {
                         visible: { y: 0, opacity: 1 }
                       }}
                     >
+                      {/* Chart Intelligence Panel (v4.0) */}
+                      {chartIntelligence['chart_0'] && chartIntelligence['chart_0'].intelligence && (
+                        <ChartIntelligencePanel 
+                          intelligence={chartIntelligence['chart_0'].intelligence} 
+                        />
+                      )}
+                      
                       <DashboardComponent
                         component={mainChart}
                         datasetData={datasetData}
                       />
+                      
+                      {/* Chart Insights Card (v4.0) */}
+                      {chartIntelligence['chart_0'] && chartIntelligence['chart_0'].insights && (
+                        <ChartInsightsCard 
+                          insights={chartIntelligence['chart_0'].insights} 
+                        />
+                      )}
+                      
                       <IntelligentChartExplanation
                         component={mainChart}
                         datasetData={datasetData}
@@ -1039,35 +1139,56 @@ const Dashboard = () => {
                         }
                       }}
                     >
-                      {otherCharts.map((component, index) => (
+                      {otherCharts.map((component, index) => {
+                        const chartKey = `chart_${index + 1}`;
+                        const hasIntelligence = chartIntelligence[chartKey];
+                        
+                        return (
                         <motion.div
                           key={`secondary-${index}`}
-                          className={`grid grid-cols-1 lg:grid-cols-2 gap-6 ${
-                            index % 2 === 0 ? 'lg:grid-flow-col' : 'lg:grid-flow-col-dense'
-                          }`}
+                          className="space-y-6"
                           variants={{
                             hidden: { y: 20, opacity: 0 },
                             visible: { y: 0, opacity: 1 }
                           }}
                         >
-                          {/* Chart Component */}
-                          <div className={index % 2 === 0 ? 'lg:order-1' : 'lg:order-2'}>
-                            <DashboardComponent
-                              component={component}
-                              datasetData={datasetData}
+                          {/* Chart Intelligence Panel (v4.0) */}
+                          {hasIntelligence && hasIntelligence.intelligence && (
+                            <ChartIntelligencePanel 
+                              intelligence={hasIntelligence.intelligence} 
                             />
+                          )}
+                          
+                          <div className={`grid grid-cols-1 lg:grid-cols-2 gap-6 ${
+                            index % 2 === 0 ? 'lg:grid-flow-col' : 'lg:grid-flow-col-dense'
+                          }`}>
+                            {/* Chart Component */}
+                            <div className={index % 2 === 0 ? 'lg:order-1' : 'lg:order-2'}>
+                              <DashboardComponent
+                                component={component}
+                                datasetData={datasetData}
+                              />
+                            </div>
+                            
+                            {/* Intelligent Chart Explanation */}
+                            <div className={index % 2 === 0 ? 'lg:order-2' : 'lg:order-1'}>
+                              <IntelligentChartExplanation
+                                component={component}
+                                datasetData={datasetData}
+                                datasetInfo={datasetInfo}
+                              />
+                            </div>
                           </div>
                           
-                          {/* Intelligent Chart Explanation */}
-                          <div className={index % 2 === 0 ? 'lg:order-2' : 'lg:order-1'}>
-                            <IntelligentChartExplanation
-                              component={component}
-                              datasetData={datasetData}
-                              datasetInfo={datasetInfo}
+                          {/* Chart Insights Card (v4.0) */}
+                          {hasIntelligence && hasIntelligence.insights && (
+                            <ChartInsightsCard 
+                              insights={hasIntelligence.insights} 
                             />
-                          </div>
+                          )}
                         </motion.div>
-                      ))}
+                        );
+                      })}
                     </motion.div>
                   )}
 

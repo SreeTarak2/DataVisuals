@@ -11,14 +11,10 @@ class Settings:
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "50"))
     
-    # ollama configuration
-    LLAMA_BASE_URL = "https://16f2df641e78.ngrok-free.app/"
-    QWEN_BASE_URL = "https://wilber-unremarried-reversibly.ngrok-free.dev/"
-    # QWEN_BASE_URL = "https://5ce3bc3451f9.ngrok-free.app/"
-    # LLAMA_BASE_URL = "https://wilber-unremarried-reversibly.ngrok-free.dev/"
-    
-    model_name = "llama3.1"
-    # LLAMA_BASE_URL = QWEN_BASE_URL
+    # Ollama / local model configuration
+    LLAMA_BASE_URL = os.getenv("LLAMA_BASE_URL", "https://16f2df641e78.ngrok-free.app/")
+    QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "https://wilber-unremarried-reversibly.ngrok-free.dev/")
+    model_name = os.getenv("LLM_PRIMARY_MODEL", "llama3.1")
 
     MODELS = {
         "chat_engine": {
@@ -46,6 +42,11 @@ class Settings:
     
     MODEL_HEALTH_CHECK_TIMEOUT = 180
     MODEL_FALLBACK_ENABLED = False  # Fallback mechanism removed
+
+    # OpenRouter configuration
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "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")
+    OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "alibaba/tongyi-deepresearch-30b-a3b:free")
 
     # Vector Database Configuration
     VECTOR_DB_PATH: str = os.getenv("VECTOR_DB_PATH", "./faiss_db")

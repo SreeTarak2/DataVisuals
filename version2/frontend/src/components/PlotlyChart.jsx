@@ -8,11 +8,31 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
       try {
         const Plotly = (await import('plotly.js-dist-min')).default;
         if (plotRef.current && data) {
+          console.log('[PlotlyChart] Received data:', data);
+          console.log('[PlotlyChart] Data type:', typeof data);
+          console.log('[PlotlyChart] Is array?', Array.isArray(data));
+          console.log('[PlotlyChart] First item:', data[0]);
+          console.log('[PlotlyChart] First item has x/y?', data[0]?.x !== undefined, data[0]?.y !== undefined);
+          console.log('[PlotlyChart] Received layout:', layout);
+          console.log('[PlotlyChart] Chart type:', chartType);
           let processedData = data;
           let xKey = 'x', yKey = 'y';
           let xLabel = '', yLabel = '';
-          // Use config.columns if available
-          if ((chartType === 'line' || chartType === 'line_chart' || chartType === 'bar' || chartType === 'bar_chart') && Array.isArray(data) && data.length > 0) {
+          
+          // Check if data is already in Plotly format (has 'type', 'x', 'y' keys)
+          const isPlotlyFormat = Array.isArray(data) && data.length > 0 && 
+                                 data[0].type !== undefined && 
+                                 (data[0].x !== undefined || data[0].labels !== undefined);
+          
+          console.log('[PlotlyChart] Is Plotly format?', isPlotlyFormat);
+          
+          if (isPlotlyFormat) {
+            // Data is already in Plotly format, use it directly
+            processedData = data;
+            console.log('[PlotlyChart] Using data as-is (Plotly format)');
+          }
+          // Use config.columns if available (for raw data arrays)
+          else if ((chartType === 'line' || chartType === 'line_chart' || chartType === 'bar' || chartType === 'bar_chart') && Array.isArray(data) && data.length > 0) {
             if (config && Array.isArray(config.columns) && config.columns.length >= 2) {
               xKey = config.columns[0];
               yKey = config.columns[1];
@@ -105,6 +125,9 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
             }
           };
 
+          console.log('[PlotlyChart] Final processed data:', processedData);
+          console.log('[PlotlyChart] Final layout:', {...defaultLayout, ...layout});
+          
           Plotly.newPlot(plotRef.current, processedData, {
             ...defaultLayout,
             ...layout
@@ -115,9 +138,11 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
             displaylogo: false,
             ...config
           });
+          
+          console.log('[PlotlyChart] Chart rendered successfully');
         }
       } catch (error) {
-        console.error('Failed to load Plotly:', error);
+        console.error('[PlotlyChart] Failed to load Plotly:', error);
         if (plotRef.current) {
           plotRef.current.innerHTML = `
             <div style="

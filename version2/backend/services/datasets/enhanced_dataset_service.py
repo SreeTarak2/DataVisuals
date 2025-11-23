@@ -9,10 +9,10 @@ from fastapi import HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from bson import ObjectId
 
-from database import get_database
-from services.file_storage_service import file_storage_service
-from services.faiss_vector_service import faiss_vector_service
-from tasks import process_dataset_task
+from db.database import get_database
+from services.datasets.file_storage_service import file_storage_service
+from services.datasets.faiss_vector_service import faiss_vector_service
+# Note: process_dataset_task imported lazily to avoid circular imports
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +124,9 @@ class EnhancedDatasetService:
             }
             
             await self.db.datasets.insert_one(dataset_doc)
+            
+            # Lazy import to avoid circular dependency
+            from tasks import process_dataset_task
             task = process_dataset_task.delay(dataset_id, file_metadata["file_path"])
             
             logger.info(f"New dataset {dataset_id} accepted for processing. Task ID: {task.id}")
