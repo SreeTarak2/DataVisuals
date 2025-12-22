@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../store/authStore';
 import { Sparkles, Mail, Lock, User, Eye, EyeOff } from 'lucide-react';
 import GlassCard from '../components/common/GlassCard';
 
@@ -20,7 +20,7 @@ const Register = () => {
     setLoading(true);
 
     const result = await register(email, password, username);
-    
+
     if (result.success) {
       navigate('/login', { state: { message: result.message } });
     } else {

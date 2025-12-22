@@ -11,7 +11,7 @@ Unified Chart Hydration Service — Production Version 2.0
 import polars as pl
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import logging
 import time
 
@@ -33,7 +33,9 @@ class HydrationError(Exception):
 
 
 def validate_config(df: pl.DataFrame, config: ChartConfig) -> None:
-    chart_def = CHART_DEFINITIONS_BY_ID.get(config.chart_type.value, {})
+    # Handle both string and enum types
+    chart_type_str = config.chart_type.value if hasattr(config.chart_type, 'value') else config.chart_type
+    chart_def = CHART_DEFINITIONS_BY_ID.get(chart_type_str, {})
     rules = chart_def.get("rules", {})
 
     safe_cols = [c for c in config.columns if c in df.columns]
@@ -116,25 +118,36 @@ def hydrate_table(df: pl.DataFrame, config: TableConfig) -> List[Dict]:
         logger.info(f"Table hydrated in {time.time() - start:.2f}s")
 
 
-def hydrate_chart(df: pl.DataFrame, config: ChartConfig) -> List[Dict[str, Any]]:
+def hydrate_chart(df: pl.DataFrame, config: ChartConfig) -> Tuple[List[Dict[str, Any]], int]:
+    """
+    Hydrate chart configuration into Plotly traces.
+    
+    Returns:
+        tuple: (traces, rows_used) where traces is a list of Plotly trace dicts
+               and rows_used is the number of data points used
+    """
     start = time.time()
     validate_config(df, config)
 
+    original_rows = len(df)
     sample_size = min(10000, len(df))
     if len(df) > sample_size:
         df = df.sample(n=sample_size, shuffle=True)
+    
+    rows_used = len(df)
 
-    chart_type = config.chart_type.value
+    # Handle both string and enum types
+    chart_type = config.chart_type.value if hasattr(config.chart_type, 'value') else config.chart_type
     handler = _get_handler(chart_type)
 
     try:
         traces = handler(df, config)
         if not traces:
-            return [{"type": chart_type, "x": [], "y": [], "error": "No data"}]
-        return traces
+            return ([{"type": chart_type, "x": [], "y": [], "error": "No data"}], 0)
+        return (traces, rows_used)
     except Exception as e:
         logger.error(f"{chart_type} hydration failed: {e}")
-        return [{"type": chart_type, "x": [], "y": [], "error": str(e)[:100]}]
+        return ([{"type": chart_type, "x": [], "y": [], "error": str(e)[:100]}], 0)
     finally:
         logger.info(f"{chart_type} hydrated in {time.time() - start:.2f}s")
 
@@ -307,9 +320,11 @@ def _hydrate_area(df, config):
 
 def _hydrate_fallback(df, config):
     temp = ChartConfig(
+        type=config.type,
         title=config.title,
         chart_type=ChartType.BAR,
         columns=config.columns[:2],
-        aggregation=config.aggregation
+        aggregation=config.aggregation,
+        span=config.span
     )
     return _hydrate_bar(df, temp)

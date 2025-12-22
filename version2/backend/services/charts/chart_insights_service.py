@@ -55,7 +55,7 @@ class ChartInsightsService:
             logger.info(f"Generating insights for {chart_type} chart...")
             
             # Extract data from chart
-            traces = chart_data.get("data", [])
+            traces = chart_data.get("data") or chart_data.get("traces", [])
             if not traces:
                 return self._generate_fallback_insight(chart_data, [])
             

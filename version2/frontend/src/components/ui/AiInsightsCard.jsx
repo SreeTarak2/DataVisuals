@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Brain, Sparkles, TrendingUp, AlertTriangle, CheckCircle, Lightbulb } from 'lucide-react';
 import GlassCard from '../common/GlassCard';
 import useDatasetStore from '../../store/datasetStore';
+import { getAuthToken } from '../../services/api';
 
 const AiInsightsCard = ({ datasetId }) => {
   const [insights, setInsights] = useState([]);
@@ -23,7 +24,7 @@ const AiInsightsCard = ({ datasetId }) => {
       }
 
       try {
-        const token = localStorage.getItem('datasage-token');
+        const token = getAuthToken();
         const response = await fetch(`/api/dashboard/${datasetId}/insights`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });

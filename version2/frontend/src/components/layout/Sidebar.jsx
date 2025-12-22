@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { 
-  LayoutDashboard, Database, MessageSquare, BarChart3, Settings, LogOut, Sparkles, History 
+import {
+  LayoutDashboard, BarChart3, Settings, LogOut, Sparkles, History,Layers3,MessagesSquare
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../store/authStore';
 import ChatHistoryModal from '../ChatHistoryModal';
 import { cn } from '../../lib/utils';
 
@@ -14,8 +14,8 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
 
   const navItems = [
     { icon: LayoutDashboard, label: 'Dashboard', path: '/app/dashboard' },
-    { icon: Database, label: 'Datasets', path: '/app/datasets' },
-    { icon: MessageSquare, label: 'AI Chat', path: '/app/chat' },
+    { icon: Layers3, label: 'Datasets', path: '/app/datasets' },
+    { icon: MessagesSquare, label: 'AI Chat', path: '/app/chat' },
     { icon: BarChart3, label: 'Charts', path: '/app/charts' },
     { icon: History, label: 'Chat History', path: '/app/chat-history', isButton: true, onClick: () => setShowHistoryModal(true) },
   ];
@@ -34,11 +34,11 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
           />
         )}
       </AnimatePresence>
-      
+
       {/* Sidebar */}
       <motion.aside
         initial={false}
-        animate={{ 
+        animate={{
           width: isOpen ? 256 : (onHover ? 256 : 80),
           x: isOpen ? 0 : (onHover ? 0 : -176)
         }}
@@ -53,7 +53,7 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
       >
         <div className="flex flex-col h-full p-4 overflow-y-auto">
           {/* Logo */}
-          <motion.div 
+          <motion.div
             className="flex items-center gap-3 mb-8"
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
@@ -62,7 +62,7 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-cyan-500 flex items-center justify-center shrink-0">
               <Sparkles className="w-6 h-6 text-primary-foreground" />
             </div>
-            <motion.span 
+            <motion.span
               className="text-xl font-bold gradient-text whitespace-nowrap"
               initial={{ opacity: 0, width: 0 }}
               animate={{ opacity: isOpen || onHover ? 1 : 0, width: isOpen || onHover ? 'auto' : 0 }}
@@ -87,11 +87,11 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
                       onClick={item.onClick}
                       className={cn(
                         "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 focus-visible-ring relative w-full text-left",
-                        "text-muted-foreground hover:bg-accent hover:text-foreground"
+                        "text-muted-foreground hover:bg-accent hover:text-foreground shadow-inner-custom"
                       )}
                     >
                       <item.icon className="w-5 h-5 shrink-0" aria-hidden="true" />
-                      <motion.span 
+                      <motion.span
                         className="whitespace-nowrap"
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: isOpen || onHover ? 1 : 0, x: 0 }}
@@ -105,15 +105,18 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
                       to={item.path}
                       className={({ isActive }) =>
                         cn(
-                          "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 focus-visible-ring relative",
+                          "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 focus-visible-ring relative shadow-inner-custom",
                           isActive
                             ? "bg-primary/10 text-primary border border-primary/20 shadow-md"
                             : "text-muted-foreground hover:bg-accent hover:text-foreground"
+// Add custom inner shadow style
+// You can add this to your global CSS (e.g., index.css or a relevant CSS file):
+// .shadow-inner-custom { box-shadow: inset 0 2px 8px 0 rgba(0,0,0,0.18); }
                         )
                       }
                     >
                       <item.icon className="w-5 h-5 shrink-0" aria-hidden="true" />
-                      <motion.span 
+                      <motion.span
                         className="whitespace-nowrap"
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: isOpen || onHover ? 1 : 0, x: 0 }}
@@ -129,67 +132,26 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
           </nav>
 
 
-          {/* User Section */}
-          <motion.div 
-            className="pt-4 border-t border-border/50"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4 }}
-          >
-            <div className={cn(
-              "flex items-center gap-3 px-4 py-3 rounded-lg bg-accent/20 transition-all",
+          {/* Logout Button */}
+          <button
+            onClick={logout}
+            className={cn(
+              "flex items-center gap-3 px-4 py-3 mt-2 rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors w-full focus-visible-ring",
               !(isOpen || onHover) && "justify-center"
-            )}>
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-cyan-500 flex items-center justify-center text-primary-foreground font-semibold">
-                {user?.username?.[0] || user?.full_name?.[0] || 'U'}
-              </div>
-              <motion.div 
-                className="flex-1 min-w-0"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: isOpen || onHover ? 1 : 0 }}
-              >
-                <p className="text-sm font-medium text-foreground truncate">{user?.username || user?.full_name || 'User'}</p>
-                <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
-              </motion.div>
-            </div>
-            {/* <NavLink
-              to="/app/settings"
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-3 px-4 py-3 mt-2 rounded-lg transition-all duration-200 focus-visible-ring w-full",
-                  isActive
-                    ? "bg-primary/10 text-primary border border-primary/20 shadow-md"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                  !(isOpen || onHover) && "justify-center"
-                )
-              }
-            >
-              <Settings className="w-5 h-5" />
-              <span className={cn("whitespace-nowrap", !(isOpen || onHover) && "hidden")}>
-                Settings
-              </span>
-            </NavLink> */}
-            <button
-              onClick={logout}
-              className={cn(
-                "flex items-center gap-3 px-4 py-3 mt-2 rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors w-full focus-visible-ring",
-                !(isOpen || onHover) && "justify-center"
-              )}
-              aria-label="Logout"
-            >
-              <LogOut className="w-5 h-5" />
-              <span className={cn("whitespace-nowrap", !(isOpen || onHover) && "hidden")}>
-                Logout
-              </span>
-            </button>
-          </motion.div>
+            )}
+            aria-label="Logout"
+            style={{ marginTop: 'auto' }}
+          >
+            <LogOut className="w-5 h-5" />
+            <span className={cn("whitespace-nowrap", !(isOpen || onHover) && "hidden")}>Logout</span>
+          </button>
         </div>
       </motion.aside>
 
       {/* Chat History Modal */}
-      <ChatHistoryModal 
-        isOpen={showHistoryModal} 
-        onClose={() => setShowHistoryModal(false)} 
+      <ChatHistoryModal
+        isOpen={showHistoryModal}
+        onClose={() => setShowHistoryModal(false)}
       />
     </>
   );

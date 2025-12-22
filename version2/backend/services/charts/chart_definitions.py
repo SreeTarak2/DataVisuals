@@ -26,7 +26,7 @@ ChartDef = Dict[str, Any]
 
 CHART_DEFINITIONS: List[ChartDef] = [
     {
-        "id": "bar_chart",
+        "id": "bar",
         "name": "Bar Chart",
         "description": "Compare values across distinct categories. Good for ranking and discrete comparisons.",
         "rules": {
@@ -47,7 +47,7 @@ CHART_DEFINITIONS: List[ChartDef] = [
         }
     },
     {
-        "id": "line_chart",
+        "id": "line",
         "name": "Line Chart",
         "description": "Show trend or progression over a continuous axis (usually time).",
         "rules": {
@@ -67,7 +67,7 @@ CHART_DEFINITIONS: List[ChartDef] = [
         }
     },
     {
-        "id": "scatter_plot",
+        "id": "scatter",
         "name": "Scatter Plot",
         "description": "Display relationship between two numeric variables; optionally color/size by category.",
         "rules": {
@@ -88,7 +88,7 @@ CHART_DEFINITIONS: List[ChartDef] = [
         }
     },
     {
-        "id": "pie_chart",
+        "id": "pie",
         "name": "Pie Chart",
         "description": "Show proportions of a whole. Best for small numbers of categories.",
         "rules": {
@@ -140,7 +140,7 @@ CHART_DEFINITIONS: List[ChartDef] = [
         },
         "use_cases": ["compare spread", "outliers", "quartiles", "distribution across groups"],
         "example_config": {
-            "chart_type": "box",
+            "chart_type": "box_plot",
             "x": "category_col",
             "y": "numeric_col"
         }
@@ -166,7 +166,7 @@ CHART_DEFINITIONS: List[ChartDef] = [
         }
     },
     {
-        "id": "area_chart",
+        "id": "area",
         "name": "Area Chart",
         "description": "Show cumulative totals over time or area under a line. Good for stacked trends.",
         "rules": {
@@ -218,9 +218,29 @@ CHART_DEFINITIONS: List[ChartDef] = [
         },
         "use_cases": ["distribution across groups", "density", "compare spread"],
         "example_config": {
-            "chart_type": "violin",
+            "chart_type": "violin_plot",
             "x": "category_col",
             "y": "numeric_col"
+        }
+    },
+    {
+        "id": "grouped_bar",
+        "name": "Grouped Bar Chart",
+        "description": "Compare multiple categories side by side with grouped bars.",
+        "rules": {
+            "data_types": [
+                {"type": DataType.CATEGORICAL.value, "min": 1, "max": 2},
+                {"type": DataType.NUMERIC.value, "min": 1, "max": 3}
+            ],
+            "min_columns": 2,
+            "max_columns": 4
+        },
+        "use_cases": ["compare groups", "side by side", "multi-category"],
+        "example_config": {
+            "chart_type": "grouped_bar",
+            "x": "category_col",
+            "y": "value_col",
+            "group": "subcategory_col"
         }
     }
 ]

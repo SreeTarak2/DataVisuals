@@ -1,9 +1,9 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { TrendingUp, TrendingDown } from 'lucide-react';
-import { LineChart, Line, ResponsiveContainer } from 'recharts';
 import { cn } from '../../lib/utils';
 import GlassCard from '../common/GlassCard';
+import PlotlyChart from '../PlotlyChart';
 
 const KpiCard = ({ title, value, change, trendData = [], color = 'primary' }) => {
   const isPositive = change >= 0;
@@ -31,19 +31,31 @@ const KpiCard = ({ title, value, change, trendData = [], color = 'primary' }) =>
 
           {/* Sparkline */}
           {trendData.length > 0 && (
-            <div className="hidden md:block h-12">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-                  <Line
-                    type="monotone"
-                    dataKey="y"
-                    stroke={getTrendStroke()}
-                    strokeWidth={2}
-                    dot={false}
-                    strokeLinecap="round"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+            <div className="hidden md:block h-12 bg-[#0d1117] rounded-lg">
+              <PlotlyChart
+                data={[{
+                  x: trendData.map((_, i) => i),
+                  y: trendData.map(d => d.y),
+                  type: 'scatter',
+                  mode: 'lines',
+                  line: {
+                    color: getTrendStroke(),
+                    width: 2,
+                    shape: 'spline'
+                  }
+                }]}
+                layout={{
+                  margin: { l: 0, r: 0, t: 0, b: 0 },
+                  showlegend: false,
+                  xaxis: { visible: false },
+                  yaxis: { visible: false }
+                }}
+                config={{
+                  displayModeBar: false,
+                  staticPlot: true
+                }}
+                style={{ width: '100%', height: '100%' }}
+              />
             </div>
           )}
         </div>

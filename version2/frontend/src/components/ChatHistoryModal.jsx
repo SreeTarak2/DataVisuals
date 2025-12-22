@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Search, MessageSquare, Clock, Trash2, MoreVertical, Database, ExternalLink } from 'lucide-react';
+import { X, Search, MessageSquare, Clock, Trash2, MoreVertical, Database, ExternalLink, CheckCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import GlassCard from './common/GlassCard';
@@ -119,15 +119,17 @@ const ChatHistoryModal = ({ isOpen, onClose }) => {
   const formatTimestamp = (timestamp) => {
     const date = new Date(timestamp);
     const now = new Date();
-    const diffInHours = (now - date) / (1000 * 60 * 60);
-    
-    if (diffInHours < 24) {
-      return `${Math.floor(diffInHours)} hours ago`;
-    } else if (diffInHours < 168) { // 7 days
-      return `${Math.floor(diffInHours / 24)} days ago`;
-    } else {
-      return date.toLocaleDateString();
-    }
+    const diffMs = now - date;
+    const diffSec = Math.floor(diffMs / 1000);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHr = Math.floor(diffMin / 60);
+    const diffDay = Math.floor(diffHr / 24);
+
+    if (diffSec < 60) return 'just now';
+    if (diffMin < 60) return `${diffMin} min ago`;
+    if (diffHr < 24) return `${diffHr} hour${diffHr !== 1 ? 's' : ''} ago`;
+    if (diffDay < 7) return `${diffDay} day${diffDay !== 1 ? 's' : ''} ago`;
+    return date.toLocaleDateString();
   };
 
   return createPortal(
@@ -213,13 +215,14 @@ const ChatHistoryModal = ({ isOpen, onClose }) => {
                       }`}
                     >
                       <div className="flex items-start gap-3">
-                        {/* Selection checkbox */}
-                        <div 
-                          className={`w-4 h-4 rounded-full border-2 mt-1 flex items-center justify-center cursor-pointer ${
-                            selectedChats.has(chat.id)
-                              ? 'border-primary bg-primary'
-                              : 'border-border/50 hover:border-primary/50'
-                          }`}
+                        {/* Enhanced Selection Checkbox */}
+                        <div
+                          className={`w-7 h-7 rounded-lg border-2 mt-1 flex items-center justify-center cursor-pointer transition-all duration-150 shadow-sm relative group
+                            ${selectedChats.has(chat.id)
+                              ? 'border-primary bg-primary/90 ring-2 ring-primary/30'
+                              : 'border-border/50 bg-background hover:border-primary/50 hover:bg-accent/30'}
+                          `}
+                          title="Select for delete"
                           onClick={(e) => {
                             e.stopPropagation();
                             const newSelected = new Set(selectedChats);
@@ -231,9 +234,14 @@ const ChatHistoryModal = ({ isOpen, onClose }) => {
                             setSelectedChats(newSelected);
                           }}
                         >
-                          {selectedChats.has(chat.id) && (
-                            <div className="w-2 h-2 bg-white rounded-full"></div>
+                          {selectedChats.has(chat.id) ? (
+                            <CheckCircle className="w-5 h-5 text-white drop-shadow" />
+                          ) : (
+                            <span className="block w-4 h-4 rounded bg-transparent border border-border/30 group-hover:bg-accent/40"></span>
                           )}
+                          {/* <span className="absolute left-full ml-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                            Select for delete
+                          </span> */}
                         </div>
                         
                         {/* Chat content - clickable to open */}

@@ -103,6 +103,7 @@ async def delete_conversation(
 async def chat_socket(websocket: WebSocket):
     """
     Handles real-time, stateful chat communication over a WebSocket connection.
+    Now supports token-by-token streaming for live typing effect.
     Authenticates the user via a token in the query parameters.
     """
     # --- WebSocket Authentication ---
@@ -139,6 +140,7 @@ async def chat_socket(websocket: WebSocket):
 
             # --- Message Processing ---
             client_message_id = payload.get("clientMessageId")
+            use_streaming = payload.get("streaming", True)  # Default to streaming
             
             # Send initial "processing" status to the client
             await websocket.send_json({
@@ -148,28 +150,71 @@ async def chat_socket(websocket: WebSocket):
             })
 
             try:
-                # Delegate the core logic to the AIService
-                response = await ai_service.process_chat_message_enhanced(
-                    query=payload.get("message", "").strip(),
-                    dataset_id=payload.get("datasetId"),
-                    user_id=user["id"],
-                    conversation_id=payload.get("conversationId"),
-                    mode=payload.get("mode", "learning"),
-                )
+                if use_streaming:
+                    # --- STREAMING MODE ---
+                    # Stream tokens as they arrive from LLM
+                    async for chunk in ai_service.process_chat_message_streaming(
+                        query=payload.get("message", "").strip(),
+                        dataset_id=payload.get("datasetId"),
+                        user_id=user["id"],
+                        conversation_id=payload.get("conversationId"),
+                    ):
+                        if chunk["type"] == "token":
+                            # Send each token as it arrives
+                            await websocket.send_json({
+                                "type": "token",
+                                "clientMessageId": client_message_id,
+                                "content": chunk["content"]
+                            })
+                            
+                        elif chunk["type"] == "response_complete":
+                            await websocket.send_json({
+                                "type": "response_complete",
+                                "clientMessageId": client_message_id,
+                                "fullResponse": chunk.get("full_response", chunk.get("content", ""))
+                            })
+                            
+                        elif chunk["type"] == "chart":
+                            # Chart data ready
+                            await websocket.send_json({
+                                "type": "chart",
+                                "clientMessageId": client_message_id,
+                                "chartConfig": chunk["chart_config"]
+                            })
+                            
+                        elif chunk["type"] == "error":
+                            await websocket.send_json({
+                                "type": "error",
+                                "clientMessageId": client_message_id,
+                                "detail": chunk["content"]
+                            })
+                            
+                        elif chunk["type"] == "done":
+                            # Final message with conversation ID
+                            await websocket.send_json({
+                                "type": "done",
+                                "clientMessageId": client_message_id,
+                                "conversationId": chunk["conversation_id"],
+                                "chartConfig": chunk.get("chart_config")
+                            })
+                else:
+                    # --- NON-STREAMING MODE (fallback) ---
+                    response = await ai_service.process_chat_message_enhanced(
+                        query=payload.get("message", "").strip(),
+                        dataset_id=payload.get("datasetId"),
+                        user_id=user["id"],
+                        conversation_id=payload.get("conversationId"),
+                        mode=payload.get("mode", "learning"),
+                    )
 
-                # Send the successful response back to the client
-                await websocket.send_json({
-                    "type": "assistant_message",
-                    "clientMessageId": client_message_id,
-                    "conversationId": response.get("conversation_id"),
-                    "message": response.get("response"),
-                    "chartConfig": response.get("chart_config"),
-                    "technicalDetails": response.get("technical_details"),
-                    "metadata": {
-                        "ragUsed": response.get("rag_used"),
-                        "metadataUsed": response.get("metadata_used"),
-                    },
-                })
+                    await websocket.send_json({
+                        "type": "assistant_message",
+                        "clientMessageId": client_message_id,
+                        "conversationId": response.get("conversation_id"),
+                        "message": response.get("response"),
+                        "chartConfig": response.get("chart_config"),
+                        "technicalDetails": response.get("technical_details"),
+                    })
 
             except HTTPException as exc:
                 await websocket.send_json({

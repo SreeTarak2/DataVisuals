@@ -1,9 +1,17 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, memo } from 'react';
 
-const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = 'bar' }) => {
+const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartType = 'bar' }) => {
   const plotRef = useRef(null);
+  const dataHashRef = useRef(null);
 
   useEffect(() => {
+    // Create a simple hash of the data to avoid unnecessary re-renders
+    const dataHash = JSON.stringify(data);
+    if (dataHash === dataHashRef.current) {
+      return; // Data hasn't changed, skip re-render
+    }
+    dataHashRef.current = dataHash;
+
     const loadPlotly = async () => {
       try {
         const Plotly = (await import('plotly.js-dist-min')).default;
@@ -30,6 +38,48 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
             // Data is already in Plotly format, use it directly
             processedData = data;
             console.log('[PlotlyChart] Using data as-is (Plotly format)');
+          }
+          // Handle histogram data (bin/count format)
+          else if (chartType === 'histogram' && Array.isArray(data) && data.length > 0) {
+            const first = data[0];
+            const keys = Object.keys(first);
+            
+            // Histogram usually has 'bin' and 'count' fields
+            if (keys.includes('bin') && keys.includes('count')) {
+              const binValues = data.map(row => parseFloat(row.bin) || row.bin);
+              xLabel = 'Bin Range';
+              yLabel = 'Frequency';
+              
+              processedData = [{
+                x: binValues,
+                y: data.map(row => row.count),
+                type: 'bar',
+                marker: { 
+                  color: '#a78bfa',
+                  line: { width: 0 }
+                },
+                name: 'Frequency',
+                hovertemplate: '<b>%{x}</b><br>Count: %{y:,.0f}<extra></extra>'
+              }];
+            } else {
+              // Fallback to first two keys
+              xKey = keys[0];
+              yKey = keys[1];
+              xLabel = xKey;
+              yLabel = yKey;
+              
+              processedData = [{
+                x: data.map(row => row[xKey]),
+                y: data.map(row => row[yKey]),
+                type: 'bar',
+                marker: { 
+                  color: '#a78bfa',
+                  line: { width: 0 }
+                },
+                name: yKey,
+                hovertemplate: '<b>%{x}</b><br>' + yKey + ': %{y:,.0f}<extra></extra>'
+              }];
+            }
           }
           // Use config.columns if available (for raw data arrays)
           else if ((chartType === 'line' || chartType === 'line_chart' || chartType === 'bar' || chartType === 'bar_chart') && Array.isArray(data) && data.length > 0) {
@@ -58,20 +108,73 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
               y: data.map(row => row[yKey]),
               type: (chartType === 'bar' || chartType === 'bar_chart') ? 'bar' : 'scatter',
               mode: (chartType === 'line' || chartType === 'line_chart') ? 'lines+markers' : undefined,
-              marker: { color: '#3b82f6' },
-              name: yLabel
+              line: (chartType === 'line' || chartType === 'line_chart') ? {
+                color: '#06b6d4',
+                width: 3,
+                shape: 'spline'
+              } : undefined,
+              marker: { 
+                color: (chartType === 'bar' || chartType === 'bar_chart') ? '#06b6d4' : '#06b6d4',
+                size: 8,
+                line: (chartType === 'line' || chartType === 'line_chart') ? {
+                  color: '#0d1117',
+                  width: 2
+                } : { width: 0 }
+              },
+              name: yLabel,
+              hovertemplate: (chartType === 'bar' || chartType === 'bar_chart') 
+                ? '<b>%{x}</b><br>' + yLabel + ': %{y:,.2f}<extra></extra>'
+                : '<b>%{x}</b><br>' + yLabel + ': %{y:,.2f}<extra></extra>'
             }];
-          } else if (chartType === 'pie' && data.length > 0 && data[0].labels && data[0].values) {
-            processedData = [{
-              labels: data[0].labels,
-              values: data[0].values,
-              type: 'pie',
-              textinfo: 'label+percent',
-              textposition: 'outside',
-              marker: {
-                colors: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316']
-              }
-            }];
+          } else if ((chartType === 'pie' || chartType === 'pie_chart') && Array.isArray(data) && data.length > 0) {
+            // Check if data is in Plotly format with labels/values
+            if (data[0].labels && data[0].values) {
+              processedData = [{
+                labels: data[0].labels,
+                values: data[0].values,
+                type: 'pie',
+                textinfo: 'label+percent',
+                textposition: 'outside',
+                textfont: {
+                  color: '#e6edf3',
+                  size: 13
+                },
+                marker: {
+                  colors: ['#06b6d4', '#a78bfa', '#34d399', '#fbbf24', '#f87171', '#fb923c', '#84cc16', '#ec4899'],
+                  line: {
+                    color: '#0d1117',
+                    width: 2
+                  }
+                },
+                hovertemplate: '<b>%{label}</b><br>%{value}<br>%{percent}<extra></extra>'
+              }];
+            } else {
+              // Data is in array format with name/value or similar keys
+              const first = data[0];
+              const keys = Object.keys(first);
+              const nameKey = keys.includes('name') ? 'name' : keys[0];
+              const valueKey = keys.includes('value') ? 'value' : keys[1];
+              
+              processedData = [{
+                labels: data.map(row => row[nameKey]),
+                values: data.map(row => row[valueKey]),
+                type: 'pie',
+                textinfo: 'label+percent',
+                textposition: 'outside',
+                textfont: {
+                  color: '#e6edf3',
+                  size: 13
+                },
+                marker: {
+                  colors: ['#06b6d4', '#a78bfa', '#34d399', '#fbbf24', '#f87171', '#fb923c', '#84cc16', '#ec4899'],
+                  line: {
+                    color: '#0d1117',
+                    width: 2
+                  }
+                },
+                hovertemplate: '<b>%{label}</b><br>%{value}<br>%{percent}<extra></extra>'
+              }];
+            }
           } else if (chartType === 'donut' && data.length > 0 && data[0].labels && data[0].values) {
             processedData = [{
               labels: data[0].labels,
@@ -80,9 +183,44 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
               hole: 0.4,
               textinfo: 'label+percent',
               textposition: 'outside',
+              textfont: {
+                color: '#e6edf3',
+                size: 13
+              },
               marker: {
-                colors: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316']
-              }
+                colors: ['#06b6d4', '#a78bfa', '#34d399', '#fbbf24', '#f87171', '#fb923c', '#84cc16', '#ec4899'],
+                line: {
+                  color: '#0d1117',
+                  width: 2
+                }
+              },
+              hovertemplate: '<b>%{label}</b><br>%{value}<br>%{percent}<extra></extra>'
+            }];
+          } else if (Array.isArray(data) && data.length > 0) {
+            // Generic fallback for any unhandled chart types
+            const first = data[0];
+            const keys = Object.keys(first);
+            
+            // Try to intelligently pick x and y keys
+            xKey = keys.includes('x') ? 'x' : keys[0];
+            yKey = keys.includes('y') ? 'y' : (keys.includes('value') ? 'value' : (keys.includes('count') ? 'count' : keys[1]));
+            xLabel = xKey;
+            yLabel = yKey;
+            
+            const plotType = chartType === 'scatter' || chartType === 'scatter_plot' ? 'scatter' : 'bar';
+            
+            processedData = [{
+              x: data.map(row => row[xKey]),
+              y: data.map(row => row[yKey]),
+              type: plotType,
+              mode: plotType === 'scatter' ? 'markers' : undefined,
+              marker: { 
+                color: '#06b6d4',
+                size: plotType === 'scatter' ? 10 : undefined,
+                line: { width: 0 }
+              },
+              name: yLabel,
+              hovertemplate: '<b>%{x}</b><br>' + yLabel + ': %{y:,.2f}<extra></extra>'
             }];
           }
 
@@ -90,37 +228,59 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
             font: {
-              color: '#e2e8f0',
-              family: 'Inter, system-ui, sans-serif'
+              color: '#8b949e',
+              family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+              size: 13
             },
             xaxis: {
-              color: '#64748b',
-              gridcolor: 'rgba(100, 116, 139, 0.2)',
-              showgrid: true,
+              color: '#8b949e',
+              gridcolor: 'rgba(0,0,0,0)',
+              showgrid: false,
+              showline: false,
               zeroline: false,
-              title: { text: xLabel, font: { color: '#e2e8f0' } }
+              tickfont: { size: 12, color: '#8b949e' },
+              title: { text: xLabel, font: { color: '#8b949e', size: 13 } },
+              tickmode: chartType === 'histogram' ? 'linear' : 'auto',
+              tickangle: chartType === 'histogram' ? 0 : -45,
+              automargin: true
             },
             yaxis: {
-              color: '#64748b',
-              gridcolor: 'rgba(100, 116, 139, 0.2)',
-              showgrid: true,
+              color: '#8b949e',
+              gridcolor: 'rgba(0,0,0,0)',
+              showgrid: false,
+              showline: false,
               zeroline: false,
-              title: { text: yLabel, font: { color: '#e2e8f0' } }
+              tickfont: { size: 11, color: '#8b949e' },
+              title: { text: yLabel, font: { color: '#8b949e', size: 13 } }
             },
             margin: {
               l: 60,
-              r: 30,
-              t: 30,
+              r: 40,
+              t: 40,
               b: 60
+            },
+            hovermode: 'closest',
+            hoverlabel: {
+              bgcolor: '#161b22',
+              bordercolor: '#30363d',
+              font: {
+                family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                size: 13,
+                color: '#e6edf3'
+              }
             },
             showlegend: chartType !== 'pie' && chartType !== 'donut',
             legend: {
+              orientation: 'h',
+              yanchor: 'bottom',
+              y: 1.02,
+              xanchor: 'right',
               x: 1,
-              y: 1,
               bgcolor: 'rgba(0,0,0,0)',
               bordercolor: 'rgba(0,0,0,0)',
               font: {
-                color: '#e2e8f0'
+                color: '#8b949e',
+                size: 12
               }
             }
           };
@@ -134,8 +294,16 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
           }, {
             responsive: true,
             displayModeBar: true,
-            modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+            modeBarButtonsToRemove: ['lasso2d', 'select2d'],
             displaylogo: false,
+            dragmode: 'pan',
+            toImageButtonOptions: {
+              format: 'png',
+              filename: 'chart',
+              height: 1080,
+              width: 1920,
+              scale: 2
+            },
             ...config
           });
           
@@ -186,6 +354,13 @@ const PlotlyChart = ({ data, layout = {}, style = {}, config = {}, chartType = '
       }} 
     />
   );
-};
+}, (prevProps, nextProps) => {
+  // Custom comparison - only re-render if data or layout actually changed
+  return (
+    JSON.stringify(prevProps.data) === JSON.stringify(nextProps.data) &&
+    JSON.stringify(prevProps.layout) === JSON.stringify(nextProps.layout) &&
+    prevProps.chartType === nextProps.chartType
+  );
+});
 
 export default PlotlyChart;

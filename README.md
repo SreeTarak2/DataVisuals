@@ -35,16 +35,34 @@
 
 **DataSage AI** is a cutting-edge, production-ready data analytics and visualization platform that leverages advanced AI models to transform raw data into meaningful insights. Built with modern technologies and best practices, DataSage combines the power of Large Language Models (LLMs) with robust data processing capabilities to provide intelligent, conversational analytics.
 
+### 🆕 NEW: Multi-Agent OpenRouter Integration! ⚡
+
+**DataSage now uses 6 specialized FREE AI models working together!**
+
+- 🎯 **Qwen3-235B** - Chart recommendations with complex reasoning
+- 🏗️ **Hermes 3 405B** - KPI suggestions & structured outputs
+- ⚡ **Qwen3-4B** - Quick drafts & lightweight tasks
+- 🔮 **Mistral 24B** - Generalist reasoning & fallbacks
+- 💬 **Llama 3.3 70B** - Natural conversations
+- 👁️ **Nemotron VL** - Chart image analysis
+
+**Pipeline:** Chart Recommendation + KPI Suggestion (parallel) → Chart Explanation → Insight Generation = **Better Quality, Faster Results!**
+
+📖 **[Quick Start Guide](QUICK_START_OPENROUTER.md)** | 📚 **[Full Documentation](OPENROUTER_MULTI_AGENT_IMPLEMENTATION.md)**
+
+---
+
 ### What Makes DataSage Unique?
 
-- 🤖 **AI-First Approach**: Multiple specialized AI models for different tasks (chat, visualization, insights, design)
+- 🤖 **Multi-Agent AI System**: 6 specialized models orchestrated for optimal results (NEW!)
 - 📊 **Intelligent Visualization**: Automatic chart recommendations based on data characteristics and user intent
 - 💬 **Conversational Analytics**: Natural language interface for data exploration and analysis
-- 🎨 **AI-Powered Dashboard Design**: Context-aware, story-driven dashboard layouts
+- 🎨 **AI-Powered Dashboard Design**: Context-aware, story-driven dashboard layouts with multi-agent pipeline
 - 🔍 **Advanced Analytics**: Statistical analysis, correlations, anomaly detection, and predictive insights
 - 🚀 **Vector-Based Search**: FAISS-powered semantic search for datasets and queries
 - ⚡ **Async Processing**: Celery-based background task processing for heavy computations
 - 🔐 **Enterprise-Ready**: JWT authentication, role-based access, and secure file handling
+- 💰 **100% Free AI**: All 6 OpenRouter models are completely free to use!
 
 ---
 

@@ -37,7 +37,10 @@ const useDatasetStore = create(
           
           // Only show success toast for manual refreshes, not automatic polling
           if (force) {
-            toast.success(`Refreshed ${fetched.length} datasets`);
+            toast.success(`Refreshed ${fetched.length} datasets`, {
+              id: 'datasets-refreshed', // Prevent duplicate toasts
+              duration: 2000,
+            });
           }
           
           // Auto-select first if none

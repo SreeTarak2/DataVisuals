@@ -37,18 +37,55 @@ async def design_intelligent_dashboard(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    (New Method) Creates an intelligent dashboard design using the AI Designer service,
-    which leverages pre-defined design patterns and few-shot learning for superior results.
+    Creates an intelligent dashboard design using the AI Designer service.
+    
+    By default, returns cached dashboard if it exists. To regenerate, pass force_regenerate=true.
+    
+    Request body (optional):
+    {
+        "design_preference": "executive_kpi_trend",  // Optional pattern preference
+        "force_regenerate": false                     // Set to true to regenerate existing dashboard
+    }
     """
     try:
+        force_regenerate = request.get("force_regenerate", False)
+        design_preference = request.get("design_preference")
+        
         response = await ai_designer_service.design_intelligent_dashboard(
             dataset_id=dataset_id,
-            user_id=current_user["id"]
+            user_id=current_user["id"],
+            design_preference=design_preference,
+            force_regenerate=force_regenerate
         )
         return response
     except Exception as e:
         logger.error(f"AI Designer error: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to design dashboard.")
+
+@router.get("/{dataset_id}/dashboard")
+async def get_existing_dashboard(
+    dataset_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Retrieves existing dashboard for a dataset without regenerating.
+    Returns 404 if no dashboard exists yet.
+    """
+    try:
+        dashboard = await ai_designer_service.get_existing_dashboard(
+            dataset_id=dataset_id,
+            user_id=current_user["id"]
+        )
+        
+        if not dashboard:
+            raise HTTPException(status_code=404, detail="No dashboard found for this dataset. Generate one first.")
+        
+        return dashboard
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching dashboard: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch dashboard")
 
 @router.get("/design-patterns")
 async def get_design_patterns(current_user: dict = Depends(get_current_user)):

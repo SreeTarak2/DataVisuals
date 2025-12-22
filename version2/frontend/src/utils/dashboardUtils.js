@@ -71,9 +71,25 @@ const normalizeComponent = (component = {}, availableColumns = []) => {
 
   // Normalize chart type
   if (c.type === 'chart') {
-    c.config.chart_type = normalizeChartType(c.config.chart_type || c.chart_type || c.type || 'bar_chart');
+    // CRITICAL FIX: Check c.config.type FIRST before falling back to c.type
+    // Backend sends: {"type": "chart", "config": {"type": "pie"}}
+    // We need to extract the actual chart type from config.type, not use "chart"
+    c.config.chart_type = normalizeChartType(
+      c.config.type ||           // ← Multi-agent sends this
+      c.config.chart_type ||     // ← Legacy format
+      c.chart_type ||            // ← Alternate location
+      'bar_chart'                // ← Default (never use c.type which is "chart")
+    );
     // ensure columns are an array
-    c.config.columns = ensureArray(c.config.columns || c.data_columns || (c.charts?.[0]?.data ? c.charts[0].data.map(d => d.x || d.y).filter(Boolean) : null));
+    // IMPROVEMENT: Multi-agent sends x/y fields, convert to columns array
+    if (c.config.x && c.config.y) {
+      c.config.columns = [c.config.x, c.config.y].filter(Boolean);
+    } else if (c.config.x && !c.config.y) {
+      // Pie charts might only have x (category) column
+      c.config.columns = [c.config.x];
+    } else {
+      c.config.columns = ensureArray(c.config.columns || c.data_columns || (c.charts?.[0]?.data ? c.charts[0].data.map(d => d.x || d.y).filter(Boolean) : null));
+    }
     
     // Check if columns exist in dataset
     if (availableColumns.length > 0) {
