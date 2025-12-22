@@ -11,26 +11,40 @@ Responsibilities:
     - LLM routing
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, AsyncGenerator
 from fastapi import HTTPException
 import logging
 import json
+import polars as pl
 
 from db.database import get_database
-
 from services.llm_router import llm_router
-
-# UPDATED imports for new folder structure
 from services.datasets.dataset_loader import load_dataset, create_context_string
 from services.charts.hydrate import hydrate_chart, hydrate_kpi, hydrate_table
 from services.conversations.conversation_service import load_or_create_conversation, save_conversation
-
 from core.prompts import PromptFactory, PromptType
+from services.ai.query_rewrite import rewrite_query
 
 logger = logging.getLogger(__name__)
 
 
 class AIService:
+    """
+    Core orchestration layer for AI-driven data analytics operations.
+    
+    Responsibilities:
+    - Chat message processing with intent guardrails
+    - Dashboard generation from datasets
+    - Conversation lifecycle management
+    - LLM routing and response hydration
+    
+    All methods integrate with:
+    - LLM router for multi-model fallbacks
+    - Dataset loader for async data access
+    - Chart hydration engine for Plotly generation
+    - Conversation service for message persistence
+    """
+    
     def __init__(self):
         self._db = None
 
@@ -51,13 +65,58 @@ class AIService:
         user_id: str,
         conversation_id: Optional[str] = None
     ) -> Dict[str, Any]:
+        """
+        Process a user query into a data-driven response with optional chart.
+        
+        Pipeline:
+        1. Intent guardrail: Rejects off-topic queries without LLM calls
+        2. Conversation loading: Retrieves or creates conversation context
+        3. Dataset validation: Ensures dataset exists and is processed
+        4. Query rewriting: Enhances query clarity with dataset context
+        5. LLM invocation: Routes to chart_engine via llm_router
+        6. Response extraction: Robust parsing of response_text and chart_config
+        7. Chart hydration: Converts chart config + data into Plotly format
+        8. Persistence: Saves AI response to conversation history
+        
+        Args:
+            query: User's natural language question about the data
+            dataset_id: MongoDB ObjectId of target dataset
+            user_id: User's authentication identifier
+            conversation_id: Optional ID to continue existing conversation
+            
+        Returns:
+            Dict with keys:
+            - response: AI-generated text explanation
+            - chart_config: Hydrated Plotly chart data (null if not requested)
+            - conversation_id: Database ID of conversation thread
+            
+        Raises:
+            HTTPException(404): Dataset not found
+            HTTPException(409): Dataset still processing
+            HTTPException(502): LLM unavailable
+            HTTPException(500): LLM returned empty response
+        """
+        query_lower = query.strip().lower()
 
-        # 1. Load or create conversation
+        off_topic_triggers = [
+            "hello", "hi ", "hey ", "good morning", "good evening", "how are you",
+            "thank you", "thanks", "who is", "what is the capital", "prime minister",
+            "president", "weather", "joke", "tell me a", "what time", "news", "stock",
+            "who are you", "what can you do", "help me", "how do i", "bye", "goodbye"
+        ]
+
+        if any(trigger in query_lower for trigger in off_topic_triggers) or len(query_lower) < 5:
+            return {
+                "response_text": "I'm a specialized data analytics assistant. I can help with trends, charts, forecasts, correlations, or insights from your dataset.\n\n"
+                               "Try asking: \"Show top products by revenue\" or \"What is the sales trend over time?\"",
+                "chart_config": None,
+                "conversation_id": conversation_id
+            }
+
         conv = await load_or_create_conversation(conversation_id, user_id, dataset_id)
         messages = conv.get("messages", [])
         messages.append({"role": "user", "content": query})
 
-        # 2. Fetch dataset metadata
         dataset_doc = await self.db.datasets.find_one({"_id": dataset_id, "user_id": user_id})
         if not dataset_doc:
             raise HTTPException(404, "Dataset not found.")
@@ -66,29 +125,27 @@ class AIService:
         if not metadata:
             raise HTTPException(409, "Dataset is still being processed.")
 
-        # 3. Build dataset context for LLM
         dataset_context = create_context_string(metadata)
 
-        # 4. Build prompt using PromptFactory
+        enhanced_query = await rewrite_query(query, dataset_context)
+        if enhanced_query != query:
+            logger.info(f"Query rewritten: '{query[:50]}...' → '{enhanced_query[:50]}...'")
+        messages[-1]["content"] = enhanced_query
+
         factory = PromptFactory(dataset_context=dataset_context, schema=metadata)
         prompt = factory.get_prompt(PromptType.CONVERSATIONAL, history=messages)
 
-        # 5. Send to LLM (through router with fallback)
         llm_response = await llm_router.call(prompt, model_role="chart_engine", expect_json=True)
 
-        # Debug: Log the exact response structure
         logger.info(f"LLM Response structure: {json.dumps(llm_response, indent=2)[:1000]}")
         logger.info(f"LLM Response keys: {list(llm_response.keys()) if isinstance(llm_response, dict) else 'Not a dict'}")
 
-        # 6. Handle LLM error responses
         if isinstance(llm_response, dict) and llm_response.get("error"):
             logger.error(f"Chat LLM error: {llm_response}")
             raise HTTPException(status_code=502, detail="AI model unavailable.")
 
-        # 7. Extract response text - simplified and robust
         ai_text = ""
         if isinstance(llm_response, dict):
-            # Try multiple possible keys
             ai_text = (
                 llm_response.get("response_text") or 
                 llm_response.get("response") or 
@@ -98,40 +155,31 @@ class AIService:
                 ""
             )
         else:
-            # Fallback to string conversion
             ai_text = str(llm_response)
         
-        # Ensure we have content
         if not ai_text or not ai_text.strip():
             logger.error(f"Empty response from LLM. Full response: {llm_response}")
             raise HTTPException(status_code=500, detail="AI returned empty response")
         
-        # Clean up escaped newlines and extra whitespace
         ai_text = ai_text.replace("\\n", " ").replace("\n", " ")
-        ai_text = " ".join(ai_text.split())  # Remove extra whitespace
+        ai_text = " ".join(ai_text.split())
         
         logger.info(f"Extracted ai_text ({len(ai_text)} chars): {ai_text[:200]}...")
         
-        # Extract chart config
         chart_config_raw = llm_response.get("chart_config") if isinstance(llm_response, dict) else None
         
-        # 8. Hydrate chart if requested
         chart_data = None
         if chart_config_raw:
             logger.info(f"Chart config received: {json.dumps(chart_config_raw)[:200]}")
             try:
-                # Load dataset file path from database
                 file_path = dataset_doc.get("file_path")
                 if not file_path:
                     raise ValueError("Dataset file path not found")
                 
-                # Load dataset for hydration (async!)
                 df = await load_dataset(file_path)
                 
-                # Convert LLM chart config to ChartConfig model
                 from db.schemas_dashboard import ChartConfig, ChartType, AggregationType
                 
-                # Map LLM chart type to our ChartType enum
                 chart_type_map = {
                     "bar": ChartType.BAR,
                     "line": ChartType.LINE,
@@ -139,7 +187,7 @@ class AIService:
                     "scatter": ChartType.SCATTER,
                     "histogram": ChartType.HISTOGRAM,
                     "heatmap": ChartType.HEATMAP,
-                    "box": ChartType.BOX_PLOT,  # Fixed: box → BOX_PLOT
+                    "box": ChartType.BOX_PLOT,
                     "box_plot": ChartType.BOX_PLOT,
                     "treemap": ChartType.TREEMAP,
                     "grouped_bar": ChartType.GROUPED_BAR,
@@ -148,25 +196,38 @@ class AIService:
                 
                 chart_type = chart_type_map.get(chart_config_raw.get("type", "bar").lower(), ChartType.BAR)
                 
-                # Build columns list from x and y
                 columns = []
-                if "x" in chart_config_raw:
-                    columns.append(chart_config_raw["x"])
-                if "y" in chart_config_raw:
-                    columns.append(chart_config_raw["y"])
                 
-                # Extract title (required field)
+                if chart_type == ChartType.PIE:
+                    if "labels" in chart_config_raw:
+                        columns.append(chart_config_raw["labels"])
+                    if "values" in chart_config_raw and chart_config_raw["values"] not in ["count", "count of each model"]:
+                        columns.append(chart_config_raw["values"])
+                    elif "x" in chart_config_raw:
+                        columns.append(chart_config_raw["x"])
+                    
+                    if len(columns) == 1:
+                        numeric_cols = [col for col in df.columns if df[col].dtype in [pl.Int64, pl.Int32, pl.Float64, pl.Float32]]
+                        if numeric_cols and columns[0] not in numeric_cols:
+                            columns.append(numeric_cols[0])
+                        elif len(df.columns) >= 2:
+                            for col in df.columns:
+                                if col != columns[0]:
+                                    columns.append(col)
+                                    break
+                else:
+                    if "x" in chart_config_raw:
+                        columns.append(chart_config_raw["x"])
+                    if "y" in chart_config_raw:
+                        columns.append(chart_config_raw["y"])
+                
                 chart_title = chart_config_raw.get("title", "Chart Visualization")
                 
-                # For hydration, we need to pass enums as enum objects (not strings)
-                # Pydantic's use_enum_values=True converts enums to strings, but
-                # hydrate_chart expects the actual enum to call .value on it
-                # So we create a simple config object that preserves enum types
                 class HydrationConfig:
                     def __init__(self, chart_type, columns, aggregation):
-                        self.chart_type = chart_type  # Keep as ChartType enum
-                        self.columns = columns.copy()  # Mutable, so copy
-                        self.aggregation = aggregation  # Keep as AggregationType enum
+                        self.chart_type = chart_type
+                        self.columns = columns.copy()
+                        self.aggregation = aggregation
                         self.group_by = None
                 
                 hydration_config = HydrationConfig(
@@ -175,10 +236,8 @@ class AIService:
                     aggregation=AggregationType.SUM
                 )
                 
-                # Hydrate chart (convert config + data → Plotly traces)
                 chart_traces = hydrate_chart(df, hydration_config)
                 
-                # Build Plotly-ready data structure
                 chart_data = {
                     "data": chart_traces,
                     "layout": {
@@ -196,20 +255,15 @@ class AIService:
                 logger.info(f"First trace sample: {json.dumps(chart_traces[0] if chart_traces else {})[:500]}")
             except Exception as e:
                 logger.error(f"Chart hydration failed: {e}", exc_info=True)
-                # Don't fail the whole request, just don't include chart
                 chart_data = None
 
-        # 9. Save conversation with chart data
         ai_message = {
             "role": "ai", 
             "content": ai_text
         }
-        # Include chart_config in saved message if available
         if chart_data:
-            # Ensure chart_data is JSON-serializable for MongoDB
             try:
-                import json
-                json.dumps(chart_data)  # Test serialization
+                json.dumps(chart_data)
                 ai_message["chart_config"] = chart_data
                 logger.info(f"Saving message with chart_config to database (data traces: {len(chart_data.get('data', []))})")
             except (TypeError, ValueError) as e:
@@ -219,33 +273,61 @@ class AIService:
         messages.append(ai_message)
         await save_conversation(conv["_id"], messages)
 
-        # 10. Return response with hydrated chart
         response_data = {
             "response": ai_text,
-            "chart_config": chart_data,  # Now contains hydrated data!
+            "chart_config": chart_data,
             "conversation_id": str(conv["_id"])
         }
         
-        # Debug logging for frontend
         if chart_data:
             logger.info(f"Returning chart_config with {len(chart_data.get('data', []))} trace(s)")
-            logger.info(f"Sample trace structure: {chart_data.get('data', [{}])[0].keys() if chart_data.get('data') else 'No data'}")
+            first_trace = chart_data.get('data', [{}])[0] if chart_data.get('data') else None
+            if first_trace and isinstance(first_trace, dict):
+                logger.info(f"Sample trace structure: {first_trace.keys()}")
+            else:
+                logger.info(f"Sample trace type: {type(first_trace)}")
         else:
             logger.info("No chart_config in response")
         
         return response_data
 
-    # -----------------------------------------------------------
-    # DASHBOARD GENERATION PIPELINE
-    # -----------------------------------------------------------
     async def generate_ai_dashboard(
         self,
         dataset_id: str,
         user_id: str,
         force_regenerate: bool = False
     ) -> Dict[str, Any]:
-
-        # 1. Load dataset document
+        """
+        Generate a comprehensive dashboard layout with hydrated components.
+        
+        Pipeline:
+        1. Dataset validation: Loads dataset metadata and configuration
+        2. Context building: Creates comprehensive dataset summary for LLM
+        3. LLM invocation: Routes to visualization_engine for layout design
+        4. Component specification: Extracts KPI, chart, and table configs
+        5. Data loading: Asynchronously loads dataset into memory
+        6. Hydration: Converts configs + data into Plotly/table formats
+        7. Assembly: Returns complete dashboard structure
+        
+        Args:
+            dataset_id: MongoDB ObjectId of target dataset
+            user_id: User's authentication identifier
+            force_regenerate: Bypass cached layouts and regenerate
+            
+        Returns:
+            Dict with keys:
+            - layout_grid: CSS Grid template string (e.g., "repeat(4, 1fr)")
+            - components: List of hydrated dashboard components
+                Each component contains:
+                - type: "kpi" | "chart" | "table"
+                - config: Original configuration from LLM
+                - value/chart_data/table_data: Hydrated data
+                
+        Raises:
+            HTTPException(404): Dataset not found
+            HTTPException(409): Dataset still processing
+            HTTPException(500): Dashboard generation failed
+        """
         dataset_doc = await self.db.datasets.find_one({"_id": dataset_id, "user_id": user_id})
         if not dataset_doc:
             raise HTTPException(404, "Dataset not found.")
@@ -254,14 +336,11 @@ class AIService:
         if not metadata:
             raise HTTPException(409, "Dataset is still being processed.")
 
-        # 2. Create LLM dataset context
         dataset_context = create_context_string(metadata)
 
-        # 3. Build dashboard prompt
         factory = PromptFactory(dataset_context=dataset_context)
         prompt = factory.get_prompt(PromptType.DASHBOARD_DESIGNER)
 
-        # 4. Request layout from LLM
         layout = await llm_router.call(prompt, model_role="visualization_engine", expect_json=True)
 
         if not layout or "dashboard" not in layout:
@@ -271,10 +350,8 @@ class AIService:
         components = blueprint.get("components", [])
         layout_grid = blueprint.get("layout_grid", "repeat(4, 1fr)")
 
-        # 5. Load dataset file (Polars DF)
         df = await load_dataset(dataset_doc["file_path"])
 
-        # 6. Hydrate all components
         hydrated = []
         for comp in components:
             ctype = comp.get("type")
@@ -291,23 +368,27 @@ class AIService:
 
             hydrated.append(comp)
 
-        # 7. Return final dashboard structure
         return {
             "layout_grid": layout_grid,
             "components": hydrated
         }
 
-    # -----------------------------------------------------------
-    # CONVERSATION MANAGEMENT
-    # -----------------------------------------------------------
     async def get_user_conversations(self, user_id: str):
-        """Get all conversations for a user"""
+        """
+        Retrieve all conversation threads for a user.
+        
+        Args:
+            user_id: User's authentication identifier
+            
+        Returns:
+            Dict with key "conversations": sorted list of conversation objects
+            Returns empty list on error
+        """
         try:
             conversations = await self.db.conversations.find(
                 {"user_id": user_id}
             ).sort("updated_at", -1).to_list(length=100)
             
-            # Convert ObjectId to string for JSON serialization
             for conv in conversations:
                 conv["_id"] = str(conv["_id"])
             
@@ -317,7 +398,16 @@ class AIService:
             return {"conversations": []}
 
     async def get_conversation(self, conversation_id: str, user_id: str):
-        """Get a specific conversation"""
+        """
+        Retrieve a specific conversation thread.
+        
+        Args:
+            conversation_id: Database ID of conversation
+            user_id: User's authentication identifier for access control
+            
+        Returns:
+            Conversation object with _id converted to string, or None if not found
+        """
         try:
             from bson import ObjectId
             conversation = await self.db.conversations.find_one({
@@ -334,7 +424,16 @@ class AIService:
             return None
 
     async def delete_conversation(self, conversation_id: str, user_id: str):
-        """Delete a conversation"""
+        """
+        Delete a conversation thread.
+        
+        Args:
+            conversation_id: Database ID of conversation
+            user_id: User's authentication identifier for access control
+            
+        Returns:
+            Boolean indicating successful deletion
+        """
         try:
             from bson import ObjectId
             result = await self.db.conversations.delete_one({
@@ -356,11 +455,28 @@ class AIService:
         mode: str = "learning"
     ):
         """
-        Process chat message with enhanced features.
-        Simplified version that uses the LLM router.
+        Enhanced chat processing with additional context features.
+        
+        Currently delegates to process_chat_message() for core functionality.
+        Future expansion point for:
+        - Learning mode persistence
+        - Multi-modal context enrichment
+        - Advanced reasoning chains
+        
+        Args:
+            query: User's natural language question
+            dataset_id: Target dataset identifier
+            user_id: User's authentication identifier
+            conversation_id: Optional conversation context
+            mode: Processing mode ("learning" or "inference")
+            
+        Returns:
+            Response from process_chat_message()
+            
+        Raises:
+            Exception: Propagates from core process_chat_message()
         """
         try:
-            # Use the existing process_chat_message method
             return await self.process_chat_message(
                 query=query,
                 dataset_id=dataset_id,
@@ -370,6 +486,203 @@ class AIService:
         except Exception as e:
             logger.error(f"Error in enhanced chat processing: {e}")
             raise
+
+    async def process_chat_message_streaming(
+        self,
+        query: str,
+        dataset_id: str,
+        user_id: str,
+        conversation_id: Optional[str] = None
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Stream chat response tokens as an async generator.
+        
+        Pipeline:
+        1. Intent guardrail: Checks for off-topic queries
+        2. Conversation loading: Retrieves or creates context
+        3. Dataset validation: Ensures dataset availability
+        4. Query rewriting: Enhances clarity with dataset context
+        5. Token streaming: Yields tokens from LLM in real-time
+        6. Chart inference: Optionally generates chart if appropriate
+        7. Persistence: Saves complete response to conversation history
+        
+        Yields:
+            Dict with type field:
+            - "token": {"content": str} - Text token to display
+            - "response_complete": {"full_response": str} - Complete response text
+            - "chart": {"chart_config": dict} - Hydrated chart data
+            - "error": {"content": str} - Error message
+            - "done": {"conversation_id": str, "chart_config": dict|null} - Final event
+            
+        Args:
+            query: User's natural language question
+            dataset_id: MongoDB ObjectId of target dataset
+            user_id: User's authentication identifier
+            conversation_id: Optional ID to continue existing conversation
+        """
+        query_lower = query.strip().lower()
+
+        off_topic_triggers = [
+            "hello", "hi ", "hey ", "good morning", "good evening", "how are you",
+            "thank you", "thanks", "who is", "what is the capital", "prime minister",
+            "president", "weather", "joke", "tell me a", "what time", "news", "stock",
+            "who are you", "what can you do", "help me", "how do i", "bye", "goodbye"
+        ]
+
+        if any(trigger in query_lower for trigger in off_topic_triggers) or len(query_lower) < 5:
+            guardrail_response = (
+                "I'm a specialized data analytics assistant. I can help with trends, charts, "
+                "forecasts, correlations, or insights from your dataset.\n\n"
+                "Try asking: \"Show top products by revenue\" or \"What is the sales trend over time?\""
+            )
+            yield {"type": "token", "content": guardrail_response}
+            yield {"type": "response_complete", "full_response": guardrail_response}
+            yield {"type": "done", "conversation_id": conversation_id, "chart_config": None}
+            return
+
+        conv = await load_or_create_conversation(conversation_id, user_id, dataset_id)
+        messages = conv.get("messages", [])
+        messages.append({"role": "user", "content": query})
+
+        dataset_doc = await self.db.datasets.find_one({"_id": dataset_id, "user_id": user_id})
+        if not dataset_doc:
+            yield {"type": "error", "content": "Dataset not found"}
+            return
+
+        metadata = dataset_doc.get("metadata")
+        if not metadata:
+            yield {"type": "error", "content": "Dataset is still being processed"}
+            return
+
+        dataset_context = create_context_string(metadata)
+
+        enhanced_query = await rewrite_query(query, dataset_context)
+        if enhanced_query != query:
+            logger.info(f"Query rewritten: '{query[:50]}...' → '{enhanced_query[:50]}...'")
+        
+        messages[-1]["content"] = enhanced_query
+
+        factory = PromptFactory(dataset_context=dataset_context, schema=metadata)
+        prompt = factory.get_prompt(PromptType.CONVERSATIONAL_STREAMING, history=messages)
+
+        full_response = ""
+        
+        try:
+            async for chunk in llm_router.call_streaming(prompt, model_role="chat_streaming"):
+                if chunk["type"] == "token":
+                    full_response += chunk["content"]
+                    yield {"type": "token", "content": chunk["content"]}
+                    
+                elif chunk["type"] == "error":
+                    yield {"type": "error", "content": chunk["content"]}
+                    return
+                    
+                elif chunk["type"] == "done":
+                    yield {"type": "response_complete", "full_response": full_response}
+                    
+        except Exception as e:
+            logger.error(f"Streaming error: {e}", exc_info=True)
+            yield {"type": "error", "content": str(e)}
+            return
+
+        chart_data = None
+        chart_keywords = ["chart", "histogram", "bar", "pie", "scatter", "line", "plot", "visualization"]
+        should_generate_chart = any(kw in full_response.lower() for kw in chart_keywords)
+        
+        if should_generate_chart:
+            try:
+                chart_prompt = f"""Based on this response: "{full_response[:500]}"
+                
+Generate a chart configuration JSON for the dataset with columns: {metadata.get('column_names', [])[:10]}
+
+Return ONLY valid JSON with this structure:
+{{"chart_config": {{"type": "bar|line|pie|histogram|scatter", "x": "column_name", "y": "column_name", "title": "Chart Title"}}}}"""
+
+                chart_response = await llm_router.call(
+                    chart_prompt, 
+                    model_role="chart_engine", 
+                    expect_json=True,
+                    max_tokens=500
+                )
+                
+                if isinstance(chart_response, dict) and chart_response.get("chart_config"):
+                    chart_config_raw = chart_response["chart_config"]
+                    
+                    file_path = dataset_doc.get("file_path")
+                    if file_path:
+                        df = await load_dataset(file_path)
+                        
+                        from db.schemas_dashboard import ChartConfig, ChartType, AggregationType
+                        
+                        chart_type_map = {
+                            "bar": ChartType.BAR,
+                            "line": ChartType.LINE,
+                            "pie": ChartType.PIE,
+                            "scatter": ChartType.SCATTER,
+                            "histogram": ChartType.HISTOGRAM,
+                        }
+                        
+                        chart_type = chart_type_map.get(
+                            chart_config_raw.get("type", "bar").lower(), 
+                            ChartType.BAR
+                        )
+                        
+                        columns = []
+                        if "x" in chart_config_raw:
+                            columns.append(chart_config_raw["x"])
+                        if "y" in chart_config_raw:
+                            columns.append(chart_config_raw["y"])
+                        
+                        class HydrationConfig:
+                            def __init__(self, chart_type, columns, aggregation):
+                                self.chart_type = chart_type
+                                self.columns = columns.copy()
+                                self.aggregation = aggregation
+                                self.group_by = None
+                        
+                        from services.charts.hydrate import hydrate_chart
+                        hydration_config = HydrationConfig(
+                            chart_type=chart_type,
+                            columns=columns,
+                            aggregation=AggregationType.SUM
+                        )
+                        
+                        chart_traces = hydrate_chart(df, hydration_config)
+                        
+                        chart_data = {
+                            "data": chart_traces,
+                            "layout": {
+                                "title": chart_config_raw.get("title", ""),
+                                "xaxis": {"title": chart_config_raw.get("x", "X")},
+                                "yaxis": {"title": chart_config_raw.get("y", "Y")},
+                                "paper_bgcolor": "rgba(0,0,0,0)",
+                                "plot_bgcolor": "rgba(0,0,0,0)",
+                                "font": {"color": "#e2e8f0"},
+                                "height": 400,
+                                "margin": {"t": 50, "b": 50, "l": 60, "r": 20}
+                            }
+                        }
+                        
+                        yield {"type": "chart", "chart_config": chart_data}
+                        
+            except Exception as e:
+                logger.warning(f"Chart generation failed during streaming: {e}")
+
+        ai_message = {
+            "role": "ai",
+            "content": full_response
+        }
+        if chart_data:
+            ai_message["chart_config"] = chart_data
+            
+        messages.append(ai_message)
+        await save_conversation(conv["_id"], messages)
+
+        yield {
+            "type": "done",
+            "conversation_id": str(conv["_id"]),
+            "chart_config": chart_data
+        }
 
 
 # Singleton instance

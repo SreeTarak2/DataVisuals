@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IMentor</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <link rel="stylesheet" href="home.css" />
+</head>
+
+<body>
+    <!-- Topbar -->
+    <div class="topbar">
+        <div class="topbar-left">
+            <button id="toggleSidebar" class="sidebar-toggle" aria-label="Toggle Sidebar">
+                <i class="fas fa-bars"></i>
+            </button>
+            <h1 class="app-name">IMentor</h1>
+            <div class="topbar-center">
+                <div class="model-switcher-dropdown" role="group" aria-label="Model selection">
+                    <button class="dropdown-toggle" aria-haspopup="listbox" aria-expanded="false" id="modelDropdownBtn">
+                        Model <span id="selectedModel">Gemini</span> <i class="fas fa-chevron-down"></i>
+                    </button>
+
+                    <ul class="model-options" role="listbox" aria-labelledby="modelDropdownBtn" tabindex="-1">
+                        <li role="option" data-model="gemini" aria-selected="true" tabindex="0">
+                            <input type="radio" name="model" id="model-gemini" checked>
+                            <label for="model-gemini">Gemini</label>
+                        </li>
+                        <li role="option" data-model="ollama" aria-selected="false" tabindex="0">
+                            <input type="radio" name="model" id="model-ollama">
+                            <label for="model-ollama">Ollama</label>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="topbar-right">
+            <div class="user-details">
+                <i class="fas fa-user-circle"></i>
+                <span id="username">John Doe</span>
+            </div>
+            <button id="logout-button" class="logout-btn" aria-label="Logout">
+                <i class="fas fa-sign-out-alt"></i> Logout
+            </button>
+        </div>
+    </div>
+
+    <!-- Main App Body -->
+    <div class="main">
+        <!-- First Container: Sidebar -->
+        <div class="first-container">
+            <div class="sidebar closed" id="sidebar" role="navigation" aria-label="Main menu">
+                <div class="menu-list" role="group">
+                    <div class="menu-item" tabindex="0" role="button" aria-expanded="false" aria-controls="docs-submenu"
+                        data-toggle="docs">
+                        <i class="fas fa-file-alt"></i>
+                        <span>Documents</span>
+                        <i class="fas fa-chevron-down toggle-icon"></i>
+                    </div>
+                    <div class="submenu" id="docs-submenu" role="menu">
+                        <div class="submenu-item" role="menuitem">
+                            <!-- dynamic content -->
+                            <span class="history-title">Project Q&A – May 20</span>
+                            <i class="fas fa-times delete-history-icon" title="Delete chat"></i>
+                        </div>
+                        <div class="submenu-item" role="menuitem">
+                            <!-- dynamic content -->
+                            <span class="history-title">Project Q&A – May 20</span>
+                            <i class="fas fa-times delete-history-icon" title="Delete chat"></i>
+                        </div>
+                        <div class="submenu-item" role="menuitem">
+                            <!-- dynamic content -->
+                            <span class="history-title">Project Q&A – May 20</span>
+                            <i class="fas fa-times delete-history-icon" title="Delete chat"></i>
+                        </div>
+                        <div class="submenu-item" role="menuitem">
+                            <!-- dynamic content -->
+                            <span class="history-title">Project Q&A – May 20</span>
+                            <i class="fas fa-times delete-history-icon" title="Delete chat"></i>
+                        </div>
+                        <div class="submenu-item" role="menuitem">
+                            <!-- dynamic content -->
+                            <span class="history-title">Project Q&A – May 20</span>
+                            <i class="fas fa-times delete-history-icon" title="Delete chat"></i>
+                        </div>
+                        <div class="submenu-item" role="menuitem">
+                            <!-- dynamic content -->
+                            <span class="history-title">Project Q&A – May 20</span>
+                            <i class="fas fa-times delete-history-icon" title="Delete chat"></i>
+                        </div>
+                    </div>
+
+                    <div class="menu-item">
+                        <i class="fas fa-history"></i>
+                        <span>Chat History</span>
+                    </div>
+                    <div class="submenu" id="history-submenu">
+                        <div class="submenu-item">
+                            <!-- dynamic content -->
+                            <span class="history-title">Project Q&A – May 20</span>
+                            <i class="fas fa-times delete-history-icon" title="Delete chat"></i>
+                        </div>
+                    </div>
+
+                    <div class="menu-item">
+                        <i class="fas fa-question-circle"></i>
+                        <span>FAQ</span>
+                    </div>
+
+                    <div class="menu-item" aria-expanded="false" onclick="toggleSubmenu('topics-submenu', this)">
+                        <i class="fas fa-book-open"></i>
+                        <span>Topics</span>
+                        <i class="fas fa-chevron-down toggle-icon"></i>
+                    </div>
+                    <div id="topics-submenu" class="submenu">
+                        <div class="submenu-item">Science</div>
+                        <div class="submenu-item">Math</div>
+                        <div class="submenu-item">History</div>
+                    </div>
+
+                    <div class="menu-item">
+                        <i class="fas fa-project-diagram"></i>
+                        <span>Mindmaps</span>
+                    </div>
+
+                </div>
+                <div class="sidebar-footer">
+                    <div class="menu-item" role="button" tabindex="0">
+                        <i class="fas fa-cog" aria-hidden="true"></i>
+                        <span>Settings</span>
+                    </div>
+                    <div class="menu-item" role="button" tabindex="0">
+                        <i class="fas fa-question-circle" aria-hidden="true"></i>
+                        <span>Help</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Second Container: Main Chat Area -->
+        <div class="second-container">
+            <div id="upload-error" class="error-box" style="display: none;"></div>
+
+            <div class="responsecontainer">
+                <div class="question" id="question"></div>
+                <div class="response" id="response"></div>
+            </div>
+
+            <div class="chatbox">
+                <div class="inputarea">
+                    <div id="file-preview-container"></div>
+                    <textarea id="chatboxInput" placeholder="Ask anything..." rows="1" required></textarea>
+                </div>
+
+                <div class="action-buttons">
+                    <div class="left-buttons">
+                        <button class="icon-button" aria-label="Use microphone" id="use_microphone">
+                            <i class="fa-solid fa-microphone"></i>
+                        </button>
+                        <button class="icon-button" aria-label="Attach file" id="upload_documents">
+                            <i class="fa-solid fa-paperclip"></i>
+                        </button>
+                        <input type="file" id="file_input" class="file" multiple />
+                    </div>
+                    <button class="send-button" aria-label="Send message" id="send_button">
+                        <i class="fa-solid fa-paper-plane" id="send_icon"></i>
+                    </button>
+                </div>
+            </div>
+        </div> <!-- ✅ second-container closed -->
+    </div>
+
+    <!-- Voice Overlay -->
+    <div class="voice overlay">
+        <div class="listening-status">
+            <span id="status-text">Listening</span>
+            <span class="dot dot1">.</span>
+            <span class="dot dot2">.</span>
+            <span class="dot dot3">.</span>
+        </div>
+        <div class="buttons">
+            <button type="button" class="icon-button" aria-label="Stop recording" id="stop_recording">
+                <i class="fa-solid fa-stop"></i>
+            </button>
+            <button type="button" class="icon-button" aria-label="Close" id="close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="./js/fileUpload.js"></script>
+    <script src="./js/finalMic.js"></script>
+    <script src="./js/sidebar.js"></script>
+    <script src="./js/chat.js"></script>
+    <script>
+
+        const dropdownBtn = document.getElementById('modelDropdownBtn');
+        const dropdownList = document.querySelector('.model-options');
+        const selectedModelSpan = document.getElementById('selectedModel');
+
+        dropdownBtn.addEventListener('click', () => {
+            dropdownList.classList.toggle('show');
+            dropdownBtn.setAttribute('aria-expanded', dropdownList.classList.contains('show'));
+        });
+
+        function toggleSubmenu(id, el) {
+            const submenu = document.getElementById(id);
+            submenu.classList.toggle("active");
+
+            const expanded = el.getAttribute("aria-expanded") === "true";
+            el.setAttribute("aria-expanded", !expanded);
+        }
+
+        dropdownList.addEventListener('click', (e) => {
+            if (e.target.closest('li')) {
+                const selectedLi = e.target.closest('li');
+                const selectedValue = selectedLi.getAttribute('data-model');
+                selectedModelSpan.textContent = selectedValue.charAt(0).toUpperCase() + selectedValue.slice(1);
+
+                // update radio buttons
+                document.querySelectorAll('.model-options li').forEach(li => {
+                    li.setAttribute('aria-selected', 'false');
+                });
+                selectedLi.setAttribute('aria-selected', 'true');
+
+                dropdownList.classList.remove('show');
+                dropdownBtn.setAttribute('aria-expanded', 'false');
+            }
+        });
+
+
+        document.getElementById("logout-button").addEventListener("click", async () => {
+            try {
+                const res = await fetch("https://traditions-properly-thy-deeper.trycloudflare.com/logout", {
+                    method: "POST",
+                    credentials: "include"
+                });
+
+                if (res.ok) {
+                    window.location.href = "loginSignup.html";
+                } else {
+                    alert("Logout failed. Please try again.");
+                }
+            } catch (err) {
+                console.error("Logout error:", err);
+                alert("Network error while logging out.");
+            }
+        });
+    </script>
+    <script>
+        const textarea = document.getElementById("chatboxInput");
+
+        function adjustTextareaHeight() {
+            // Reset height to auto to get correct scrollHeight
+            textarea.style.height = "auto";
+
+            // If content is small → grow naturally
+            if (textarea.scrollHeight <= 200) {
+                textarea.style.height = textarea.scrollHeight + "px";
+                textarea.classList.remove("scrolled");
+            } else {
+                // Max height reached → cap it and enable scroll
+                textarea.style.height = "200px";
+                textarea.classList.add("scrolled");
+            }
+        }
+
+        // Run on input + paste + initial load
+        textarea.addEventListener("input", adjustTextareaHeight);
+
+        // Also handle paste events (for paste, undo, etc.)
+        textarea.addEventListener("paste", () => setTimeout(adjustTextareaHeight, 0));
+        textarea.addEventListener("cut", () => setTimeout(adjustTextareaHeight, 100));
+
+        // Optional: Shrink when pressing Enter (if you send on Enter)
+        textarea.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                // Trigger send message here
+                document.getElementById("send_button").click();
+                setTimeout(() => {
+                    textarea.style.height = "52px";
+                    textarea.classList.remove("scrolled");
+                }, 100);
+            }
+        });
+    </script>
+</body>
+
+</html>

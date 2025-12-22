@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { 
-  User, Bell, Lock, Database, Shield, Palette, Globe, 
+import {
+  User, Bell, Lock, Database, Shield, Palette, Globe,
   Download, Trash2, Eye, EyeOff, Save, Edit3, Check, X,
   Settings as SettingsIcon, Key, Mail, Smartphone, Monitor
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import GlassCard from '../components/common/GlassCard';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../store/authStore';
 import { toast } from 'react-hot-toast';
 
 const Settings = () => {
@@ -46,7 +46,7 @@ const Settings = () => {
   const renderProfileTab = () => (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-      <div>
+        <div>
           <h3 className="text-xl font-semibold text-white mb-2">Profile Information</h3>
           <p className="text-slate-400">Manage your personal information</p>
         </div>
@@ -61,22 +61,22 @@ const Settings = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Full Name</label>
-            <input
-              type="text"
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-2">Full Name</label>
+          <input
+            type="text"
             value={formData.fullName}
-            onChange={(e) => setFormData({...formData, fullName: e.target.value})}
+            onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
             disabled={!isEditing}
             className="w-full px-4 py-3 rounded-lg bg-slate-800/50 border border-slate-700/50 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all disabled:opacity-50"
-            />
-          </div>
-          <div>
+          />
+        </div>
+        <div>
           <label className="block text-sm font-medium text-slate-300 mb-2">Email Address</label>
-            <input
-              type="email"
+          <input
+            type="email"
             value={formData.email}
-              disabled
+            disabled
             className="w-full px-4 py-3 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-400 cursor-not-allowed"
           />
         </div>
@@ -115,7 +115,7 @@ const Settings = () => {
             <input
               type={showPassword ? "text" : "password"}
               value={formData.currentPassword}
-              onChange={(e) => setFormData({...formData, currentPassword: e.target.value})}
+              onChange={(e) => setFormData({ ...formData, currentPassword: e.target.value })}
               className="w-full px-4 py-3 pr-12 rounded-lg bg-slate-800/50 border border-slate-700/50 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all"
             />
             <button
@@ -132,7 +132,7 @@ const Settings = () => {
           <input
             type="password"
             value={formData.newPassword}
-            onChange={(e) => setFormData({...formData, newPassword: e.target.value})}
+            onChange={(e) => setFormData({ ...formData, newPassword: e.target.value })}
             className="w-full px-4 py-3 rounded-lg bg-slate-800/50 border border-slate-700/50 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all"
           />
         </div>
@@ -141,7 +141,7 @@ const Settings = () => {
           <input
             type="password"
             value={formData.confirmPassword}
-            onChange={(e) => setFormData({...formData, confirmPassword: e.target.value})}
+            onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
             className="w-full px-4 py-3 rounded-lg bg-slate-800/50 border border-slate-700/50 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all"
           />
         </div>
@@ -163,7 +163,7 @@ const Settings = () => {
         <p className="text-slate-400">Choose how you want to be notified</p>
       </div>
 
-        <div className="space-y-4">
+      <div className="space-y-4">
         {[
           { id: 'email', label: 'Email Notifications', desc: 'Receive updates via email', icon: Mail },
           { id: 'ai-insights', label: 'AI Insights', desc: 'Get notified about new insights', icon: Smartphone },
@@ -172,7 +172,7 @@ const Settings = () => {
           <div key={item.id} className="flex items-center justify-between p-4 rounded-lg bg-slate-800/30 border border-slate-700/30">
             <div className="flex items-center gap-3">
               <item.icon className="w-5 h-5 text-primary" />
-            <div>
+              <div>
                 <p className="text-white font-medium">{item.label}</p>
                 <p className="text-sm text-slate-400">{item.desc}</p>
               </div>
@@ -189,10 +189,10 @@ const Settings = () => {
 
   const renderAppearanceTab = () => (
     <div className="space-y-6">
-            <div>
+      <div>
         <h3 className="text-xl font-semibold text-white mb-2">Appearance Settings</h3>
         <p className="text-slate-400">Customize your interface</p>
-            </div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
@@ -202,7 +202,7 @@ const Settings = () => {
               <label key={theme} className="flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 border border-slate-700/30 cursor-pointer hover:bg-slate-800/50 transition-all">
                 <input type="radio" name="theme" value={theme.toLowerCase()} className="text-primary" />
                 <span className="text-white">{theme}</span>
-            </label>
+              </label>
             ))}
           </div>
         </div>
@@ -286,11 +286,10 @@ const Settings = () => {
                       key={tab.id}
                       whileTap={{ scale: 0.95 }}
                       onClick={() => setActiveTab(tab.id)}
-                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-all ${
-                        activeTab === tab.id
+                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-all ${activeTab === tab.id
                           ? 'bg-primary/20 text-primary border border-primary/30'
                           : 'text-slate-300 hover:text-white hover:bg-slate-800/30'
-                      }`}
+                        }`}
                     >
                       <Icon className="w-5 h-5" />
                       {tab.label}

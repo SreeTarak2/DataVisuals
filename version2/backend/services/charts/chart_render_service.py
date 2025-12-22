@@ -27,7 +27,7 @@ from services.charts.hydrate import (
     validate_config,
     HydrationError
 )
-from db.schemas_dashboard import ChartConfig, ChartType
+from db.schemas_dashboard import ChartConfig, ChartType, ComponentType
 from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 
 logger = logging.getLogger(__name__)
@@ -78,8 +78,11 @@ class ChartRenderService:
             # Validate config against DataFrame
             validate_config(df, config)
             
+            # Handle both string and enum types for chart_type
+            chart_type_str = config.chart_type.value if hasattr(config.chart_type, 'value') else config.chart_type
+            
             # Hydrate: DataFrame → Plotly traces
-            logger.info(f"Hydrating {config.chart_type.value} chart...")
+            logger.info(f"Hydrating {chart_type_str} chart...")
             traces, rows_used = hydrate_chart(df, config)
             
             if not traces:
@@ -88,7 +91,7 @@ class ChartRenderService:
             # Render: Traces → Final Plotly payload
             logger.info(f"Rendering chart with {len(traces)} trace(s)...")
             chart_payload = self.renderer.render(
-                chart_type=config.chart_type.value,
+                chart_type=chart_type_str,
                 title=chart_config.get("title", "Chart"),
                 traces=traces,
                 rows_used=rows_used,
@@ -101,7 +104,7 @@ class ChartRenderService:
                 "rows_used": rows_used,
                 "total_rows": len(df),
                 "columns": config.columns,
-                "chart_type": config.chart_type.value,
+                "chart_type": chart_type_str,
                 "render_time_ms": (datetime.utcnow() - start_time).total_seconds() * 1000
             }
             
@@ -228,13 +231,13 @@ class ChartRenderService:
             
             # Create ChartConfig
             config = ChartConfig(
+                type=ComponentType.CHART,
+                title=chart_config.get("title", "Chart"),
                 chart_type=chart_type,
                 columns=columns,
                 aggregation=chart_config.get("aggregation", "none"),
                 group_by=chart_config.get("group_by"),
-                filters=chart_config.get("filters", []),
-                sort_by=chart_config.get("sort_by"),
-                limit=chart_config.get("limit", 1000)
+                span=chart_config.get("span", 1)
             )
             
             return config

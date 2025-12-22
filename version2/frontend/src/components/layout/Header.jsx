@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Menu, Bell, User, Database } from 'lucide-react';
+import { Menu, Bell, User, Database, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ThemeToggle from '../common/ThemeToggle';
 import GlassCard from '../common/GlassCard';
 import GlobalUploadButton from '../GlobalUploadButton';
 import UploadModal from '../UploadModal';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../store/authStore';
 import useDatasetStore from '../../store/datasetStore';
 import { toast } from 'react-hot-toast';
 import { cn } from '../../lib/utils';
@@ -45,15 +45,25 @@ const Header = ({ toggleSidebar }) => {
           </button>
 
           {/* Dataset Selector */}
-          <div className="relative" onMouseEnter={() => setShowDatasetDropdown(true)} onMouseLeave={() => setShowDatasetDropdown(false)}>
+          <div className="relative">
             <button
               className="flex items-center gap-2 px-3 py-2 rounded-lg glass-effect border border-border/50 text-foreground hover:bg-accent/50 focus-visible-ring transition-all"
               aria-label="Select dataset"
+              aria-expanded={showDatasetDropdown}
+              onClick={() => setShowDatasetDropdown((open) => !open)}
+              type="button"
             >
               <Database className="w-4 h-4" />
               <span className="hidden sm:inline truncate max-w-32">
                 {selectedDataset ? (selectedDataset.name || 'Unnamed Dataset') : 'Select Dataset'}
               </span>
+              {/* Dropdown chevron */}
+              <ChevronDown
+                className={cn(
+                  'w-4 h-4 text-foreground transform transition-transform',
+                  showDatasetDropdown && 'rotate-180'
+                )}
+              />
             </button>
             <AnimatePresence>
               {showDatasetDropdown && (
@@ -108,6 +118,18 @@ const Header = ({ toggleSidebar }) => {
           </motion.button>
 
           <ThemeToggle />
+
+          {/* User Profile (moved from Sidebar) */}
+          <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-accent/20 transition-all ml-2">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-cyan-500 flex items-center justify-center text-primary-foreground font-semibold">
+              {user?.username?.[0] || user?.full_name?.[0] || 'U'}
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span className="text-sm font-medium text-foreground truncate max-w-[120px]">{user?.username || user?.full_name || 'User'}</span>
+              <span className="text-xs text-muted-foreground truncate max-w-[120px]">{user?.email}</span>
+            </div>
+            <ChevronDown className="w-5 h-5 text-muted-foreground ml-2" />
+          </div>
         </div>
       </div>
     </motion.header>

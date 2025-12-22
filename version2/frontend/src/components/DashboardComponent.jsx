@@ -5,11 +5,10 @@ import {
   PieChart, LineChart, Activity, DollarSign, Target, Zap, 
   Lightbulb, ChevronDown, ChevronUp, Eye, EyeOff
 } from 'lucide-react';
-import { ResponsiveContainer, LineChart as RechartsLineChart, BarChart as RechartsBarChart, PieChart as RechartsPieChart, Line, Bar, Pie, Cell, XAxis, YAxis, Tooltip } from 'recharts';
 import PlotlyChart from './PlotlyChart';
 import IntelligentChartExplanation from './IntelligentChartExplanation';
 
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'];
+const COLORS = ['#06b6d4', '#a78bfa', '#34d399', '#fbbf24', '#f87171', '#fb923c', '#84cc16', '#ec4899'];
 
 const DashboardComponent = ({ component, datasetData }) => {
   const [showInsights, setShowInsights] = useState(false);
@@ -95,29 +94,50 @@ const DashboardComponent = ({ component, datasetData }) => {
   };
 
   const generateChartData = (config, data) => {
-    console.log('Generating chart data:', { config, dataLength: data?.length });
+    console.log('============ CHART DATA GENERATION DEBUG ============');
+    console.log('Config received:', JSON.stringify(config, null, 2));
+    console.log('Data length:', data?.length);
+    console.log('Data is array?', Array.isArray(data));
+    
     if (!data || data.length === 0 || !config) {
-      console.log('No data or config, returning fallback');
+      console.log('❌ No data or config, returning fallback');
+      console.log('data?', !!data, 'data.length?', data?.length, 'config?', !!config);
       return generateFallbackChartData(config);
     }
     if (data.length > 0) {
-      console.log('Available columns:', Object.keys(data[0]));
+      console.log('✅ Available columns in data:', Object.keys(data[0]));
+      console.log('First data row sample:', data[0]);
     }
     try {
-      const { chart_type, columns, aggregation, group_by } = config;
-      console.log('Chart config:', { chart_type, columns, aggregation, group_by });
+      // The chart type can be in either 'type' or 'chart_type' field
+      const chart_type = config.type || config.chart_type;
+      const { columns, aggregation, group_by } = config;
+      console.log('📊 Chart config:', { chart_type, columns, aggregation, group_by });
       // Find actual column names in dataset
       const availableColumns = data.length > 0 ? Object.keys(data[0]) : [];
       
       if (!columns || columns.length === 0) {
-        console.error('No columns specified in config');
+        console.error('❌ No columns specified in config');
         return generateFallbackChartData(config);
       }
       
-      const actualCols = columns.map(col => findActualCol(col, availableColumns));
+      console.log('🔍 Looking for columns:', columns);
+      console.log('📋 Available columns:', availableColumns);
+      
+      // Filter out null/undefined columns before matching (pie charts only need one column)
+      const validColumns = columns.filter(col => col != null && col !== '');
+      console.log('🔍 Valid columns (after filtering nulls):', validColumns);
+      
+      const actualCols = validColumns.map(col => findActualCol(col, availableColumns));
+      console.log('✅ Matched columns:', actualCols);
+      
       const missingColumns = actualCols.filter(col => !col);
       if (missingColumns.length > 0) {
-        console.error('Missing columns:', columns, 'Available:', availableColumns);
+        console.error('❌ Missing columns after matching!');
+        console.error('   Requested:', columns);
+        console.error('   Available:', availableColumns);
+        console.error('   Matched:', actualCols);
+        
         // Try to use any available numeric and categorical columns
         const numericCols = availableColumns.filter(col => {
           const val = data[0][col];
@@ -128,18 +148,25 @@ const DashboardComponent = ({ component, datasetData }) => {
           return typeof val === 'string' || val instanceof String;
         });
         
+        console.log('   Numeric columns available:', numericCols);
+        console.log('   Categorical columns available:', categoricalCols);
+        
         if (numericCols.length > 0 && categoricalCols.length > 0) {
-          console.log('Using fallback columns:', categoricalCols[0], numericCols[0]);
+          console.log('✅ Using fallback columns:', categoricalCols[0], numericCols[0]);
           actualCols[0] = categoricalCols[0];
           actualCols[1] = numericCols[0];
         } else {
+          console.error('❌ Cannot find suitable fallback columns, using fallback data');
           return generateFallbackChartData(config);
         }
       }
       // Use actual column names for mapping
       const xCol = actualCols[0];
-      const yCol = actualCols[1];
+      const yCol = actualCols[1]; // May be undefined for single-column charts like pie
       const groupCol = group_by ? findActualCol(group_by, availableColumns) : xCol;
+      
+      console.log('📍 Using columns - X:', xCol, 'Y:', yCol, 'Group:', groupCol);
+      
       // Handle different chart types from backend
       if ((chart_type === 'line_chart' || chart_type === 'line') && actualCols.length >= 2) {
         const grouped = {};
@@ -160,7 +187,8 @@ const DashboardComponent = ({ component, datasetData }) => {
                    aggregation === 'count' ? values.length :
                    values.length
         })).slice(0, 50); // Limit to 50 data points for performance
-        console.log('Generated line chart data:', result.length, 'points');
+        console.log('✅ Generated line chart data:', result.length, 'points');
+        console.log('   Sample point:', result[0]);
         return result.length > 0 ? result : generateFallbackChartData(config);
       } else if ((chart_type === 'bar_chart' || chart_type === 'bar') && actualCols.length >= 2) {
         const grouped = {};
@@ -184,32 +212,59 @@ const DashboardComponent = ({ component, datasetData }) => {
           }))
           .sort((a, b) => b[yCol] - a[yCol]) // Sort by value descending
           .slice(0, 20); // Limit to top 20 categories for readability
-        console.log('Generated bar chart data:', result.length, 'points');
+        console.log('✅ Generated bar chart data:', result.length, 'points');
+        console.log('   Sample point:', result[0]);
         return result.length > 0 ? result : generateFallbackChartData(config);
-      } else if ((chart_type === 'pie_chart' || chart_type === 'pie') && actualCols.length >= 2) {
+      } else if ((chart_type === 'pie_chart' || chart_type === 'pie') && actualCols.length >= 1) {
         const grouped = {};
-        data.forEach(row => {
-          const key = row[xCol];
-          if (key != null && key !== '') {
-            if (!grouped[key]) grouped[key] = [];
-            const value = parseFloat(row[yCol]);
-            if (!isNaN(value)) {
-              grouped[key].push(value);
+        
+        // Pie charts can work with just one column (count occurrences) or two columns (aggregate values)
+        if (!yCol || yCol === xCol) {
+          // Single column: count occurrences of each unique value
+          console.log('📊 Pie chart: counting occurrences of', xCol);
+          data.forEach(row => {
+            const key = row[xCol];
+            if (key != null && key !== '') {
+              grouped[key] = (grouped[key] || 0) + 1;
             }
-          }
-        });
-        const result = Object.entries(grouped)
-          .map(([key, values]) => ({
-            name: String(key),
-            value: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
-                   aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
-                   aggregation === 'count' ? values.length :
-                   values.length
-          }))
-          .sort((a, b) => b.value - a.value) // Sort by value descending
-          .slice(0, 8); // Limit to top 8 categories for pie chart readability
-        console.log('Generated pie chart data:', result.length, 'slices');
-        return result.length > 0 ? result : generateFallbackChartData(config);
+          });
+          const result = Object.entries(grouped)
+            .map(([key, count]) => ({
+              name: String(key),
+              value: count
+            }))
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 8);
+          console.log('✅ Generated pie chart data (count):', result.length, 'slices');
+          console.log('   Sample slice:', result[0]);
+          return result.length > 0 ? result : generateFallbackChartData(config);
+        } else {
+          // Two columns: aggregate numeric values by category
+          console.log('📊 Pie chart: aggregating', yCol, 'by', xCol);
+          data.forEach(row => {
+            const key = row[xCol];
+            if (key != null && key !== '') {
+              if (!grouped[key]) grouped[key] = [];
+              const value = parseFloat(row[yCol]);
+              if (!isNaN(value)) {
+                grouped[key].push(value);
+              }
+            }
+          });
+          const result = Object.entries(grouped)
+            .map(([key, values]) => ({
+              name: String(key),
+              value: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
+                     aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
+                     aggregation === 'count' ? values.length :
+                     values.length
+            }))
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 8);
+          console.log('✅ Generated pie chart data (aggregate):', result.length, 'slices');
+          console.log('   Sample slice:', result[0]);
+          return result.length > 0 ? result : generateFallbackChartData(config);
+        }
       } else if ((chart_type === 'scatter_plot' || chart_type === 'scatter') && actualCols.length >= 2) {
         const result = data
           .map(row => {
@@ -408,176 +463,16 @@ const DashboardComponent = ({ component, datasetData }) => {
                 </div>
               </div>
               
-              <div className="h-[600px]">
+              <div className="h-[600px] bg-[#0d1117] rounded-xl p-4">
                 {chartData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    {component.config?.chart_type === 'line_chart' ? (
-                      <RechartsLineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                        <XAxis 
-                          dataKey={Object.keys(chartData[0] || {})[0]}
-                          stroke="#64748b"
-                          fontSize={12}
-                          tickLine={false}
-                          axisLine={false}
-                          tick={{ fill: '#94a3b8' }}
-                        />
-                        <YAxis 
-                          stroke="#64748b"
-                          fontSize={12}
-                          tickLine={false}
-                          axisLine={false}
-                          tick={{ fill: '#94a3b8' }}
-                          tickFormatter={(value) => value.toLocaleString()}
-                        />
-                        <Tooltip 
-                          contentStyle={{
-                            backgroundColor: '#1e293b',
-                            border: '1px solid #334155',
-                            borderRadius: '8px',
-                            color: '#f1f5f9',
-                            boxShadow: '0 10px 25px rgba(0,0,0,0.3)'
-                          }}
-                          formatter={(value, name) => [value.toLocaleString(), name]}
-                          labelStyle={{ color: '#94a3b8' }}
-                        />
-                        <Line 
-                          type="monotone" 
-                          dataKey={Object.keys(chartData[0] || {})[1]}
-                          stroke="#3b82f6" 
-                          strokeWidth={4}
-                          dot={{ fill: '#3b82f6', strokeWidth: 2, r: 6 }}
-                          activeDot={{ r: 8, stroke: '#3b82f6', strokeWidth: 2, fill: '#1e40af' }}
-                        />
-                      </RechartsLineChart>
-                    ) : component.config?.chart_type === 'bar_chart' || component.config?.chart_type === 'bar' ? (
-                      <RechartsBarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 40 }}>
-                        <XAxis 
-                          dataKey={Object.keys(chartData[0] || {})[0]}
-                          stroke="#64748b"
-                          fontSize={12}
-                          tickLine={false}
-                          axisLine={false}
-                          tick={{ fill: '#94a3b8' }}
-                          angle={-45}
-                          textAnchor="end"
-                          height={60}
-                        />
-                        <YAxis 
-                          stroke="#64748b"
-                          fontSize={12}
-                          tickLine={false}
-                          axisLine={false}
-                          tick={{ fill: '#94a3b8' }}
-                          tickFormatter={(value) => value.toLocaleString()}
-                        />
-                        <Tooltip 
-                          contentStyle={{
-                            backgroundColor: '#1e293b',
-                            border: '1px solid #334155',
-                            borderRadius: '8px',
-                            color: '#f1f5f9',
-                            boxShadow: '0 10px 25px rgba(0,0,0,0.3)'
-                          }}
-                          formatter={(value, name) => [value.toLocaleString(), name]}
-                          labelStyle={{ color: '#94a3b8' }}
-                        />
-                        <Bar 
-                          dataKey={Object.keys(chartData[0] || {})[1]}
-                          fill="#10b981"
-                          radius={[6, 6, 0, 0]}
-                          maxBarSize={60}
-                        />
-                      </RechartsBarChart>
-                    ) : component.config?.chart_type === 'pie_chart' || component.config?.chart_type === 'pie' ? (
-                      <RechartsPieChart width={600} height={400}>
-                        <Pie
-                          data={chartData}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          label={({ name, percent }) => {
-                            const displayName = name.length > 8 ? name.substring(0, 8) + '...' : name;
-                            return `${displayName} ${(percent * 100).toFixed(0)}%`;
-                          }}
-                          labelStyle={{ 
-                            fontSize: '12px', 
-                            fill: '#e2e8f0',
-                            fontWeight: 'bold',
-                            textShadow: '1px 1px 2px rgba(0,0,0,0.8)'
-                          }}
-                          outerRadius={120}
-                          innerRadius={40}
-                          fill="#8884d8"
-                          dataKey="value"
-                        >
-                          {chartData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip 
-                          contentStyle={{
-                            backgroundColor: '#1e293b',
-                            border: '1px solid #334155',
-                            borderRadius: '8px',
-                            color: '#f1f5f9',
-                            boxShadow: '0 10px 25px rgba(0,0,0,0.3)'
-                          }}
-                          formatter={(value, name) => [value.toLocaleString(), name]}
-                        />
-                      </RechartsPieChart>
-                    ) : component.config?.chart_type === 'scatter_plot' || component.config?.chart_type === 'scatter' ? (
-                      <div className="flex items-center justify-center h-full text-slate-400">
-                        <div className="text-center">
-                          <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                          <p>Scatter plot visualization</p>
-                          <p className="text-sm">Data points: {chartData.length}</p>
-                        </div>
-                      </div>
-                    ) : component.config?.chart_type === 'histogram' ? (
-                      <RechartsBarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                        <XAxis 
-                          dataKey="bin"
-                          stroke="#64748b"
-                          fontSize={12}
-                          tickLine={false}
-                          axisLine={false}
-                          tick={{ fill: '#94a3b8' }}
-                        />
-                        <YAxis 
-                          stroke="#64748b"
-                          fontSize={12}
-                          tickLine={false}
-                          axisLine={false}
-                          tick={{ fill: '#94a3b8' }}
-                          tickFormatter={(value) => value.toLocaleString()}
-                        />
-                        <Tooltip 
-                          contentStyle={{
-                            backgroundColor: '#1e293b',
-                            border: '1px solid #334155',
-                            borderRadius: '8px',
-                            color: '#f1f5f9',
-                            boxShadow: '0 10px 25px rgba(0,0,0,0.3)'
-                          }}
-                          formatter={(value, name) => [value.toLocaleString(), name]}
-                          labelStyle={{ color: '#94a3b8' }}
-                        />
-                        <Bar 
-                          dataKey="count"
-                          fill="#8b5cf6"
-                          radius={[6, 6, 0, 0]}
-                          maxBarSize={60}
-                        />
-                      </RechartsBarChart>
-                    ) : (
-                      <div className="flex items-center justify-center h-full text-slate-400">
-                        <div className="text-center">
-                          <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                          <p>Unsupported chart type: {component.config?.chart_type}</p>
-                        </div>
-                      </div>
-                    )}
-                  </ResponsiveContainer>
+                  <PlotlyChart
+                    data={chartData}
+                    chartType={component.config?.chart_type}
+                    config={{
+                      columns: component.config?.columns || Object.keys(chartData[0] || {})
+                    }}
+                    style={{ width: '100%', height: '100%' }}
+                  />
                 ) : (
                   <div className="flex items-center justify-center h-full">
                     <div className="text-center">

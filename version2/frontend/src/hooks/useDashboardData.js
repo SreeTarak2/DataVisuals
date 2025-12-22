@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'react-hot-toast'
+import { getAuthToken } from '../services/api'
 
 const useDashboardData = (selectedDataset) => {
   const [dashboardData, setDashboardData] = useState({
@@ -133,7 +134,7 @@ const useDashboardData = (selectedDataset) => {
   // Transform backend chart data to frontend format
   const transformChartData = (backendCharts) => {
     const transformed = {}
-    
+
     // Transform revenue_over_time data
     if (backendCharts.revenue_over_time) {
       transformed.revenue_over_time = backendCharts.revenue_over_time.map(item => ({
@@ -141,7 +142,7 @@ const useDashboardData = (selectedDataset) => {
         y: item.revenue || item.value || 0
       }))
     }
-    
+
     // Transform sales_by_category data
     if (backendCharts.sales_by_category) {
       transformed.sales_by_category = backendCharts.sales_by_category.map(item => ({
@@ -149,7 +150,7 @@ const useDashboardData = (selectedDataset) => {
         y: item.value || item.sales || 0
       }))
     }
-    
+
     // Transform monthly_active_users data
     if (backendCharts.monthly_active_users) {
       transformed.activity_over_time = backendCharts.monthly_active_users.map(item => ({
@@ -157,7 +158,7 @@ const useDashboardData = (selectedDataset) => {
         y: item.users || item.value || 0
       }))
     }
-    
+
     // Transform traffic_sources data
     if (backendCharts.traffic_sources) {
       transformed.data_distribution = backendCharts.traffic_sources.map(item => ({
@@ -165,7 +166,7 @@ const useDashboardData = (selectedDataset) => {
         value: item.value || item.count || 0
       }))
     }
-    
+
     return transformed
   }
 
@@ -178,7 +179,7 @@ const useDashboardData = (selectedDataset) => {
     setDashboardData(prev => ({ ...prev, loading: true, error: null }))
 
     try {
-      const token = localStorage.getItem('datasage-token')
+      const token = getAuthToken()
       if (!token) {
         throw new Error('No authentication token found')
       }
@@ -281,7 +282,7 @@ const useDashboardData = (selectedDataset) => {
         loading: false,
         error: error.message
       }))
-      
+
       if (error.message.includes('401')) {
         toast.error('Authentication failed. Please log in again.')
       } else {

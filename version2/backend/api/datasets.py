@@ -8,8 +8,7 @@ from celery.result import AsyncResult
 from db.schemas import DrillDownRequest
 from services.auth_service import get_current_user
 from services.datasets.enhanced_dataset_service import enhanced_dataset_service
-from services.dynamic_drilldown_service import drilldown_service
-from tasks import celery_app, process_dataset_task # Import Celery app and specific task
+from tasks import celery_app, process_dataset_task
 
 # --- Configuration ---
 logger = logging.getLogger(__name__)
@@ -198,29 +197,3 @@ async def get_task_status(task_id: str, current_user: dict = Depends(get_current
         response["info"] = {'error': error_message}
         
     return response
-
-# --- Drill-Down Endpoints ---
-# (Logically related to interacting with a dataset's content)
-
-@router.post("/{dataset_id}/drill-down")
-async def drill_down(
-    dataset_id: str,
-    request: DrillDownRequest,
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Executes a drill-down operation on a dataset based on a specified hierarchy.
-    """
-    # Note: page_size is set high to fetch all data for in-memory drill-down.
-    # For very large datasets, this could be refactored to perform drill-downs
-    # with lazy Polars DataFrames or directly in a database.
-    dataset = await enhanced_dataset_service.get_dataset_data(
-        dataset_id, current_user["id"], page=1, page_size=50000 
-    )
-    
-    return await drilldown_service.execute_drilldown(
-        dataset_data=dataset.get("data", []),
-        hierarchy=request.hierarchy,
-        current_level=request.current_level,
-        filters=request.filters
-    )

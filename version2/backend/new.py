@@ -8,13 +8,24 @@ response = requests.post(
     "Content-Type": "application/json",
   },
   data=json.dumps({
-    "model": "qwen/qwen3-coder:free",
+    "model": "mistralai/mistral-small-3.1-24b-instruct:free",
     "messages": [
-        {
-          "role": "user",
-          "content": "What is the meaning of life?"
-        }
-      ]
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "What is in this image?"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+            }
+          }
+        ]
+      }
+    ]
   })
 )
 

@@ -136,15 +136,58 @@ class AIDesignerService:
         return self._db
 
     # ---------------------------------------------------------
+    # UTILITY: GET EXISTING DASHBOARD
+    # ---------------------------------------------------------
+    async def get_existing_dashboard(self, dataset_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch existing dashboard for a dataset without regenerating.
+        
+        Returns:
+            Dashboard data if exists, None otherwise
+        """
+        try:
+            dashboard = await self.db.dashboards.find_one({
+                "dataset_id": dataset_id,
+                "user_id": user_id,
+                "is_default": True
+            })
+            
+            if dashboard:
+                return {
+                    "dashboard_blueprint": dashboard.get("blueprint"),
+                    "design_pattern": dashboard.get("design_pattern"),
+                    "pattern_name": self.design_patterns.get(dashboard.get("design_pattern"), {}).get("name"),
+                    "reasoning": "Loaded from cache",
+                    "cached": True,
+                    "created_at": dashboard.get("created_at")
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching existing dashboard: {e}")
+            return None
+
+    # ---------------------------------------------------------
     # MAIN ENTRY: DESIGN DASHBOARD
     # ---------------------------------------------------------
     async def design_intelligent_dashboard(
         self,
         dataset_id: str,
         user_id: str,
-        design_preference: Optional[str] = None
+        design_preference: Optional[str] = None,
+        force_regenerate: bool = False
     ) -> Dict[str, Any]:
-
+        """
+        Design an intelligent dashboard for a dataset.
+        
+        Args:
+            dataset_id: Dataset identifier
+            user_id: User identifier
+            design_preference: Optional pattern preference
+            force_regenerate: If True, regenerate even if dashboard exists. If False (default), return cached dashboard.
+        
+        Returns:
+            Dashboard blueprint with pattern info
+        """
         try:
             # Safe ObjectId handling
             try:
@@ -157,6 +200,27 @@ class AIDesignerService:
 
             if not dataset_doc or not dataset_doc.get("metadata"):
                 raise RuntimeError("Dataset metadata missing — cannot design dashboard.")
+            
+            # CHECK FOR EXISTING DASHBOARD (unless force_regenerate is True)
+            if not force_regenerate:
+                existing_dashboard = await self.db.dashboards.find_one({
+                    "dataset_id": dataset_id,
+                    "user_id": user_id,
+                    "is_default": True
+                })
+                
+                if existing_dashboard:
+                    logger.info(f"Found existing dashboard for dataset {dataset_id}, returning cached version")
+                    return {
+                        "dashboard_blueprint": existing_dashboard.get("blueprint"),
+                        "design_pattern": existing_dashboard.get("design_pattern"),
+                        "pattern_name": self.design_patterns.get(existing_dashboard.get("design_pattern"), {}).get("name"),
+                        "reasoning": "Loaded from cache (previously generated)",
+                        "cached": True,
+                        "created_at": existing_dashboard.get("created_at")
+                    }
+                else:
+                    logger.info(f"No existing dashboard found for dataset {dataset_id}, generating new one")
 
             metadata = dataset_doc["metadata"]
 
@@ -164,25 +228,58 @@ class AIDesignerService:
             best_pattern = await self._analyze_dataset_for_pattern(metadata, design_preference)
             pattern = self.design_patterns.get(best_pattern) or next(iter(self.design_patterns.values()))
 
-            # 2. build prompt
-            prompt = self._create_designer_prompt(metadata, pattern)
+            # 2. Build dataset context for AI
+            dataset_context = self._create_dataset_context_string(metadata)
 
-            # 3. call LLM via router (OpenRouter or Ollama)
+            # 3. Generate dashboard using Multi-Agent Pipeline (NEW!)
+            # Uses 5 specialized OpenRouter models for better quality
+            ai_reasoning = "AI-generated blueprint"  # Default reasoning
+            
             try:
-                ai_output = await llm_router.call(
-                    prompt, model_role="layout_designer", expect_json=True
+                from services.ai.multi_agent_orchestrator import multi_agent_orchestrator
+                
+                logger.info("🤖 Using Multi-Agent Pipeline for dashboard design (5 specialized models)")
+                
+                result = await multi_agent_orchestrator.design_dashboard_multi_agent(
+                    dataset_context=dataset_context,
+                    metadata=metadata,
+                    design_preference=best_pattern
                 )
-                logger.info(f"AI Designer LLM Response: {json.dumps(ai_output, indent=2)[:500]}")
-            except Exception as e:
-                logger.exception(f"LLM call failed: {e}; falling back to pattern blueprint")
-                ai_output = {"dashboard": pattern["blueprint"], "reasoning": "fallback LLM failure"}
+                
+                if result.get("success"):
+                    blueprint = result["blueprint"]
+                    ai_metadata = result.get("metadata", {})
+                    ai_reasoning = f"Multi-agent pipeline: {ai_metadata.get('chart_count', 0)} charts, {ai_metadata.get('kpi_count', 0)} KPIs in {ai_metadata.get('pipeline_duration_seconds', 0):.1f}s"
+                    logger.info(f"✅ Multi-agent pipeline completed in {ai_metadata.get('pipeline_duration_seconds', 0):.2f}s")
+                    logger.info(f"📊 Generated {ai_metadata.get('chart_count', 0)} charts, {ai_metadata.get('kpi_count', 0)} KPIs")
+                else:
+                    raise Exception("Multi-agent pipeline returned unsuccessful result")
+                
+            except Exception as multi_agent_error:
+                # Fallback to single-model approach if multi-agent fails
+                logger.warning(f"⚠️ Multi-agent pipeline failed: {multi_agent_error}")
+                logger.info("↩️ Falling back to single-model approach")
+                
+                prompt = self._create_designer_prompt(metadata, pattern)
+                
+                try:
+                    ai_output = await llm_router.call(
+                        prompt, model_role="layout_designer", expect_json=True
+                    )
+                    full_response = json.dumps(ai_output, indent=2)
+                    logger.info(f"AI Designer LLM Response (first 800 chars): {full_response[:800]}")
+                    if len(full_response) > 800:
+                        logger.info(f"AI Designer LLM Response (remaining): {full_response[800:]}")
+                except Exception as e:
+                    logger.exception(f"LLM call failed: {e}; falling back to pattern blueprint")
+                    ai_output = {"dashboard": pattern["blueprint"], "reasoning": "fallback LLM failure"}
 
-            # 4. repair
-            blueprint = self._validate_and_enhance_design(
-                ai_output.get("dashboard", {}), metadata, pattern
-            )
+                # 4. repair
+                blueprint = self._validate_and_enhance_design(
+                    ai_output.get("dashboard", {}), metadata, pattern
+                )
 
-            # 5. persist
+            # 5. persist (use upsert to avoid duplicates on regeneration)
             design_doc = {
                 "dataset_id": dataset_id,
                 "user_id": user_id,
@@ -191,13 +288,23 @@ class AIDesignerService:
                 "created_at": datetime.utcnow(),
                 "is_default": True
             }
-            await self.db.dashboards.insert_one(design_doc)
+            
+            # Use update_one with upsert to replace existing or create new
+            await self.db.dashboards.update_one(
+                {"dataset_id": dataset_id, "user_id": user_id, "is_default": True},
+                {"$set": design_doc},
+                upsert=True
+            )
+            
+            logger.info(f"{'Regenerated' if force_regenerate else 'Created'} dashboard for dataset {dataset_id}")
 
             return {
                 "dashboard_blueprint": blueprint,
                 "design_pattern": best_pattern,
                 "pattern_name": pattern.get("name"),
-                "reasoning": ai_output.get("reasoning", "AI-generated blueprint")
+                "reasoning": ai_reasoning,
+                "cached": False,
+                "created_at": design_doc["created_at"]
             }
 
         except Exception as e:
@@ -275,6 +382,11 @@ RESPOND NOW WITH ONLY THE JSON:
     # Blueprint validation / repair
     # ---------------------------------------------------------
     def _validate_and_enhance_design(self, blueprint: Dict, metadata: Dict, pattern: Dict) -> Dict:
+        # Handle nested structure (some LLMs return {dashboard: {components: [...]}})
+        if blueprint and "dashboard" in blueprint and isinstance(blueprint["dashboard"], dict):
+            logger.info("Detected nested 'dashboard' key, extracting inner blueprint")
+            blueprint = blueprint["dashboard"]
+        
         if not blueprint or "components" not in blueprint:
             logger.warning(f"Invalid AI blueprint. Blueprint keys: {list(blueprint.keys()) if blueprint else 'None'}. Using fallback pattern.")
             return pattern["blueprint"]
