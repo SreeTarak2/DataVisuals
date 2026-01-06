@@ -165,35 +165,50 @@ async def generate_business_insights(
 
 # --- Direct Computational Analysis Endpoints ---
 
+# Whitelist of allowed analysis types - prevents arbitrary method execution
+ALLOWED_ANALYSIS_TYPES = {
+    "correlation": "find_strong_correlations",
+    "outlier": "detect_outliers_iqr",
+    "distribution": "analyze_distribution",
+    "summary": "get_summary_statistics",
+}
+
 @router.post("/analysis/run")
 async def run_analysis(request: Dict[str, Any], current_user: dict = Depends(get_current_user)):
     """
     Runs a specific, targeted statistical analysis (e.g., correlation, outlier detection)
     from the computational engine.
+    
+    Allowed analysis types: correlation, outlier, distribution, summary
     """
     try:
         dataset_id = request.get("dataset_id")
         analysis_type = request.get("analysis_type")
         if not dataset_id or not analysis_type:
             raise HTTPException(status_code=400, detail="Dataset ID and analysis type are required")
+        
+        # Validate analysis type against whitelist
+        if analysis_type not in ALLOWED_ANALYSIS_TYPES:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unknown analysis type: '{analysis_type}'. Allowed types: {', '.join(ALLOWED_ANALYSIS_TYPES.keys())}"
+            )
 
         df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
         
-        analysis_func = getattr(analysis_service, analysis_type, None)
+        # Get the method name from whitelist and call it
+        method_name = ALLOWED_ANALYSIS_TYPES[analysis_type]
+        analysis_func = getattr(analysis_service, method_name, None)
+        
         if not callable(analysis_func):
-             # A more robust check for available methods in analysis_service
-            if analysis_type == "correlation":
-                results = analysis_service.find_strong_correlations(df)
-            elif analysis_type == "outlier":
-                results = analysis_service.detect_outliers_iqr(df)
-            elif analysis_type == "distribution":
-                results = analysis_service.analyze_distribution(df)
-            else:
-                raise HTTPException(status_code=400, detail=f"Unknown analysis type: {analysis_type}")
-        else:
-             results = analysis_func(df)
+            logger.error(f"Analysis method '{method_name}' not found on analysis_service")
+            raise HTTPException(status_code=500, detail="Analysis method not available")
+        
+        results = analysis_func(df)
 
         return {"results": results, "analysis_type": analysis_type}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error running analysis: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to run analysis.")

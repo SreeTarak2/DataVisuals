@@ -16,45 +16,35 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
       try {
         const Plotly = (await import('plotly.js-dist-min')).default;
         if (plotRef.current && data) {
-          console.log('[PlotlyChart] Received data:', data);
-          console.log('[PlotlyChart] Data type:', typeof data);
-          console.log('[PlotlyChart] Is array?', Array.isArray(data));
-          console.log('[PlotlyChart] First item:', data[0]);
-          console.log('[PlotlyChart] First item has x/y?', data[0]?.x !== undefined, data[0]?.y !== undefined);
-          console.log('[PlotlyChart] Received layout:', layout);
-          console.log('[PlotlyChart] Chart type:', chartType);
           let processedData = data;
           let xKey = 'x', yKey = 'y';
           let xLabel = '', yLabel = '';
-          
+
           // Check if data is already in Plotly format (has 'type', 'x', 'y' keys)
-          const isPlotlyFormat = Array.isArray(data) && data.length > 0 && 
-                                 data[0].type !== undefined && 
-                                 (data[0].x !== undefined || data[0].labels !== undefined);
-          
-          console.log('[PlotlyChart] Is Plotly format?', isPlotlyFormat);
-          
+          const isPlotlyFormat = Array.isArray(data) && data.length > 0 &&
+            data[0].type !== undefined &&
+            (data[0].x !== undefined || data[0].labels !== undefined);
+
           if (isPlotlyFormat) {
             // Data is already in Plotly format, use it directly
             processedData = data;
-            console.log('[PlotlyChart] Using data as-is (Plotly format)');
           }
           // Handle histogram data (bin/count format)
           else if (chartType === 'histogram' && Array.isArray(data) && data.length > 0) {
             const first = data[0];
             const keys = Object.keys(first);
-            
+
             // Histogram usually has 'bin' and 'count' fields
             if (keys.includes('bin') && keys.includes('count')) {
               const binValues = data.map(row => parseFloat(row.bin) || row.bin);
               xLabel = 'Bin Range';
               yLabel = 'Frequency';
-              
+
               processedData = [{
                 x: binValues,
                 y: data.map(row => row.count),
                 type: 'bar',
-                marker: { 
+                marker: {
                   color: '#a78bfa',
                   line: { width: 0 }
                 },
@@ -67,12 +57,12 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
               yKey = keys[1];
               xLabel = xKey;
               yLabel = yKey;
-              
+
               processedData = [{
                 x: data.map(row => row[xKey]),
                 y: data.map(row => row[yKey]),
                 type: 'bar',
-                marker: { 
+                marker: {
                   color: '#a78bfa',
                   line: { width: 0 }
                 },
@@ -113,7 +103,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                 width: 3,
                 shape: 'spline'
               } : undefined,
-              marker: { 
+              marker: {
                 color: (chartType === 'bar' || chartType === 'bar_chart') ? '#06b6d4' : '#06b6d4',
                 size: 8,
                 line: (chartType === 'line' || chartType === 'line_chart') ? {
@@ -122,7 +112,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                 } : { width: 0 }
               },
               name: yLabel,
-              hovertemplate: (chartType === 'bar' || chartType === 'bar_chart') 
+              hovertemplate: (chartType === 'bar' || chartType === 'bar_chart')
                 ? '<b>%{x}</b><br>' + yLabel + ': %{y:,.2f}<extra></extra>'
                 : '<b>%{x}</b><br>' + yLabel + ': %{y:,.2f}<extra></extra>'
             }];
@@ -154,7 +144,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
               const keys = Object.keys(first);
               const nameKey = keys.includes('name') ? 'name' : keys[0];
               const valueKey = keys.includes('value') ? 'value' : keys[1];
-              
+
               processedData = [{
                 labels: data.map(row => row[nameKey]),
                 values: data.map(row => row[valueKey]),
@@ -200,21 +190,21 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             // Generic fallback for any unhandled chart types
             const first = data[0];
             const keys = Object.keys(first);
-            
+
             // Try to intelligently pick x and y keys
             xKey = keys.includes('x') ? 'x' : keys[0];
             yKey = keys.includes('y') ? 'y' : (keys.includes('value') ? 'value' : (keys.includes('count') ? 'count' : keys[1]));
             xLabel = xKey;
             yLabel = yKey;
-            
+
             const plotType = chartType === 'scatter' || chartType === 'scatter_plot' ? 'scatter' : 'bar';
-            
+
             processedData = [{
               x: data.map(row => row[xKey]),
               y: data.map(row => row[yKey]),
               type: plotType,
               mode: plotType === 'scatter' ? 'markers' : undefined,
-              marker: { 
+              marker: {
                 color: '#06b6d4',
                 size: plotType === 'scatter' ? 10 : undefined,
                 line: { width: 0 }
@@ -285,9 +275,6 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             }
           };
 
-          console.log('[PlotlyChart] Final processed data:', processedData);
-          console.log('[PlotlyChart] Final layout:', {...defaultLayout, ...layout});
-          
           Plotly.newPlot(plotRef.current, processedData, {
             ...defaultLayout,
             ...layout
@@ -306,11 +293,9 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             },
             ...config
           });
-          
-          console.log('[PlotlyChart] Chart rendered successfully');
         }
       } catch (error) {
-        console.error('[PlotlyChart] Failed to load Plotly:', error);
+        // Chart failed to render - show fallback UI
         if (plotRef.current) {
           plotRef.current.innerHTML = `
             <div style="
@@ -344,14 +329,14 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
   }, [data, layout, config, chartType]);
 
   return (
-    <div 
-      ref={plotRef} 
-      style={{ 
-        width: '100%', 
+    <div
+      ref={plotRef}
+      style={{
+        width: '100%',
         height: '100%',
         minHeight: '200px',
-        ...style 
-      }} 
+        ...style
+      }}
     />
   );
 }, (prevProps, nextProps) => {

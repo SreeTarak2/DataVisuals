@@ -5,6 +5,7 @@ import { toast } from 'react-hot-toast';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { cn } from '../lib/utils';
 import ReactMarkdown from 'react-markdown';
+import DOMPurify from 'dompurify';
 import PlotlyChart from '../components/PlotlyChart';
 import ChatHistoryModal from '../components/ChatHistoryModal';
 import useChatStore from '../store/chatStore';
@@ -183,7 +184,7 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
                 >
                   <div
                     className="mt-2 p-3 bg-slate-900/50 rounded-lg text-xs text-slate-400 border border-slate-700/50"
-                    dangerouslySetInnerHTML={{ __html: highlightImportantText(msg.technical_details) }}
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(highlightImportantText(msg.technical_details)) }}
                   />
                 </motion.div>
               )}
@@ -278,17 +279,15 @@ const Chat = () => {
       scrollToBottom();
     }, [appendStreamingToken]),
 
-    onResponseComplete: useCallback((fullResponse) => {
-      console.log('Response complete:', fullResponse?.substring(0, 100));
+    onResponseComplete: useCallback(() => {
+      // Response complete - content accumulated via onToken
     }, []),
 
     onChart: useCallback((chartConfig) => {
-      console.log('Chart received:', chartConfig);
       setStreamingChartConfig(chartConfig);
     }, []),
 
     onDone: useCallback(({ conversationId, chartConfig }) => {
-      console.log('Stream done, conversation:', conversationId);
 
       // IMPORTANT: Set conversation ID BEFORE finishStreaming so it can add the message
       if (conversationId) {
@@ -313,13 +312,12 @@ const Chat = () => {
     }, [finishStreaming, streamingChartConfig, searchParams, selectedDataset?.id, setSearchParams, setCurrentConversation]),
 
     onError: useCallback((error) => {
-      console.error('WebSocket error:', error);
       cancelStreaming();
       toast.error(error.detail || 'Connection error');
     }, [cancelStreaming]),
 
-    onStatus: useCallback((status) => {
-      console.log('Status:', status);
+    onStatus: useCallback(() => {
+      // Status updates received
     }, []),
 
     autoConnect: false
@@ -331,11 +329,6 @@ const Chat = () => {
       connect();
     }
   }, [selectedDataset?.id, isConnected, connect]);
-
-  // Debug: Log messages to see their structure
-  useEffect(() => {
-    console.log('Current messages:', messages);
-  }, [messages]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -513,25 +506,25 @@ const Chat = () => {
   const adjustTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
-    
+
     const minHeight = 52;
     const maxHeight = 200;
-    
+
     // Store current scroll position of the chat container to prevent jumping
     const chatContainer = textarea.closest('.overflow-y-auto')?.parentElement?.querySelector('.overflow-y-auto');
     const scrollTop = chatContainer?.scrollTop;
-    
+
     // Temporarily set to auto to measure, but do it without triggering reflow on the chat
     const currentHeight = textarea.style.height;
     textarea.style.height = 'auto';
     const newHeight = Math.min(maxHeight, Math.max(minHeight, textarea.scrollHeight));
     textarea.style.height = `${newHeight}px`;
-    
+
     // Restore scroll position if it changed
     if (chatContainer && scrollTop !== undefined) {
       chatContainer.scrollTop = scrollTop;
     }
-    
+
     if (newHeight >= maxHeight) {
       textarea.classList.add('scrolled');
     } else {

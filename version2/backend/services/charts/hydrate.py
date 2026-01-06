@@ -164,9 +164,18 @@ def _get_handler(chart_type: str):
         "treemap": _hydrate_treemap,
         "grouped_bar": _hydrate_grouped_bar,
         "area": _hydrate_area,
+        # New chart types
+        "radar": _hydrate_radar,
+        "bubble": _hydrate_bubble,
+        "waterfall": _hydrate_waterfall,
+        "funnel": _hydrate_funnel,
+        "candlestick": _hydrate_candlestick,
+        "violin": _hydrate_violin,
+        "sunburst": _hydrate_sunburst,
+        "gauge": _hydrate_gauge,
     }
     if chart_type not in handlers:
-        logger.error(f"Unknown chart type: {chart_type}")
+        logger.warning(f"Unknown chart type: {chart_type}, using fallback")
     return handlers.get(chart_type, _hydrate_fallback)
 
 

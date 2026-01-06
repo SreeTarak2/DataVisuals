@@ -150,14 +150,20 @@ export const chartInsightsAPI = {
 
 // Chart API calls
 export const chartAPI = {
-  // Render chart preview
-  renderChartPreview: (chartConfig, datasetId) =>
-    api.post('/charts/render-preview', {
-      chart_config: chartConfig,
-      dataset_id: datasetId
+  // Render chart with full configuration
+  renderChart: (datasetId, chartType, fields, aggregation = 'sum', options = {}) =>
+    api.post('/charts/render', {
+      dataset_id: datasetId,
+      chart_type: chartType,
+      fields: fields,
+      aggregation: aggregation,
+      title: options.title || `${fields[1] || 'Value'} by ${fields[0] || 'Category'}`,
+      include_insights: options.includeInsights || false,
+      filters: options.filters || null,
+      group_by: options.groupBy || null
     }),
 
-  // Generate analytics chart with aggregation
+  // Legacy alias for backward compatibility
   generateChart: (datasetId, chartType, xAxis, yAxis, aggregation = 'sum') =>
     api.post('/charts/render', {
       dataset_id: datasetId,
@@ -165,6 +171,37 @@ export const chartAPI = {
       fields: [xAxis, yAxis],
       aggregation: aggregation,
       title: `${yAxis} by ${xAxis}`
+    }),
+
+  // Get AI-powered chart recommendations for a dataset
+  getRecommendations: (datasetId) =>
+    api.get(`/charts/recommendations?dataset_id=${datasetId}`),
+
+  // Get detailed insights for a chart
+  getInsights: (chartConfig, chartData, datasetId) =>
+    api.post('/charts/insights', {
+      chart_config: chartConfig,
+      chart_data: chartData,
+      dataset_id: datasetId
+    }),
+
+  // Save chart to user's dashboard
+  saveChart: (datasetId, chartConfig, title) =>
+    api.post('/charts/dashboard/save', {
+      dataset_id: datasetId,
+      chart_config: chartConfig,
+      title: title
+    }),
+
+  // List saved charts (optionally filter by dataset)
+  listSavedCharts: (datasetId = null) =>
+    api.get('/charts/dashboard/list' + (datasetId ? `?dataset_id=${datasetId}` : '')),
+
+  // Render chart preview (for quick previews without full rendering)
+  renderChartPreview: (chartConfig, datasetId) =>
+    api.post('/charts/render-preview', {
+      chart_config: chartConfig,
+      dataset_id: datasetId
     }),
 };
 

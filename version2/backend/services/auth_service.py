@@ -16,10 +16,20 @@ logger = logging.getLogger(__name__)
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# JWT settings
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+# JWT settings - SECURITY CRITICAL
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError(
+        "FATAL: SECRET_KEY environment variable is required. "
+        "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+if len(SECRET_KEY) < 32:
+    raise ValueError(
+        f"FATAL: SECRET_KEY must be at least 32 characters (got {len(SECRET_KEY)}). "
+        "Generate a secure key with: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days - extended for better UX
 
 # Security scheme
 security = HTTPBearer()

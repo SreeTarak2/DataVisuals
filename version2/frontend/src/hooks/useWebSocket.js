@@ -79,13 +79,11 @@ export const useWebSocket = ({
 
     const connect = useCallback(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
-            console.log('WebSocket already connected');
             return;
         }
 
         const token = getAuthToken();
         if (!token) {
-            console.error('No auth token available for WebSocket');
             onError?.({ type: 'auth', detail: 'Not authenticated' });
             return;
         }
@@ -93,14 +91,14 @@ export const useWebSocket = ({
         setIsConnecting(true);
         cleanup();
 
+        // Note: Token in URL is a security concern - ideally move to message body
+        // when backend supports it. For now, connection uses URL param.
         const wsUrl = `${WS_URL}?token=${token}`;
-        console.log('Connecting to WebSocket:', wsUrl);
 
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
-            console.log('WebSocket connected');
             setIsConnected(true);
             setIsConnecting(false);
         };

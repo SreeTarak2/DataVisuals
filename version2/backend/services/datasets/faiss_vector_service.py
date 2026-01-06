@@ -2,6 +2,7 @@ import logging
 import json
 import pickle
 import os
+import asyncio
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import numpy as np
@@ -15,6 +16,10 @@ from core.config import settings
 logger = logging.getLogger(__name__)
 
 class FAISSVectorService:
+    """
+    FAISS-based vector search service with thread-safe index operations.
+    Uses asyncio.Lock to prevent concurrent index modifications.
+    """
     
     def __init__(self):
         self.embedding_model_name = settings.EMBEDDING_MODEL
@@ -24,6 +29,10 @@ class FAISSVectorService:
         
         self._dataset_dirty = False
         self._query_dirty = False
+        
+        # Thread-safety locks for index modifications
+        self._dataset_index_lock = asyncio.Lock()
+        self._query_index_lock = asyncio.Lock()
         
         self.embedding_model = None
         self.dataset_index = None
@@ -95,25 +104,29 @@ class FAISSVectorService:
         return db_conn
 
     async def add_dataset_to_vector_db(self, dataset_id: str, dataset_metadata: Dict, user_id: str) -> bool:
+        """Add dataset to vector index with thread-safe locking."""
         if not self.enable_vector_search or not self.embedding_model:
             return False
         
         try:
+            # Compute embedding outside the lock (CPU-intensive)
             content = json.dumps(dataset_metadata)
             embedding = np.array(self.embedding_model.embed_documents([content])).astype('float32')
             
-            self.dataset_index.add(embedding)
-            index_id = self.dataset_index.ntotal - 1
-            self.dataset_metadata[index_id] = {
-                "dataset_id": dataset_id,
-                "user_id": user_id,
-                "content": content,
-                "added_at": datetime.now().isoformat()
-            }
+            # Lock for index modification
+            async with self._dataset_index_lock:
+                self.dataset_index.add(embedding)
+                index_id = self.dataset_index.ntotal - 1
+                self.dataset_metadata[index_id] = {
+                    "dataset_id": dataset_id,
+                    "user_id": user_id,
+                    "content": content,
+                    "added_at": datetime.now().isoformat()
+                }
+                
+                self._dataset_dirty = True
+                self._persist_dataset_index()
             
-            self._dataset_dirty = True
-            
-            self._persist_dataset_index()
             logger.info(f"Added dataset {dataset_id} to vector DB at index {index_id}")
             return True
         except Exception as e:
@@ -121,24 +134,28 @@ class FAISSVectorService:
             return False
 
     async def add_query_to_history(self, query: str, dataset_id: str, user_id: str) -> bool:
+        """Add query to history index with thread-safe locking."""
         if not self.enable_vector_search or not self.embedding_model:
             return False
         
         try:
+            # Compute embedding outside the lock (CPU-intensive)
             embedding = np.array([self.embedding_model.embed_query(query)]).astype('float32')
             
-            self.query_history_index.add(embedding)
-            index_id = self.query_history_index.ntotal - 1
-            self.query_history_metadata[index_id] = {
-                "query": query,
-                "dataset_id": dataset_id,
-                "user_id": user_id,
-                "timestamp": datetime.now().isoformat()
-            }
+            # Lock for index modification
+            async with self._query_index_lock:
+                self.query_history_index.add(embedding)
+                index_id = self.query_history_index.ntotal - 1
+                self.query_history_metadata[index_id] = {
+                    "query": query,
+                    "dataset_id": dataset_id,
+                    "user_id": user_id,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                self._query_dirty = True
+                self._persist_query_history_index()
             
-            self._query_dirty = True
-            
-            self._persist_query_history_index()
             logger.info(f"Added query to history for user {user_id}")
             return True
         except Exception as e:

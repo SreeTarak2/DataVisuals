@@ -10,8 +10,10 @@ from fastapi.responses import JSONResponse
 from bson import ObjectId
 
 from db.database import get_database
+from core.config import settings
 from services.datasets.file_storage_service import file_storage_service
 from services.datasets.faiss_vector_service import faiss_vector_service
+from services.cache_service import cache_service
 # Note: process_dataset_task imported lazily to avoid circular imports
 
 logger = logging.getLogger(__name__)
@@ -79,15 +81,54 @@ class EnhancedDatasetService:
         self, file: UploadFile, user_id: str, name: str = None, description: str = None
     ) -> JSONResponse:
         """
-        Handles the initial upload request with duplicate detection.
-        1. Generates content hash for duplicate detection
-        2. Checks if identical dataset already exists
-        3. If duplicate found, returns existing dataset info
-        4. If new, saves file and creates dataset record
-        5. Dispatches background task for processing
+        Handles the initial upload request with validation and duplicate detection.
+        
+        Security checks:
+        1. Validates file extension against whitelist
+        2. Enforces file size limit with chunked reading (prevents memory exhaustion)
+        3. Generates content hash for duplicate detection
+        4. Checks if identical dataset already exists
+        5. If new, saves file and creates dataset record
+        6. Dispatches background task for processing
         """
         try:
-            file_content = await file.read()
+            # --- VALIDATION: File Extension ---
+            if not file.filename:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Filename is required"
+                )
+            
+            file_ext = Path(file.filename).suffix.lower().lstrip('.')
+            if file_ext not in settings.ALLOWED_FILE_TYPES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type: .{file_ext}. Allowed types: {', '.join(settings.ALLOWED_FILE_TYPES)}"
+                )
+            
+            # --- VALIDATION: File Size (chunked reading to prevent memory exhaustion) ---
+            max_size = settings.MAX_FILE_SIZE
+            chunk_size = 1024 * 1024  # 1MB chunks
+            file_content = b""
+            
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                file_content += chunk
+                if len(file_content) > max_size:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds maximum size of {max_size // (1024*1024)}MB"
+                    )
+            
+            if len(file_content) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Uploaded file is empty"
+                )
+            
+            # --- DUPLICATE DETECTION ---
             content_hash = self._generate_content_hash(file_content)
             existing_dataset = await self._check_duplicate_dataset(content_hash, user_id)
             
@@ -294,6 +335,9 @@ class EnhancedDatasetService:
         """
         Loads the full dataset as a Polars DataFrame for analysis.
         
+        Uses cache service to avoid repeated disk reads for frequently accessed datasets.
+        Cache TTL: 1 hour.
+        
         Args:
             dataset_id: Dataset ID to load
             user_id: User ID for ownership verification
@@ -305,6 +349,17 @@ class EnhancedDatasetService:
             HTTPException: If dataset not found or loading fails
         """
         import polars as pl
+        
+        cache_key = f"df:{dataset_id}"
+        
+        # Try cache first
+        try:
+            cached_df = await cache_service.get_dataframe(cache_key)
+            if cached_df is not None:
+                logger.debug(f"Cache hit for dataset {dataset_id}")
+                return cached_df
+        except Exception as e:
+            logger.warning(f"Cache read failed for {dataset_id}: {e}")
         
         try:
             dataset = await self.get_dataset(dataset_id, user_id)
@@ -319,13 +374,22 @@ class EnhancedDatasetService:
             
             file_ext = path.suffix.lower()
             if file_ext == ".csv":
-                return pl.read_csv(file_path, infer_schema_length=10000)
+                df = pl.read_csv(file_path, infer_schema_length=10000)
             elif file_ext in [".xlsx", ".xls"]:
-                return pl.read_excel(file_path)
+                df = pl.read_excel(file_path)
             elif file_ext == ".json":
-                return pl.read_json(file_path)
+                df = pl.read_json(file_path)
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported file format: {file_ext}")
+            
+            # Cache the DataFrame (async, non-blocking on failure)
+            try:
+                await cache_service.set_dataframe(cache_key, df, ttl=3600)
+                logger.debug(f"Cached DataFrame for dataset {dataset_id}")
+            except Exception as e:
+                logger.warning(f"Cache write failed for {dataset_id}: {e}")
+            
+            return df
                 
         except HTTPException:
             raise

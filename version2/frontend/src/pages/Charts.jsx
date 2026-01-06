@@ -10,27 +10,20 @@ import { cn } from '../lib/utils';
 import useDatasetStore from '../store/datasetStore';
 import { datasetAPI, chartAPI } from '../services/api';
 
-// Chart type definitions with icons and accent colors
+// Chart type definitions - matches backend ChartType enum
+// Backend supports: bar, line, pie, histogram, box_plot, scatter, heatmap, treemap, grouped_bar, area
 const CHART_TYPES = [
+  // Fully supported chart types
   { id: 'bar', label: 'Bar', icon: BarChart3, color: '#3b82f6', enabled: true },
   { id: 'line', label: 'Line', icon: TrendingUp, color: '#10b981', enabled: true },
   { id: 'pie', label: 'Pie', icon: PieChart, color: '#f59e0b', enabled: true },
   { id: 'scatter', label: 'Scatter', icon: ScatterChart, color: '#ef4444', enabled: true },
   { id: 'area', label: 'Area', icon: AreaChart, color: '#06b6d4', enabled: true },
-  { id: 'radar', label: 'Radar', icon: Activity, color: '#8b5cf6', enabled: true },
   { id: 'histogram', label: 'Histogram', icon: BarChart2, color: '#ec4899', enabled: true },
-  { id: 'boxplot', label: 'Box Plot', icon: BarChart2, color: '#14b8a6', enabled: false },
-  { id: 'heatmap', label: 'Heatmap', icon: Activity, color: '#f97316', enabled: false },
-  { id: 'bubble', label: 'Bubble', icon: ScatterChart, color: '#a855f7', enabled: false },
-  { id: 'timeseries', label: 'Time Series', icon: TrendingUp, color: '#22c55e', enabled: false },
-  { id: 'candlestick', label: 'Candlestick', icon: BarChart3, color: '#eab308', enabled: false },
-  { id: 'funnel', label: 'Funnel', icon: Activity, color: '#06b6d4', enabled: false },
-  { id: 'treemap', label: 'Treemap', icon: BarChart2, color: '#84cc16', enabled: false },
-  { id: 'waterfall', label: 'Waterfall', icon: BarChart3, color: '#0ea5e9', enabled: false },
-  { id: 'contour', label: 'Contour', icon: Activity, color: '#6366f1', enabled: false },
-  { id: 'density', label: 'Density', icon: AreaChart, color: '#d946ef', enabled: false },
-  { id: 'errorbar', label: 'Error Bar', icon: BarChart2, color: '#f43f5e', enabled: false },
-  { id: 'ternary', label: 'Ternary', icon: Activity, color: '#0d9488', enabled: false },
+  { id: 'box_plot', label: 'Box Plot', icon: BarChart2, color: '#14b8a6', enabled: true },
+  { id: 'heatmap', label: 'Heatmap', icon: Activity, color: '#f97316', enabled: true },
+  { id: 'treemap', label: 'Treemap', icon: BarChart2, color: '#84cc16', enabled: true },
+  { id: 'grouped_bar', label: 'Grouped Bar', icon: BarChart3, color: '#8b5cf6', enabled: true },
 ];
 
 const AGGREGATIONS = [
@@ -48,8 +41,10 @@ const Charts = () => {
   const [yAxis, setYAxis] = useState('');
   const [aggregation, setAggregation] = useState('sum');
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [chartData, setChartData] = useState(null);
   const [columns, setColumns] = useState([]);
+  const chartRef = React.useRef(null);
 
   // Get current chart's accent color
   const currentChartColor = CHART_TYPES.find(t => t.id === chartType)?.color || '#3b82f6';
@@ -115,11 +110,65 @@ const Charts = () => {
         toast.error('No data for selected columns. Try different options.');
       }
     } catch (error) {
-      console.error('Chart generation failed:', error);
       toast.error('Failed to generate chart');
       setChartData(null);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Save chart to dashboard
+  const handleSaveChart = async () => {
+    if (!chartData || !selectedDataset) return;
+
+    setSaving(true);
+    try {
+      const chartConfig = {
+        chart_type: chartType,
+        columns: [xAxis, yAxis],
+        aggregation: aggregation,
+        title: `${yAxis} by ${xAxis}`
+      };
+
+      await chartAPI.saveChart(
+        selectedDataset.id,
+        chartConfig,
+        chartConfig.title
+      );
+
+      toast.success('Chart saved to dashboard!');
+    } catch (error) {
+      toast.error('Failed to save chart');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Export chart as PNG
+  const handleExportChart = async () => {
+    if (!chartRef.current) {
+      toast.error('Chart not ready for export');
+      return;
+    }
+
+    try {
+      // Find the Plotly chart div
+      const plotlyDiv = chartRef.current.querySelector('.js-plotly-plot');
+      if (plotlyDiv) {
+        const Plotly = (await import('plotly.js-dist-min')).default;
+        await Plotly.downloadImage(plotlyDiv, {
+          format: 'png',
+          filename: `chart_${chartType}_${xAxis}_${yAxis}`,
+          width: 1920,
+          height: 1080,
+          scale: 2
+        });
+        toast.success('Chart exported as PNG!');
+      } else {
+        toast.error('Chart element not found');
+      }
+    } catch (error) {
+      toast.error('Failed to export chart');
     }
   };
 
@@ -158,17 +207,17 @@ const Charts = () => {
           <div className="flex items-center gap-2">
             <motion.button
               whileTap={{ scale: 0.95 }}
-              onClick={() => toast.success('Chart saved!')}
-              disabled={!chartData}
+              onClick={handleSaveChart}
+              disabled={!chartData || saving}
               className="px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-all disabled:opacity-40"
               style={{ backgroundColor: currentChartColor }}
             >
-              <Save className="w-4 h-4" />
-              Save
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {saving ? 'Saving...' : 'Save'}
             </motion.button>
             <motion.button
               whileTap={{ scale: 0.95 }}
-              onClick={() => toast.success('Exported to PNG!')}
+              onClick={handleExportChart}
               disabled={!chartData}
               className="px-4 py-2 rounded-lg bg-slate-700 text-white font-medium flex items-center gap-2 hover:bg-slate-600 transition-all disabled:opacity-40"
             >
@@ -268,7 +317,7 @@ const Charts = () => {
               </div>
             </div>
           ) : (
-            <div style={{ width: '100%', height: 'calc(100vh - 250px)', minHeight: '500px' }}>
+            <div ref={chartRef} style={{ width: '100%', height: 'calc(100vh - 250px)', minHeight: '500px' }}>
               <PlotlyChart
                 data={chartData.traces.map(trace => ({
                   ...trace,

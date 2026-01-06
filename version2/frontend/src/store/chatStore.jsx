@@ -4,6 +4,48 @@ import { aiAPI, chatAPI } from '../services/api';
 
 const DEFAULT_API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
+/**
+ * Extract text content from potentially JSON-formatted LLM responses.
+ * Handles cases where LLM returns: { "response": "..." } or { "tasks": [...] }
+ * instead of plain text/markdown.
+ */
+const extractTextFromResponse = (content) => {
+  if (!content || typeof content !== 'string') return content || '';
+
+  const trimmed = content.trim();
+
+  // If it doesn't look like JSON, return as-is
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return content;
+  }
+
+  // Try to parse as JSON and extract text
+  try {
+    const parsed = JSON.parse(trimmed);
+
+    // Handle { "response": "..." } or { "response_text": "..." }
+    if (parsed.response) return parsed.response;
+    if (parsed.response_text) return parsed.response_text;
+    if (parsed.text) return parsed.text;
+    if (parsed.content) return parsed.content;
+    if (parsed.answer) return parsed.answer;
+    if (parsed.message) return parsed.message;
+
+    // Handle { "tasks": [...] } - format as bullet list
+    if (parsed.tasks && Array.isArray(parsed.tasks)) {
+      return parsed.tasks.map((t, i) =>
+        `${i + 1}. **${t.task || t.name}**: ${t.description || ''}`
+      ).join('\n');
+    }
+
+    // If we can't extract, convert to readable string
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    // Not valid JSON, return original
+    return content;
+  }
+};
+
 const computeHttpBase = () => {
   try {
     const url = new URL(DEFAULT_API_BASE);
@@ -63,11 +105,11 @@ const useChatStore = create(
           return;
         }
 
-        // Create the final AI message
+        // Create the final AI message - extract text if response is JSON
         const aiMessage = {
           id: streamingMessageId || `msg_${Date.now()}_ai`,
           role: 'assistant',
-          content: fullContent,
+          content: extractTextFromResponse(fullContent),
           chart_config: chartConfig,
           timestamp: new Date().toISOString(),
         };
@@ -171,8 +213,6 @@ const useChatStore = create(
           const response = await chatAPI.getConversations();
           const dbConversations = response.data.conversations || [];
 
-          console.log('Loaded conversations from backend:', dbConversations);
-
           // Convert database format to store format
           const conversations = {};
           dbConversations.forEach(conv => {
@@ -180,7 +220,7 @@ const useChatStore = create(
             const messages = (conv.messages || []).map((msg, idx) => ({
               id: msg.id || `msg_${conv._id}_${idx}`,
               role: msg.role === 'ai' ? 'assistant' : msg.role, // Map "ai" to "assistant"
-              content: msg.content,
+              content: msg.role !== 'user' ? extractTextFromResponse(msg.content) : msg.content,
               chart_config: msg.chart_config || null,
               technical_details: msg.technical_details || null,
               timestamp: msg.timestamp || conv.created_at
@@ -195,8 +235,6 @@ const useChatStore = create(
               updatedAt: conv.updated_at || conv.created_at
             };
           });
-
-          console.log('Mapped conversations:', conversations);
 
           set({ conversations, loading: false });
           return conversations;
@@ -306,7 +344,7 @@ const useChatStore = create(
           const aiMessage = {
             id: `msg_${Date.now()}_ai`,
             role: 'assistant',
-            content: aiResponse || 'No response from AI',
+            content: extractTextFromResponse(aiResponse) || 'No response from AI',
             chart_config: chart_config || null,
             timestamp: new Date().toISOString(),
           };
