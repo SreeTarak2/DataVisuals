@@ -43,26 +43,75 @@ async def close_mongo_connection():
         logger.info("Disconnected from MongoDB")
 
 async def create_indexes():
-    """Create database indexes for better performance"""
+    """
+    Create database indexes for better performance and query optimization.
+    
+    Index strategy:
+    - Single field indexes for unique constraints (email, username)
+    - Compound indexes for common query patterns (user_id + is_active, user_id + created_at)
+    - Content hash index for duplicate detection
+    """
     try:
-        # Users collection indexes
+        # ============================================================
+        # Users Collection
+        # ============================================================
         await db.database.users.create_index("email", unique=True)
         await db.database.users.create_index("username", unique=True)
         
-        # Datasets collection indexes
+        # ============================================================
+        # Datasets Collection
+        # ============================================================
+        # Basic single-field indexes
         await db.database.datasets.create_index("user_id")
         await db.database.datasets.create_index("created_at")
         await db.database.datasets.create_index("filename")
         
-        # Charts collection indexes
+        # COMPOUND: User's active datasets (most common query pattern)
+        await db.database.datasets.create_index(
+            [("user_id", 1), ("is_active", 1)],
+            name="idx_user_active_datasets"
+        )
+        
+        # COMPOUND: Duplicate detection (content_hash + user_id)
+        await db.database.datasets.create_index(
+            [("content_hash", 1), ("user_id", 1)],
+            name="idx_duplicate_detection"
+        )
+        
+        # COMPOUND: User's datasets sorted by creation (for listing)
+        await db.database.datasets.create_index(
+            [("user_id", 1), ("created_at", -1)],
+            name="idx_user_datasets_sorted"
+        )
+        
+        # ============================================================
+        # Charts Collection
+        # ============================================================
         await db.database.charts.create_index("user_id")
         await db.database.charts.create_index("dataset_id")
         await db.database.charts.create_index("created_at")
         
-        # Insights collection indexes
+        # ============================================================
+        # Insights Collection
+        # ============================================================
         await db.database.insights.create_index("user_id")
         await db.database.insights.create_index("dataset_id")
         await db.database.insights.create_index("created_at")
+        
+        # ============================================================
+        # Conversations Collection
+        # ============================================================
+        # COMPOUND: User's conversations for a dataset
+        await db.database.conversations.create_index(
+            [("user_id", 1), ("dataset_id", 1)],
+            name="idx_user_dataset_conversations"
+        )
+        
+        # COMPOUND: User's recent conversations (for listing)
+        await db.database.conversations.create_index(
+            [("user_id", 1), ("updated_at", -1)],
+            name="idx_user_recent_conversations"
+        )
         
         logger.info("Database indexes created successfully")
         

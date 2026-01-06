@@ -1,15 +1,13 @@
 # backend/main.py
 
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-
-# --- Application Modules ---
-# Import the new API routers
-from api import auth, datasets, chat, dashboard, analysis, models, charts
-
-# Import core components and services needed for lifecycle events
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from core.config import settings
+from api import auth, datasets, chat, dashboard, analysis, models, charts
+from core.rate_limiter import limiter, rate_limit_exceeded_handler
 from db.database import connect_to_mongo, close_mongo_connection
 from services.ai.ai_service import ai_service
 
@@ -23,6 +21,11 @@ app = FastAPI(
     description="A professionally refactored, modular, AI-powered data visualization and analysis platform.",
     version="4.0.0"
 )
+
+# --- Rate Limiter Configuration ---
+# Attach limiter to app state for access in routes
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # --- Middleware Configuration ---
 # Handles Cross-Origin Resource Sharing (CORS)

@@ -1,13 +1,83 @@
 import httpx
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from datetime import datetime
 from fastapi import HTTPException
 
 from core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# -----------------------------------------------------------
+# CONVERSATIONAL SYSTEM PROMPT (ChatGPT/Grok Parity)
+# -----------------------------------------------------------
+CONVERSATIONAL_SYSTEM_PROMPT = """You are DataSage AI, a world-class data analytics assistant that helps users understand their data through clear, insightful analysis.
+
+## RESPONSE FORMATTING RULES
+
+### For Simple Questions (1-2 sentences):
+- Answer directly in 1-2 clear sentences
+- Bold the key metric or finding using **bold**
+- Example: "The **total revenue is $1.2M**, with Q4 contributing 34%."
+
+### For Analytical Questions (multiple insights):
+Use this structure:
+1. **Key Finding** — Lead with the most important insight (1 sentence)
+2. **Details** — Use bullet points for supporting data
+3. **Context** — Add comparison or trend if relevant
+
+### For Complex/Multi-Part Questions:
+Use headers and organized sections:
+
+## Summary
+[1-2 sentence TL;DR with **bolded key metric**]
+
+## Key Metrics
+- **Metric 1**: Value (context)
+- **Metric 2**: Value (context)
+
+## Analysis
+[Detailed explanation with bullet points]
+
+## Recommendation (if applicable)
+[Actionable next step]
+
+### Formatting Guidelines:
+- **Bold** important numbers, metrics, and key terms using **double asterisks**
+- Use bullet points (- or •) for lists of 3+ items
+- Use numbered lists for sequential steps or rankings
+- Use `backticks` for column names and technical terms
+- Keep paragraphs short (2-3 sentences max)
+- For comparisons, use markdown tables when helpful
+
+### For Chart-Related Responses:
+- Describe what the chart shows before providing it
+- Highlight the most striking visual pattern
+- Example: "Here's a bar chart showing revenue by region. **Northeast leads with 34% of total revenue**, more than double the next region."
+
+### Tone:
+- Professional but approachable
+- Data-driven and precise
+- Avoid jargon unless the user uses it first
+- Be concise — respect the user's time
+
+## IMPORTANT:
+- Always ground your response in the actual data provided in the context
+- If you're uncertain about something, say so explicitly
+- Never invent data points or statistics
+- Use the exact column names from the dataset context provided
+- **If the data does not contain enough information to answer confidently, explicitly state the limitation and suggest what additional data would help**
+  - Example: "The dataset doesn't include customer demographics, so I can't analyze purchasing patterns by age group. Adding age/gender columns would enable this analysis."
+"""
+
+# Complexity-specific additions to system prompt
+COMPLEXITY_HINTS = {
+    "simple": "\n\nNOTE: This is a simple, direct question. Answer in 1-2 sentences maximum. Be brief and precise.",
+    "moderate": "\n\nNOTE: This is a moderate analytical question. Use the Key Finding → Details → Context structure.",
+    "complex": "\n\nNOTE: This is a complex analytical question. Use full headers (## Summary, ## Key Metrics, ## Analysis) and provide comprehensive structured output."
+}
 
 
 class LLMRouter:
@@ -30,7 +100,9 @@ class LLMRouter:
         expect_json: bool = False,
         specific_model: str = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096
+        max_tokens: int = 4096,
+        is_conversational: bool = False,
+        query_complexity: str = "moderate"
     ) -> Any:
         """
         Main entry point for LLM calls with intelligent model routing.
@@ -42,6 +114,8 @@ class LLMRouter:
             specific_model: Override auto-selection with specific model key (e.g., 'hermes_405b')
             temperature: Sampling temperature (0.0-1.0)
             max_tokens: Maximum tokens to generate
+            is_conversational: If True, use structured formatting for responses
+            query_complexity: 'simple' | 'moderate' | 'complex' - affects response format
             
         Returns:
             Parsed JSON dict if expect_json=True, otherwise string
@@ -56,7 +130,9 @@ class LLMRouter:
                     expect_json,
                     specific_model=specific_model,
                     temperature=temperature,
-                    max_tokens=max_tokens
+                    max_tokens=max_tokens,
+                    is_conversational=is_conversational,
+                    query_complexity=query_complexity
                 )
             except Exception as e:
                 error_str = str(e)
@@ -128,7 +204,9 @@ class LLMRouter:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         max_retries: int = 3,
-        retry_delay: float = 6.0  # Increased from 2.0 for OpenRouter free tier
+        retry_delay: float = 6.0,  # Increased from 2.0 for OpenRouter free tier
+        is_conversational: bool = False,
+        query_complexity: str = "moderate"
     ) -> Any:
         """
         Call OpenRouter API with intelligent model selection.
@@ -140,14 +218,21 @@ class LLMRouter:
             specific_model: Override model selection
             temperature: Sampling temperature
             max_tokens: Max tokens to generate
+            is_conversational: If True, use structured formatting for responses
+            query_complexity: 'simple' | 'moderate' | 'complex' - affects response format
         """
         # Get the best model for this task
         model_config = self.get_model_for_role(model_role, specific_model)
         selected_model = model_config["model"]
         model_name = model_config["name"]
         
-        # Build system prompt based on model strengths
-        system_prompt = self._build_system_prompt(model_config, expect_json)
+        # Build system prompt based on model strengths and conversation mode
+        system_prompt = self._build_system_prompt(
+            model_config, 
+            expect_json,
+            is_conversational=is_conversational,
+            query_complexity=query_complexity
+        )
         
         headers = {
             "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
@@ -244,7 +329,9 @@ class LLMRouter:
         model_role: str,
         specific_model: str = None,
         temperature: float = 0.7,
-        max_tokens: int = 4096
+        max_tokens: int = 4096,
+        is_conversational: bool = True,
+        query_complexity: str = "moderate"
     ):
         """
         Stream tokens from OpenRouter API as an async generator.
@@ -255,6 +342,8 @@ class LLMRouter:
             specific_model: Override model selection
             temperature: Sampling temperature
             max_tokens: Max tokens to generate
+            is_conversational: If True, use structured formatting for responses
+            query_complexity: 'simple' | 'moderate' | 'complex' - affects response format
             
         Yields:
             Dict with type 'token' or 'done', and content/full_response
@@ -263,7 +352,12 @@ class LLMRouter:
         selected_model = model_config["model"]
         model_name = model_config["name"]
         
-        system_prompt = self._build_system_prompt(model_config, expect_json=False)
+        system_prompt = self._build_system_prompt(
+            model_config, 
+            expect_json=False,
+            is_conversational=is_conversational,
+            query_complexity=query_complexity
+        )
         
         headers = {
             "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
@@ -340,17 +434,36 @@ class LLMRouter:
 
     
 
-    def _build_system_prompt(self, model_config: Dict[str, Any], expect_json: bool) -> str:
+    def _build_system_prompt(
+        self, 
+        model_config: Dict[str, Any], 
+        expect_json: bool,
+        is_conversational: bool = False,
+        query_complexity: str = "moderate"
+    ) -> str:
         """
-        Build an optimized system prompt based on model strengths.
+        Build an optimized system prompt based on model strengths and context.
         
         Args:
             model_config: Model configuration dict
             expect_json: Whether JSON output is expected
+            is_conversational: If True, use structured formatting rules for human-readable responses
+            query_complexity: 'simple' | 'moderate' | 'complex' - affects formatting depth
             
         Returns:
             Optimized system prompt string
         """
+        # For conversational (non-JSON) responses, use the comprehensive formatting prompt
+        if is_conversational and not expect_json:
+            base_prompt = CONVERSATIONAL_SYSTEM_PROMPT
+            
+            # Add complexity-specific guidance
+            complexity_hint = COMPLEXITY_HINTS.get(query_complexity, COMPLEXITY_HINTS["moderate"])
+            base_prompt += complexity_hint
+            
+            return base_prompt
+        
+        # For JSON or technical responses, use the minimal prompt
         base_prompt = "You are DataSage AI, an expert data analysis and visualization assistant."
         
         strengths = model_config.get("strengths", [])

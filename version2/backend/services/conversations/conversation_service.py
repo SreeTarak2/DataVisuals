@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # Load or Create Conversation
 # -----------------------------------------------------------
 
+# Maximum messages per conversation to prevent BSON document size limit issues
+MAX_MESSAGES_PER_CONVERSATION = 500
+MESSAGE_PRUNE_THRESHOLD = 1000  # Warn when approaching limit
+
 async def load_or_create_conversation(
     conv_id: Optional[str],
     user_id: str,
@@ -33,6 +37,9 @@ async def load_or_create_conversation(
     """
     Loads an existing conversation by ID.
     If not found, creates a new one.
+    
+    Security: Verifies that the conversation's dataset_id matches the requested dataset
+    to prevent accessing conversations from other datasets.
     """
     db = get_database()
 
@@ -44,7 +51,24 @@ async def load_or_create_conversation(
                 "user_id": user_id
             })
             if conv:
-                return conv
+                # SECURITY: Verify dataset ownership - conversation must belong to requested dataset
+                conv_dataset_id = conv.get("dataset_id")
+                if conv_dataset_id and conv_dataset_id != dataset_id:
+                    logger.warning(
+                        f"Conversation {conv_id} dataset mismatch: "
+                        f"conv has {conv_dataset_id}, requested {dataset_id}. "
+                        f"Creating new conversation for security."
+                    )
+                    # Don't return this conversation - create a new one for the requested dataset
+                else:
+                    # Check message count and prune if needed
+                    messages = conv.get("messages", [])
+                    if len(messages) > MESSAGE_PRUNE_THRESHOLD:
+                        logger.warning(
+                            f"Conversation {conv_id} has {len(messages)} messages, "
+                            f"approaching limit. Consider archiving."
+                        )
+                    return conv
         except Exception as e:
             logger.warning(f"Invalid conversation ID '{conv_id}': {e}")
 
@@ -53,6 +77,7 @@ async def load_or_create_conversation(
         "user_id": user_id,
         "dataset_id": dataset_id,
         "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
         "messages": []
     }
 

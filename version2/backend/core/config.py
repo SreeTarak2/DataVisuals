@@ -2,11 +2,9 @@ import os
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
 class Settings:
-    # OpenRouter Configuration (Primary/Only Backend)
     USE_OPENROUTER: bool = os.getenv("USE_OPENROUTER", "true").lower() == "true"
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
@@ -20,96 +18,100 @@ class Settings:
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "50"))
     
-    # OpenRouter Models (Free Tier - Productive for Analytics)
+ # OPENROUTER_MODELS: Replaced with top free-tier, best-performing models
     OPENROUTER_MODELS: Dict[str, Dict[str, Any]] = {
         "hermes_405b": {
             "model": "nousresearch/hermes-3-llama-3.1-405b:free",
             "name": "Nous Hermes 3 405B",
             "strengths": ["structured_output", "function_calling", "reasoning", "json_generation"],
-            "best_for": ["chart_explanation", "kpi_suggestion", "insight_refinement"],
+            "best_for": ["kpi_suggestion", "insight_generation", "refinement", "tool_use"],
             "context_window": 128000,
             "cost": "free"
         },
-        "qwen_235b": {
-            "model": "qwen/qwen3-235b-a22b:free",
-            "name": "Qwen3-235B (A22B)",
-            "strengths": ["reasoning", "thinking_mode", "long_context", "tool_calling"],
-            "best_for": ["chart_recommendation", "kpi_generation", "complex_reasoning"],
-            "context_window": 32768,
-            "cost": "free"
-        },
-        "qwen_4b": {
-            "model": "qwen/qwen3-4b:free",
-            "name": "Qwen3-4B",
-            "strengths": ["efficiency", "dual_mode", "quick_responses"],
-            "best_for": ["draft_generation", "simple_chat", "quick_analysis"],
+        "qwen_vl_8b": {
+            "model": "qwen/qwen3-vl-8b-instruct:free",
+            "name": "Qwen3-VL 8B Instruct",
+            "strengths": ["vision", "chart_analysis", "ocr", "visual_reasoning"],
+            "best_for": ["chart_image_analysis", "visual_extraction", "layout_from_image"],
             "context_window": 32768,
             "cost": "free"
         },
         "mistral_24b": {
             "model": "mistralai/mistral-small-3.1-24b-instruct:free",
             "name": "Mistral Small 3.1 24B",
-            "strengths": ["reasoning", "math", "vision", "long_context"],
-            "best_for": ["generalist_tasks", "multi_modal", "math_reasoning"],
+            "strengths": ["reasoning", "math", "efficiency", "instruction_following"],
+            "best_for": ["chat_engine", "conversational", "refinement", "generalist_tasks"],
             "context_window": 128000,
             "cost": "free"
         },
-        "llama_70b": {
-            "model": "meta-llama/llama-3.3-70b-instruct:free",
-            "name": "Meta Llama 3.3 70B",
-            "strengths": ["dialogue", "instruction_following", "multilingual"],
-            "best_for": ["chat_engine", "instruction_tasks", "refinement"],
-            "context_window": 128000,
+        "devstral_2": {
+            "model": "mistral/devstral-2-2512:free",
+            "name": "Devstral 2 2512",
+            "strengths": ["long_context", "planning", "codebase_understanding", "orchestration"],
+            "best_for": ["layout_designer", "system_design", "requirements_synthesis", "pipeline_planner"],
+            "context_window": 256000,
             "cost": "free"
         },
-        "nemotron_vl": {
-            "model": "nvidia/nemotron-nano-12b-v2-vl:free",
-            "name": "NVIDIA Nemotron Nano 12B VL",
-            "strengths": ["vision", "chart_analysis", "multi_image", "ocr"],
-            "best_for": ["chart_image_analysis", "visual_reasoning", "data_extraction"],
-            "context_window": 8192,
+        "qwen_4b": {
+            "model": "qwen/qwen3-4b:free",
+            "name": "Qwen3-4B",
+            "strengths": ["efficiency", "dual_mode", "quick_responses"],
+            "best_for": ["draft_generation", "simple_query", "rewrite_engine"],
+            "context_window": 32768,
             "cost": "free"
         }
     }
     
-    # Role Mapping (Distributed to Avoid Rate Limits - Max 2-3 Tasks Per Model)
-    OPENROUTER_ROLE_MAPPING: Dict[str, str] = {
-        # Charts & Visualization
-        "chart_recommendation": "mistral_24b",
-        "chart_explanation": "mistral_24b",
-        # KPIs & Insights
-        "kpi_suggestion": "hermes_405b",
-        "insight_generation": "hermes_405b",
-        # Chat & Conversational
-        "chat_engine": "llama_70b",
-        "conversational": "llama_70b",
-        "chat_streaming": "llama_70b",
-        # Design & Layout
-        "layout_designer": "qwen_235b",
-        "dashboard_design": "qwen_235b",
-        # Quick Tasks
-        "draft_generation": "qwen_4b",
-        "simple_query": "qwen_4b",
-        "rewrite_engine": "qwen_4b",
-        # Refinement & Validation
-        "refinement": "hermes_405b",
-        "validation": "mistral_24b",
-        "visualization_engine": "qwen_235b",
-        # Vision Tasks
-        "chart_image_analysis": "nemotron_vl",
-        "visual_extraction": "nemotron_vl",
-        # Default
-        "default": "mistral_24b"
-    }
+   OPENROUTER_ROLE_MAPPING: Dict[str, str] = {
+    # Charts & Visualization
+    "chart_recommendation": "mistral_24b",
+    "chart_explanation": "mistral_24b",
     
-    # Fallback Chain (Simple List Per Role - Cycle if Primary Fails)
-    FALLBACKS: Dict[str, List[str]] = {
-        "chat_engine": ["llama_70b", "qwen_235b", "mistral_24b"],
-        "kpi_suggestion": ["hermes_405b", "qwen_235b", "llama_70b"],
-        "layout_designer": ["qwen_235b", "hermes_405b", "mistral_24b"],
-        # ... (add for other roles as needed, or default to ["qwen_4b", "mistral_24b"])
-        "default": ["qwen_4b", "mistral_24b", "llama_70b"]
-    }
+    # KPIs & Insights
+    "kpi_suggestion": "hermes_405b",
+    "insight_generation": "hermes_405b",
+    
+    # Chat & Conversational
+    "chat_engine": "mistral_24b",
+    "conversational": "mistral_24b",
+    "chat_streaming": "mistral_24b",
+    
+    # Design & Layout
+    "layout_designer": "devstral_2",               # For text-based planning
+    "dashboard_design": "devstral_2",
+    "layout_from_image": "qwen_vl_8b",            # For image/wireframe input
+    
+    # Quick Tasks
+    "draft_generation": "qwen_4b",
+    "simple_query": "qwen_4b",
+    "rewrite_engine": "qwen_4b",
+    
+    # Refinement & Validation
+    "refinement": "hermes_405b",
+    "validation": "mistral_24b",
+    "visualization_engine": "mistral_24b",
+    
+    # Vision Tasks
+    "chart_image_analysis": "qwen_vl_8b",
+    "visual_extraction": "qwen_vl_8b",
+    
+    # High-Level Planning
+    "system_design": "devstral_2",
+    "requirements_synthesis": "devstral_2",
+    "pipeline_planner": "devstral_2",
+    
+    # Default Fallback
+    "default": "mistral_24b"
+}
+    
+FALLBACKS: Dict[str, List[str]] = {
+    "chat_engine": ["mistral_24b", "hermes_405b", "qwen_4b"],
+    "kpi_suggestion": ["hermes_405b", "mistral_24b", "devstral_2"],
+    "layout_designer": ["devstral_2", "hermes_405b", "mistral_24b"],
+    "chart_image_analysis": ["qwen_vl_8b", "mistral_24b"],  # Mistral can describe if no vision
+    "layout_from_image": ["qwen_vl_8b", "devstral_2"],
+    "default": ["qwen_4b", "mistral_24b", "hermes_405b"]
+}
     
     # Health/Timeouts
     MODEL_HEALTH_CHECK_TIMEOUT: int = int(os.getenv("MODEL_HEALTH_CHECK_TIMEOUT", "180"))

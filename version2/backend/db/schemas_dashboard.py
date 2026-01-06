@@ -40,6 +40,15 @@ class ChartType(str, Enum):
     TREEMAP = "treemap"
     GROUPED_BAR = "grouped_bar"
     AREA = "area"
+    # New chart types
+    RADAR = "radar"
+    BUBBLE = "bubble"
+    WATERFALL = "waterfall"
+    FUNNEL = "funnel"
+    CANDLESTICK = "candlestick"
+    VIOLIN = "violin"
+    SUNBURST = "sunburst"
+    GAUGE = "gauge"
 
 
 class AggregationType(str, Enum):

@@ -1,7 +1,7 @@
 # backend/api/datasets.py
 
 import logging
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, status
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, Request, status
 from celery.result import AsyncResult
 
 # --- Application Modules ---
@@ -9,6 +9,8 @@ from db.schemas import DrillDownRequest
 from services.auth_service import get_current_user
 from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 from tasks import celery_app, process_dataset_task
+from core.rate_limiter import limiter, RateLimits
+from core.config import settings
 
 # --- Configuration ---
 logger = logging.getLogger(__name__)
@@ -17,7 +19,9 @@ router = APIRouter()
 # --- Dataset Management Endpoints ---
 
 @router.post("/upload")
+@limiter.limit(RateLimits.DATASET_UPLOAD)
 async def upload_dataset(
+    request: Request,
     file: UploadFile = File(...),
     name: str = Form(None),
     description: str = Form(None),
@@ -27,6 +31,8 @@ async def upload_dataset(
     Handles the upload of a new dataset.
     This endpoint validates the file, saves it, and triggers a background
     processing task via Celery.
+    
+    Rate limited to 10 uploads per hour per user.
     """
     return await enhanced_dataset_service.upload_dataset(
         file, current_user["id"], name, description
@@ -152,9 +158,12 @@ async def get_dataset_columns(
 # --- Dataset Processing and Task Management ---
 
 @router.post("/{dataset_id}/reprocess")
-async def reprocess_dataset(dataset_id: str, current_user: dict = Depends(get_current_user)):
+@limiter.limit(RateLimits.DATASET_REPROCESS)
+async def reprocess_dataset(request: Request, dataset_id: str, current_user: dict = Depends(get_current_user)):
     """
     Triggers a background task to re-process a dataset, regenerating its metadata.
+    
+    Rate limited to 5 reprocessing requests per hour per user.
     """
     try:
         dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])

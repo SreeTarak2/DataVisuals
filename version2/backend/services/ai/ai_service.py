@@ -15,17 +15,134 @@ from typing import Any, Dict, Optional, AsyncGenerator
 from fastapi import HTTPException
 import logging
 import json
+import re
 import polars as pl
 
 from db.database import get_database
 from services.llm_router import llm_router
 from services.datasets.dataset_loader import load_dataset, create_context_string
 from services.charts.hydrate import hydrate_chart, hydrate_kpi, hydrate_table
+from services.charts.column_matcher import column_matcher
 from services.conversations.conversation_service import load_or_create_conversation, save_conversation
 from core.prompts import PromptFactory, PromptType
+from core.prompt_sanitizer import sanitize_user_input, is_data_related_query
 from services.ai.query_rewrite import rewrite_query
 
 logger = logging.getLogger(__name__)
+
+
+# -----------------------------------------------------------
+# QUERY COMPLEXITY ANALYZER (ChatGPT/Grok Parity)
+# -----------------------------------------------------------
+class QueryComplexityAnalyzer:
+    """
+    Analyze query complexity to determine appropriate response format.
+    Returns 'simple', 'moderate', or 'complex' to guide LLM formatting.
+    """
+    
+    # Patterns that indicate simple, direct questions
+    SIMPLE_PATTERNS = [
+        r"^what is the (total|sum|average|mean|max|min|count)",
+        r"^what's the (total|sum|average|mean|max|min|count)",
+        r"^how many",
+        r"^how much",
+        r"^show me the (top|bottom) \d+",
+        r"^what (is|was) the .+ (in|for|of|on)",
+        r"^give me the",
+        r"^tell me the",
+    ]
+    
+    # Patterns that indicate complex, analytical questions
+    COMPLEX_PATTERNS = [
+        r"(compare|versus|vs\.?|difference between)",
+        r"(why|explain|analyze|breakdown|break down)",
+        r"(trend|trends|forecast|predict|projection|over time)",
+        r"(correlation|relationship|impact|affect|influence)",
+        r"(top|bottom) \d+ .* (by|with|and|across)",
+        r"(performance|analysis|overview|summary|report)",
+        r"(all|every|each) .* (by|across|per)",
+        r"(segment|segmentation|breakdown by)",
+    ]
+    
+    @classmethod
+    def classify(cls, query: str) -> str:
+        """
+        Classify query complexity.
+        
+        Returns:
+            'simple' - Direct factual questions (1-2 sentence answer)
+            'moderate' - Analytical questions (structured bullet response)
+            'complex' - Multi-part questions (full headers and sections)
+        """
+        if not query:
+            return "simple"
+            
+        query_lower = query.lower().strip()
+        
+        # Check for simple patterns first
+        for pattern in cls.SIMPLE_PATTERNS:
+            if re.match(pattern, query_lower):
+                # But if it also contains complex indicators, upgrade
+                complex_score = sum(
+                    1 for p in cls.COMPLEX_PATTERNS 
+                    if re.search(p, query_lower)
+                )
+                if complex_score == 0:
+                    return "simple"
+        
+        # Count complex pattern matches
+        complex_score = sum(
+            1 for pattern in cls.COMPLEX_PATTERNS 
+            if re.search(pattern, query_lower)
+        )
+        
+        if complex_score >= 2:
+            return "complex"
+        elif complex_score == 1:
+            return "moderate"
+        
+        # Fallback: use query length as indicator
+        word_count = len(query_lower.split())
+        question_count = query_lower.count("?")
+        
+        # Multiple questions = complex
+        if question_count >= 2:
+            return "complex"
+        
+        # Length-based heuristics
+        if word_count <= 8:
+            return "simple"
+        elif word_count <= 20:
+            return "moderate"
+        else:
+            return "complex"
+    
+    @classmethod
+    def get_all(cls, query: str) -> Dict[str, Any]:
+        """
+        Get full complexity analysis including score breakdown.
+        
+        Useful for debugging and logging.
+        """
+        query_lower = query.lower().strip()
+        
+        simple_matches = [
+            p for p in cls.SIMPLE_PATTERNS 
+            if re.match(p, query_lower)
+        ]
+        complex_matches = [
+            p for p in cls.COMPLEX_PATTERNS 
+            if re.search(p, query_lower)
+        ]
+        
+        return {
+            "complexity": cls.classify(query),
+            "simple_matches": len(simple_matches),
+            "complex_matches": len(complex_matches),
+            "word_count": len(query_lower.split()),
+            "question_count": query_lower.count("?")
+        }
+
 
 
 class AIService:
@@ -98,6 +215,20 @@ class AIService:
         """
         query_lower = query.strip().lower()
 
+        # --- SECURITY: Sanitize user input to prevent prompt injection ---
+        try:
+            sanitized_query = sanitize_user_input(query)
+        except ValueError as e:
+            return {
+                "response_text": f"Invalid query: {str(e)}",
+                "chart_config": None,
+                "conversation_id": conversation_id
+            }
+        
+        # Use sanitized query for processing
+        query = sanitized_query
+        query_lower = query.lower()
+
         off_topic_triggers = [
             "hello", "hi ", "hey ", "good morning", "good evening", "how are you",
             "thank you", "thanks", "who is", "what is the capital", "prime minister",
@@ -132,8 +263,8 @@ class AIService:
             logger.info(f"Query rewritten: '{query[:50]}...' → '{enhanced_query[:50]}...'")
         messages[-1]["content"] = enhanced_query
 
-        factory = PromptFactory(dataset_context=dataset_context, schema=metadata)
-        prompt = factory.get_prompt(PromptType.CONVERSATIONAL, history=messages)
+        factory = PromptFactory(dataset_metadata=metadata)
+        prompt = factory.get_prompt(PromptType.CONVERSATIONAL, user_message=enhanced_query, history=messages)
 
         llm_response = await llm_router.call(prompt, model_role="chart_engine", expect_json=True)
 
@@ -177,6 +308,16 @@ class AIService:
                     raise ValueError("Dataset file path not found")
                 
                 df = await load_dataset(file_path)
+                
+                # --- COLUMN VALIDATION: Auto-fix LLM column references ---
+                available_columns = list(df.columns)
+                chart_config_raw, corrections = column_matcher.validate_and_fix_chart_config(
+                    chart_config_raw, 
+                    available_columns,
+                    threshold=0.6
+                )
+                if corrections:
+                    logger.info(f"Chart columns auto-corrected: {corrections}")
                 
                 from db.schemas_dashboard import ChartConfig, ChartType, AggregationType
                 
@@ -338,7 +479,7 @@ class AIService:
 
         dataset_context = create_context_string(metadata)
 
-        factory = PromptFactory(dataset_context=dataset_context)
+        factory = PromptFactory(dataset_metadata=metadata)
         prompt = factory.get_prompt(PromptType.DASHBOARD_DESIGNER)
 
         layout = await llm_router.call(prompt, model_role="visualization_engine", expect_json=True)
@@ -562,13 +703,22 @@ class AIService:
         
         messages[-1]["content"] = enhanced_query
 
-        factory = PromptFactory(dataset_context=dataset_context, schema=metadata)
-        prompt = factory.get_prompt(PromptType.CONVERSATIONAL_STREAMING, history=messages)
+        factory = PromptFactory(dataset_metadata=metadata)
+        prompt = factory.get_prompt(PromptType.CONVERSATIONAL, user_message=enhanced_query, history=messages)
+
+        # Analyze query complexity for adaptive formatting
+        query_complexity = QueryComplexityAnalyzer.classify(query)
+        logger.info(f"Query complexity: {query_complexity} for query: '{query[:50]}...'")
 
         full_response = ""
         
         try:
-            async for chunk in llm_router.call_streaming(prompt, model_role="chat_streaming"):
+            async for chunk in llm_router.call_streaming(
+                prompt, 
+                model_role="chat_streaming",
+                is_conversational=True,
+                query_complexity=query_complexity
+            ):
                 if chunk["type"] == "token":
                     full_response += chunk["content"]
                     yield {"type": "token", "content": chunk["content"]}
@@ -611,6 +761,16 @@ Return ONLY valid JSON with this structure:
                     file_path = dataset_doc.get("file_path")
                     if file_path:
                         df = await load_dataset(file_path)
+                        
+                        # --- COLUMN VALIDATION: Auto-fix LLM column references ---
+                        available_columns = list(df.columns)
+                        chart_config_raw, corrections = column_matcher.validate_and_fix_chart_config(
+                            chart_config_raw, 
+                            available_columns,
+                            threshold=0.6
+                        )
+                        if corrections:
+                            logger.info(f"Streaming chart columns auto-corrected: {corrections}")
                         
                         from db.schemas_dashboard import ChartConfig, ChartType, AggregationType
                         

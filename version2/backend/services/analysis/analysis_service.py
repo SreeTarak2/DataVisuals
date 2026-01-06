@@ -2,20 +2,46 @@
 
 import logging
 import polars as pl
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from itertools import combinations
 from scipy.stats import spearmanr, ttest_ind, chi2_contingency
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 
+# Import advanced statistics module
+from services.analysis.advanced_stats import (
+    hypothesis_tester,
+    distribution_analyzer,
+    correlation_analyzer,
+    anomaly_detector,
+    feature_analyzer,
+    time_series_analyzer,
+    HypothesisTestResult,
+    DistributionTestResult,
+    CorrelationResult,
+    AnomalyResult
+)
+
+# Import enhanced QUIS module
+from services.analysis.enhanced_quis import enhanced_quis
+
 logger = logging.getLogger(__name__)
+
 
 class AnalysisService:
     """
     AnalysisService: A full-featured computational engine for datasets.
     Performs statistical analysis, data quality checks, advanced metrics,
     and structured insights ready for LLM summarization.
+    
+    Enhanced with data scientist-level statistical methods including:
+    - Proper hypothesis testing with p-values
+    - Effect sizes (Cohen's d, eta-squared, Cramér's V)
+    - Confidence intervals (bootstrap and parametric)
+    - Advanced anomaly detection (Isolation Forest, robust Z-score)
+    - Time series analysis (trend detection, autocorrelation)
+    - Feature importance analysis
     """
 
     def __init__(self):
@@ -25,8 +51,9 @@ class AnalysisService:
         # Simple in-memory cache for expensive QUIS results keyed by dataset id
         # Format: { dataset_id: { 'result': {...}, 'ts': timestamp } }
         self._quis_cache = {}
-        # Cache TTL in seconds (avoid recomputing too frequently)
-        self._quis_cache_ttl = 30
+        # Cache TTL in seconds (increased from 30s to 300s for better performance)
+        self._quis_cache_ttl = 300
+
 
     # ---------------- Basic Statistical Analyses ----------------
 
@@ -232,9 +259,8 @@ class AnalysisService:
             # Check for NaN values and handle them
             if np.isnan(data).any():
                 logger.info("Found NaN values in data, dropping rows with NaN values for PCA")
-                # Drop rows with any NaN values
                 mask = ~np.isnan(data).any(axis=1)
-                if mask.sum() < 5:  # Need at least 5 valid rows
+                if mask.sum() < 5: 
                     logger.warning("Not enough valid rows for PCA after removing NaN values")
                     return {}
                 data = data[mask]
@@ -620,6 +646,390 @@ class AnalysisService:
             self._quis_cache[dataset_id] = {'result': quis_results, 'ts': time.time()}
         return quis_results
 
+    # ============================================================
+    # ENHANCED DATA SCIENTIST-LEVEL ANALYSIS METHODS
+    # ============================================================
+
+    def analyze_distributions_comprehensive(self, df: pl.DataFrame) -> List[Dict[str, Any]]:
+        """
+        Comprehensive distribution analysis for all numeric columns.
+        Includes normality testing, skewness, kurtosis, and distribution classification.
+        """
+        results = []
+        numeric_cols = df.select(pl.col(self.numeric_dtypes)).columns
+        
+        for col in numeric_cols:
+            try:
+                data = df[col].drop_nulls().to_numpy()
+                if len(data) < 5:
+                    continue
+                
+                result = distribution_analyzer.analyze_full(data, column_name=col)
+                results.append(result.to_dict())
+            except Exception as e:
+                logger.warning(f"Distribution analysis failed for {col}: {e}")
+        
+        return results
+
+    def find_correlations_comprehensive(self, df: pl.DataFrame, 
+                                        threshold: float = 0.3,
+                                        methods: List[str] = ["pearson", "spearman"]) -> List[Dict[str, Any]]:
+        """
+        Enhanced correlation analysis with p-values, confidence intervals, and effect sizes.
+        
+        Args:
+            df: Polars DataFrame
+            threshold: Minimum |correlation| to include (default 0.3)
+            methods: List of methods to use ("pearson", "spearman", "kendall")
+        
+        Returns:
+            List of CorrelationResult dictionaries with statistical rigor
+        """
+        results = []
+        numeric_cols = df.select(pl.col(self.numeric_dtypes)).columns
+        
+        for col1, col2 in combinations(numeric_cols, 2):
+            try:
+                x = df[col1].to_numpy()
+                y = df[col2].to_numpy()
+                
+                for method in methods:
+                    result = correlation_analyzer.analyze_correlation(
+                        x, y, col1, col2, method=method
+                    )
+                    
+                    if abs(result.correlation) >= threshold:
+                        results.append(result.to_dict())
+                        
+            except Exception as e:
+                logger.warning(f"Correlation analysis failed for {col1}-{col2}: {e}")
+        
+        # Sort by absolute correlation value
+        results.sort(key=lambda x: abs(x['correlation']), reverse=True)
+        return results
+
+    def compare_groups(self, df: pl.DataFrame, 
+                       group_col: str, 
+                       value_col: str,
+                       alpha: float = 0.05) -> Dict[str, Any]:
+        """
+        Statistical comparison between groups with proper hypothesis testing.
+        
+        Automatically selects appropriate test:
+        - 2 groups: Welch's t-test (or Mann-Whitney U if non-normal)
+        - 3+ groups: One-way ANOVA (or Kruskal-Wallis if non-normal)
+        
+        Returns effect size and confidence intervals.
+        """
+        try:
+            # Get unique groups
+            groups_df = df.select([group_col, value_col]).drop_nulls()
+            unique_groups = groups_df[group_col].unique().to_list()
+            
+            if len(unique_groups) < 2:
+                return {"error": "Need at least 2 groups for comparison"}
+            
+            # Extract group data
+            group_data = []
+            for group_val in unique_groups[:10]:  # Limit to 10 groups
+                data = groups_df.filter(pl.col(group_col) == group_val)[value_col].to_numpy()
+                if len(data) >= 3:
+                    group_data.append((group_val, data))
+            
+            if len(group_data) < 2:
+                return {"error": "Insufficient data in groups"}
+            
+            # Test normality of first group to decide on test type
+            first_group_data = group_data[0][1]
+            normality_result = hypothesis_tester.test_normality(first_group_data)
+            use_parametric = normality_result.get('is_normal', True)
+            
+            if len(group_data) == 2:
+                # Two-group comparison
+                g1_name, g1_data = group_data[0]
+                g2_name, g2_data = group_data[1]
+                
+                if use_parametric:
+                    result = hypothesis_tester.welch_t_test(g1_data, g2_data, alpha=alpha)
+                else:
+                    result = hypothesis_tester.mann_whitney_u_test(g1_data, g2_data, alpha=alpha)
+                
+                return {
+                    "comparison_type": "two_group",
+                    "groups": [str(g1_name), str(g2_name)],
+                    "test_result": result.to_dict(),
+                    "normality_assumed": use_parametric,
+                    "group_statistics": {
+                        str(g1_name): {"mean": round(float(np.mean(g1_data)), 4), "std": round(float(np.std(g1_data)), 4), "n": len(g1_data)},
+                        str(g2_name): {"mean": round(float(np.mean(g2_data)), 4), "std": round(float(np.std(g2_data)), 4), "n": len(g2_data)}
+                    }
+                }
+            else:
+                # Multi-group comparison
+                arrays = [gd[1] for gd in group_data]
+                group_names = [str(gd[0]) for gd in group_data]
+                
+                if use_parametric:
+                    result = hypothesis_tester.one_way_anova(*arrays, alpha=alpha)
+                else:
+                    result = hypothesis_tester.kruskal_wallis_test(*arrays, alpha=alpha)
+                
+                return {
+                    "comparison_type": "multi_group",
+                    "groups": group_names,
+                    "test_result": result.to_dict(),
+                    "normality_assumed": use_parametric,
+                    "group_statistics": {
+                        name: {"mean": round(float(np.mean(data)), 4), "std": round(float(np.std(data)), 4), "n": len(data)}
+                        for name, data in group_data
+                    }
+                }
+                
+        except Exception as e:
+            logger.error(f"Group comparison failed: {e}")
+            return {"error": str(e)}
+
+    def detect_anomalies_advanced(self, df: pl.DataFrame, 
+                                   method: str = "isolation_forest",
+                                   contamination: float = 0.05) -> List[Dict[str, Any]]:
+        """
+        Advanced anomaly detection using ML methods.
+        
+        Args:
+            df: Polars DataFrame
+            method: "isolation_forest", "zscore", or "mad" (robust z-score)
+            contamination: Expected proportion of outliers (for isolation_forest)
+        
+        Returns:
+            List of anomaly detection results per column
+        """
+        results = []
+        numeric_cols = df.select(pl.col(self.numeric_dtypes)).columns
+        
+        for col in numeric_cols:
+            try:
+                data = df[col].to_numpy()
+                
+                if method == "isolation_forest":
+                    result = anomaly_detector.detect_isolation_forest(
+                        data, col, contamination=contamination
+                    )
+                elif method == "zscore":
+                    result = anomaly_detector.detect_zscore(data, col, use_mad=False)
+                elif method == "mad":
+                    result = anomaly_detector.detect_zscore(data, col, use_mad=True)
+                else:
+                    continue
+                
+                if result.outlier_count > 0:
+                    results.append(result.to_dict())
+                    
+            except Exception as e:
+                logger.warning(f"Anomaly detection failed for {col}: {e}")
+        
+        return results
+
+    def analyze_time_series(self, df: pl.DataFrame, 
+                            value_col: str,
+                            time_col: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Time series analysis including trend detection and autocorrelation.
+        
+        Args:
+            df: Polars DataFrame
+            value_col: Column containing the time series values
+            time_col: Optional time column (if None, assumes data is in order)
+        
+        Returns:
+            Dict with trend analysis and autocorrelation results
+        """
+        try:
+            # Sort by time if time column provided
+            if time_col and time_col in df.columns:
+                df = df.sort(time_col)
+            
+            data = df[value_col].drop_nulls().to_numpy()
+            
+            if len(data) < 10:
+                return {"error": "Insufficient data for time series analysis (need >= 10 points)"}
+            
+            # Trend detection
+            trend_result = time_series_analyzer.detect_trend(data)
+            
+            # Autocorrelation
+            max_lag = min(20, len(data) // 4)
+            acf_result = time_series_analyzer.calculate_autocorrelation(data, max_lag=max_lag)
+            
+            return {
+                "column": value_col,
+                "n_observations": len(data),
+                "trend_analysis": trend_result,
+                "autocorrelation": acf_result
+            }
+            
+        except Exception as e:
+            logger.error(f"Time series analysis failed: {e}")
+            return {"error": str(e)}
+
+    def calculate_feature_importance(self, df: pl.DataFrame,
+                                      target_col: str,
+                                      is_classification: bool = False) -> Dict[str, Any]:
+        """
+        Calculate feature importance using Random Forest.
+        
+        Args:
+            df: Polars DataFrame
+            target_col: Target column name
+            is_classification: True for classification, False for regression
+        
+        Returns:
+            Dict with feature importances and mutual information scores
+        """
+        try:
+            numeric_cols = [c for c in df.select(pl.col(self.numeric_dtypes)).columns if c != target_col]
+            
+            if len(numeric_cols) < 1:
+                return {"error": "No numeric feature columns found"}
+            
+            # Prepare data
+            X = df.select(numeric_cols).to_numpy()
+            y = df[target_col].to_numpy()
+            
+            # Random Forest importance
+            rf_result = feature_analyzer.calculate_feature_importance_rf(
+                X, y, numeric_cols, is_classification=is_classification
+            )
+            
+            # Mutual information
+            mi_scores = feature_analyzer.calculate_mutual_information(
+                X, y, numeric_cols, is_classification=is_classification
+            )
+            
+            return {
+                "target_column": target_col,
+                "feature_columns": numeric_cols,
+                "random_forest_importance": rf_result,
+                "mutual_information": mi_scores
+            }
+            
+        except Exception as e:
+            logger.error(f"Feature importance calculation failed: {e}")
+            return {"error": str(e)}
+
+    def run_enhanced_analysis(self, df: pl.DataFrame, 
+                               depth: str = "standard") -> Dict[str, Any]:
+        """
+        Run comprehensive enhanced analysis.
+        
+        Args:
+            df: Polars DataFrame
+            depth: Analysis depth
+                - "basic": Original QUIS analysis (fast)
+                - "standard": Add hypothesis tests, distributions, correlations
+                - "advanced": Add anomaly detection, time series (slower)
+        
+        Returns:
+            Comprehensive analysis results
+        """
+        logger.info(f"Running enhanced analysis with depth={depth}")
+        
+        results = {
+            "depth": depth,
+            "row_count": len(df),
+            "column_count": len(df.columns)
+        }
+        
+        # Basic always included
+        results["distributions"] = self.analyze_distributions_comprehensive(df)
+        results["correlations"] = self.find_correlations_comprehensive(df, threshold=0.4)
+        
+        if depth in ["standard", "advanced"]:
+            # Add enhanced statistics
+            results["outliers_iqr"] = self.detect_outliers_iqr(df)
+            results["duplicate_rows"] = self.duplicate_rows(df)
+            results["missing_patterns"] = self.detect_missing_patterns(df)
+        
+        if depth == "advanced":
+            # Add ML-based anomaly detection
+            results["anomalies_ml"] = self.detect_anomalies_advanced(df, method="isolation_forest")
+            
+            # Time series analysis for temporal columns
+            temporal_cols = df.select(pl.col(self.temporal_dtypes)).columns
+            numeric_cols = df.select(pl.col(self.numeric_dtypes)).columns[:3]  # Limit to top 3
+            
+            if temporal_cols and numeric_cols:
+                time_col = temporal_cols[0]
+                results["time_series"] = {}
+                for num_col in numeric_cols:
+                    ts_result = self.analyze_time_series(df, num_col, time_col)
+                    if "error" not in ts_result:
+                        results["time_series"][num_col] = ts_result
+        
+        logger.info(f"Enhanced analysis completed: {len(results)} sections")
+        return results
+
+    async def run_enhanced_quis(self, 
+                                 df: pl.DataFrame,
+                                 dataset_id: Optional[str] = None,
+                                 llm_router=None,
+                                 use_llm_questions: bool = True) -> Dict[str, Any]:
+        """
+        Run the research-backed Enhanced QUIS analysis.
+        
+        This is the most comprehensive analysis method, featuring:
+        - LLM-driven question generation (if llm_router provided)
+        - Beam search subspace exploration
+        - Fisher's z-test for correlation comparisons
+        - Benjamini-Hochberg FDR correction
+        - Simpson's Paradox detection
+        - Insight ranking by statistical significance
+        
+        Args:
+            df: Polars DataFrame to analyze
+            dataset_id: Optional dataset ID for caching
+            llm_router: Optional LLM router for question generation
+            use_llm_questions: Whether to use LLM for questions
+        
+        Returns:
+            Complete QUIS results with FDR-corrected insights
+        """
+        # Check cache first
+        if dataset_id:
+            import time
+            cache_key = f"enhanced_quis_{dataset_id}"
+            cached = self._quis_cache.get(cache_key)
+            if cached and (time.time() - cached.get('ts', 0) < self._quis_cache_ttl):
+                logger.info(f"Returning cached Enhanced QUIS results for {dataset_id}")
+                return cached['result']
+        
+        # Run enhanced QUIS
+        results = await enhanced_quis.run_analysis(
+            df, 
+            column_metadata=None,
+            llm_router=llm_router,
+            use_llm_questions=use_llm_questions
+        )
+        
+        # Cache results
+        if dataset_id:
+            import time
+            self._quis_cache[f"enhanced_quis_{dataset_id}"] = {
+                'result': results, 
+                'ts': time.time()
+            }
+        
+        return results
+    
+    def run_enhanced_quis_sync(self, 
+                                df: pl.DataFrame,
+                                dataset_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Synchronous version of Enhanced QUIS (no LLM questions).
+        Useful for background tasks and testing.
+        """
+        return enhanced_quis.run_analysis_sync(df)
+
 
 # Singleton instance for easy import
 analysis_service = AnalysisService()
+

@@ -12,7 +12,7 @@ const useDatasetStore = create(
       isUploading: false,
       loading: false,
       error: null,
-      
+
       // Actions
       setDatasets: (datasets) => set({ datasets }),
       setSelectedDataset: (dataset) => set({ selectedDataset: dataset }),
@@ -24,17 +24,21 @@ const useDatasetStore = create(
         if (error) toast.error(error);
       },
       clearError: () => set({ error: null }),
-      
+
       // Enhanced fetch: Auto-call on init if empty
       fetchDatasets: async (force = false) => {
-        const { datasets } = get();
+        const { datasets, loading } = get();
+
+        // Prevent concurrent fetches (race condition fix)
+        if (loading) return datasets;
+
         if (!force && datasets.length > 0) return datasets;
         set({ loading: true, error: null });
         try {
           const response = await datasetAPI.getDatasets();
           const fetched = response.data.datasets || [];
           set({ datasets: fetched, loading: false });
-          
+
           // Only show success toast for manual refreshes, not automatic polling
           if (force) {
             toast.success(`Refreshed ${fetched.length} datasets`, {
@@ -42,7 +46,7 @@ const useDatasetStore = create(
               duration: 2000,
             });
           }
-          
+
           // Auto-select first if none
           if (fetched.length > 0 && !get().selectedDataset) {
             set({ selectedDataset: fetched[0] });
@@ -58,7 +62,7 @@ const useDatasetStore = create(
           return [];
         }
       },
-      
+
       // Enhanced upload with duplicate detection
       uploadDataset: async (file, name = '', description = '') => {
         const uploadToast = toast.loading('Uploading...');
@@ -68,14 +72,14 @@ const useDatasetStore = create(
           formData.append('file', file);
           if (name) formData.append('name', name);
           if (description) formData.append('description', description);
-          
+
           const response = await datasetAPI.uploadDataset(formData, (progress) => {
             set({ uploadProgress: progress });
             toast.loading(`Uploading: ${progress}%`, { id: uploadToast });
           });
-          
+
           const responseData = response.data;
-          
+
           // Check if it's a duplicate
           if (responseData.is_duplicate) {
             toast.dismiss(uploadToast);
@@ -88,29 +92,29 @@ const useDatasetStore = create(
               }
             });
             set({ isUploading: false, uploadProgress: 0 });
-            return { 
-              success: false, 
-              isDuplicate: true, 
-              existingDataset: responseData.existing_dataset 
+            return {
+              success: false,
+              isDuplicate: true,
+              existingDataset: responseData.existing_dataset
             };
           }
-          
+
           // New dataset uploaded successfully
           const { dataset_id } = responseData;
-          
+
           // Fetch the full dataset data
           const datasetResponse = await datasetAPI.getDataset(dataset_id);
           const newDataset = datasetResponse.data;
-          
+
           set((state) => ({
             datasets: [newDataset, ...state.datasets],
             isUploading: false,
             uploadProgress: 100,
           }));
-          
+
           toast.success('Dataset uploaded successfully!', { id: uploadToast });
           return { success: true, dataset: newDataset };
-          
+
         } catch (error) {
           const errMsg = error.response?.data?.detail || 'Upload failed';
           set({ error: errMsg, isUploading: false, uploadProgress: 0 });
@@ -118,7 +122,7 @@ const useDatasetStore = create(
           return { success: false, error: errMsg };
         }
       },
-      
+
       deleteDataset: async (datasetId) => {
         // Validate dataset ID
         if (!datasetId) {
@@ -146,7 +150,7 @@ const useDatasetStore = create(
           return { success: false, error: errMsg };
         }
       },
-      
+
       getDataset: async (datasetId) => {
         set({ loading: true, error: null });
         try {
@@ -162,7 +166,7 @@ const useDatasetStore = create(
           return { success: false, error: errMsg };
         }
       },
-      
+
       addDataset: (dataset) => {
         set((state) => ({ datasets: [dataset, ...state.datasets] }));
         toast.success('Dataset added');
@@ -171,14 +175,14 @@ const useDatasetStore = create(
         set((state) => ({ datasets: state.datasets.filter(d => d.id !== datasetId) }));
         toast.success('Dataset removed');
       },
-      
+
       reprocessDataset: async (datasetId) => {
         if (!datasetId) {
           const errMsg = 'Dataset ID is required for reprocessing';
           toast.error(errMsg);
           return { success: false, error: errMsg };
         }
-        
+
         const reprocessToast = toast.loading('Reprocessing dataset...');
         try {
           console.log('Store: Reprocessing dataset with ID:', datasetId);
