@@ -1,14 +1,17 @@
 /**
- * DashboardHeader Component
+ * DashboardHeader Component - Enterprise Edition
  * 
- * Displays dashboard title, dataset metadata, domain info, and action buttons.
- * Extracted from Dashboard.jsx to improve component organization.
+ * Professional executive-style header for B2B analytics dashboard.
+ * Focus on dataset context and metadata, not casual greetings.
  */
 
 import React from 'react';
-import { useAuth } from '../../../store/authStore';
 import { motion } from 'framer-motion';
-import { Sparkles, RefreshCw, Loader2 } from 'lucide-react';
+import {
+    Database, RefreshCw, Loader2, Clock,
+    LayoutGrid, CheckCircle, FileSpreadsheet,
+    Columns, Rows
+} from 'lucide-react';
 import { Button } from '../../../components/Button';
 import DomainBadge from '../../../components/DomainBadge';
 
@@ -21,108 +24,143 @@ const DashboardHeader = ({
     onRegenerate,
     MAX_REDESIGNS
 }) => {
-    // Get user name from auth store
-    const { user } = useAuth ? useAuth() : { user: null };
-
-    // Time-of-day greeting
-    const getGreeting = () => {
-        const hour = new Date().getHours();
-        if (hour < 12) return 'Good morning';
-        if (hour < 18) return 'Good afternoon';
-        return 'Good evening';
+    // Format last updated time
+    const formatTime = () => {
+        return new Date().toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit'
+        });
     };
 
-    const userName = user?.username || user?.full_name || 'there';
+    // Format number with comma separators
+    const formatNumber = (num) => {
+        if (!num) return '0';
+        return new Intl.NumberFormat('en-US').format(num);
+    };
 
     return (
-        <motion.div
-            initial={{ opacity: 0, y: -20 }}
+        <motion.header
+            initial={{ opacity: 0, y: -12 }}
             animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col lg:flex-row gap-6 items-start lg:items-center justify-between"
+            transition={{ duration: 0.3 }}
+            className="border-b border-slate-800/60 pb-6 mb-6"
         >
-            <div className="space-y-2">
-                {/* Personalized Greeting */}
-                <div className="text-2xl font-semibold text-emerald-300 mb-1">
-                    {getGreeting()}, {userName}!
-                </div>
-                {/* <h1 className="text-4xl font-bold text-white tracking-tight flex items-center gap-3">
-                    <Sparkles className="w-10 h-10 text-emerald-400" />
-                    DataSage AI
-                </h1> */}
-                <p className="text-slate-400 text-lg">
-                    {selectedDataset?.name ? (
-                        <>
-                            Intelligent analysis of: <span className="text-slate-200 font-medium">{selectedDataset.name}</span>
-                            <span className="ml-4 text-sm bg-slate-800/50 px-3 py-1 rounded-full border border-slate-700">
-                                {selectedDataset.row_count || 0} rows • {selectedDataset.column_count || 0} columns
-                            </span>
-                            {selectedDataset.metadata?.data_quality?.data_cleaning_applied && (
-                                <span className="ml-2 text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded-full border border-green-500/30">
-                                    ✨ Data Cleaned
-                                </span>
-                            )}
-                        </>
-                    ) : (
-                        <span className="text-slate-300 font-medium">No data has been uploaded yet</span>
-                    )}
-                </p>
-
-                {/* v4.0 Enhanced Metadata Display */}
-                {selectedDataset && (domainInfo || qualityMetrics) && (
-                    <div className="flex flex-wrap items-center gap-3 mt-3">
-                        {domainInfo && (
-                            <DomainBadge
-                                domain={domainInfo.domain}
-                                confidence={domainInfo.confidence}
-                                method={domainInfo.method}
-                            />
-                        )}
+            {/* Main Header Row */}
+            <div className="flex flex-col lg:flex-row gap-4 lg:items-center justify-between">
+                {/* Left: Dataset Info */}
+                <div className="space-y-3">
+                    {/* Dataset Title */}
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center">
+                            <FileSpreadsheet className="w-5 h-5 text-slate-400" />
+                        </div>
+                        <div>
+                            <h1 className="text-xl font-semibold text-white tracking-tight">
+                                {selectedDataset?.name || 'Dataset Analytics'}
+                            </h1>
+                            <p className="text-sm text-slate-500">
+                                Analytics Dashboard
+                            </p>
+                        </div>
                     </div>
-                )}
-            </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
-                <div className="text-right sm:text-left">
-                    <p className="text-sm text-slate-500">Last updated</p>
-                    <p className="text-slate-200 font-medium">
-                        {new Date().toLocaleTimeString()}
-                    </p>
+                    {/* Metadata Badges */}
+                    {selectedDataset && (
+                        <div className="flex flex-wrap items-center gap-2">
+                            {/* Row Count */}
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/60 border border-slate-700/50 rounded-md text-xs">
+                                <Rows className="w-3 h-3 text-slate-500" />
+                                <span className="text-slate-400">
+                                    {formatNumber(selectedDataset.row_count)} rows
+                                </span>
+                            </div>
+
+                            {/* Column Count */}
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/60 border border-slate-700/50 rounded-md text-xs">
+                                <Columns className="w-3 h-3 text-slate-500" />
+                                <span className="text-slate-400">
+                                    {formatNumber(selectedDataset.column_count)} columns
+                                </span>
+                            </div>
+
+                            {/* Domain Badge */}
+                            {domainInfo && (
+                                <DomainBadge
+                                    domain={domainInfo.domain}
+                                    confidence={domainInfo.confidence}
+                                    method={domainInfo.method}
+                                />
+                            )}
+
+                            {/* Data Cleaned Indicator */}
+                            {selectedDataset.metadata?.data_quality?.data_cleaning_applied && (
+                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/30 rounded-md text-xs">
+                                    <CheckCircle className="w-3 h-3 text-emerald-500" />
+                                    <span className="text-emerald-400">Cleaned</span>
+                                </div>
+                            )}
+
+                            {/* Processed Status */}
+                            {selectedDataset.is_processed && (
+                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-500/10 border border-blue-500/30 rounded-md text-xs">
+                                    <LayoutGrid className="w-3 h-3 text-blue-400" />
+                                    <span className="text-blue-400">Processed</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
 
-                <div className="flex items-center gap-3">
+                {/* Right: Actions & Timestamp */}
+                <div className="flex items-center gap-4">
+                    {/* Last Updated */}
+                    <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-500">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>Updated {formatTime()}</span>
+                    </div>
+
+                    {/* Redesign Button */}
                     <div className="flex items-center gap-2">
                         <Button
                             onClick={onRegenerate}
                             disabled={layoutLoading || !selectedDataset?.is_processed || redesignCount >= MAX_REDESIGNS}
-                            className={`${redesignCount >= MAX_REDESIGNS
-                                    ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                                } border border-slate-700 hover:border-slate-600 transition-all duration-200 shadow-lg`}
-                            title={`Ask AI to redesign this dashboard with fresh analysis (${redesignCount}/${MAX_REDESIGNS} used)`}
+                            className={`
+                                px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200
+                                ${redesignCount >= MAX_REDESIGNS
+                                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                                    : 'bg-slate-800 hover:bg-slate-700 text-white border border-slate-600 hover:border-slate-500 shadow-sm'
+                                }
+                            `}
+                            title={`Regenerate dashboard layout (${redesignCount}/${MAX_REDESIGNS} used)`}
                         >
                             {layoutLoading ? (
                                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                             ) : (
                                 <RefreshCw className="w-4 h-4 mr-2" />
                             )}
-                            {layoutLoading ? 'Redesigning...' : 'Redesign'}
+                            {layoutLoading ? 'Regenerating...' : 'Regenerate'}
                         </Button>
 
+                        {/* Usage Counter */}
                         {redesignCount > 0 && (
-                            <div className={`px-3 py-1 rounded-lg text-xs font-medium ${redesignCount >= MAX_REDESIGNS
-                                    ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                            <div className={`
+                                px-2.5 py-1 rounded-md text-xs font-medium tabular-nums
+                                ${redesignCount >= MAX_REDESIGNS
+                                    ? 'bg-red-500/15 text-red-400 border border-red-500/30'
                                     : redesignCount >= MAX_REDESIGNS - 1
-                                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                                        : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                                }`}>
+                                        ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                                        : 'bg-slate-800 text-slate-400 border border-slate-700'
+                                }
+                            `}>
                                 {redesignCount}/{MAX_REDESIGNS}
                             </div>
                         )}
                     </div>
                 </div>
             </div>
-        </motion.div>
+        </motion.header>
     );
 };
 
 export default DashboardHeader;
+

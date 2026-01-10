@@ -70,6 +70,12 @@ Use headers and organized sections:
 - Use the exact column names from the dataset context provided
 - **If the data does not contain enough information to answer confidently, explicitly state the limitation and suggest what additional data would help**
   - Example: "The dataset doesn't include customer demographics, so I can't analyze purchasing patterns by age group. Adding age/gender columns would enable this analysis."
+
+## CRITICAL OUTPUT FORMAT:
+- NEVER return JSON or code blocks unless explicitly asked for code
+- ALWAYS respond in plain text/markdown format
+- Do NOT wrap your response in {"response": "..."} or any JSON structure
+- Just write your response directly as readable text
 """
 
 # Complexity-specific additions to system prompt

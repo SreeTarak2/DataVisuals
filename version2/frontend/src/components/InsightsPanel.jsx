@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { 
-  TrendingUp, TrendingDown, Target, Lightbulb, AlertTriangle, 
+import {
+  TrendingUp, TrendingDown, Target, Lightbulb, AlertTriangle,
   CheckCircle, BarChart3, PieChart, LineChart, Activity,
   DollarSign, Users, Zap, Brain, Search, Filter
 } from 'lucide-react';
@@ -55,7 +55,7 @@ const InsightsPanel = ({ insights, prioritizedColumns, datasetInfo }) => {
               <p className="text-xs text-slate-400">QUIS & Subspace Search Results</p>
             </div>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <h4 className="text-sm font-semibold text-blue-300 mb-3">Prioritized Columns</h4>
@@ -73,7 +73,7 @@ const InsightsPanel = ({ insights, prioritizedColumns, datasetInfo }) => {
                 ))}
               </div>
             </div>
-            
+
             <div>
               <h4 className="text-sm font-semibold text-green-300 mb-3">Key Insights</h4>
               <div className="space-y-2">
@@ -108,12 +108,12 @@ const InsightsPanel = ({ insights, prioritizedColumns, datasetInfo }) => {
               <p className="text-xs text-slate-400">Automated analysis and recommendations</p>
             </div>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {insights.map((insight, index) => {
               const IconComponent = getInsightIcon(insight.type);
               const colorClass = getInsightColor(insight.type);
-              
+
               return (
                 <div key={index} className="bg-slate-800/50 rounded-lg p-4">
                   <div className="flex items-start gap-3">
@@ -137,7 +137,7 @@ const InsightsPanel = ({ insights, prioritizedColumns, datasetInfo }) => {
         </motion.div>
       )}
 
-      {/* Chart Explanations */}
+      {/* Dashboard Usage Guide - Dynamic, not dataset-specific */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -148,39 +148,39 @@ const InsightsPanel = ({ insights, prioritizedColumns, datasetInfo }) => {
             <BarChart3 className="w-5 h-5 text-purple-400" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Dashboard Explanation</h3>
-            <p className="text-xs text-slate-400">Why these visualizations matter</p>
+            <h3 className="text-lg font-bold text-white">How to Use This Dashboard</h3>
+            <p className="text-xs text-slate-400">Getting the most from your data</p>
           </div>
         </div>
-        
+
         <div className="space-y-4">
           <div className="bg-slate-800/50 rounded-lg p-4">
             <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
               <BarChart3 className="w-4 h-4 text-blue-400" />
-              Price by Model Analysis
+              Understanding Your Charts
             </h4>
             <p className="text-sm text-slate-300 mb-2">
-              This bar chart reveals the pricing strategy across different BMW models, helping identify:
+              Each visualization is automatically generated based on your data's structure:
             </p>
             <ul className="text-xs text-slate-400 space-y-1 ml-4">
-              <li>• Which models command premium prices</li>
-              <li>• Market positioning of each series</li>
-              <li>• Value propositions for different segments</li>
+              <li>• Bar charts compare values across categories</li>
+              <li>• Line charts show trends over time</li>
+              <li>• Pie charts display proportional distributions</li>
             </ul>
           </div>
-          
+
           <div className="bg-slate-800/50 rounded-lg p-4">
             <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
               <PieChart className="w-4 h-4 text-green-400" />
-              Fuel Type Distribution
+              Interacting with Data
             </h4>
             <p className="text-sm text-slate-300 mb-2">
-              This pie chart shows the fuel type composition, indicating:
+              Get more details by interacting with the visualizations:
             </p>
             <ul className="text-xs text-slate-400 space-y-1 ml-4">
-              <li>• Market preference for fuel types</li>
-              <li>• Environmental consciousness trends</li>
-              <li>• Technology adoption patterns</li>
+              <li>• Hover over data points for detailed values</li>
+              <li>• Use the regenerate button for alternative views</li>
+              <li>• Check KPI cards for key metrics summary</li>
             </ul>
           </div>
         </div>

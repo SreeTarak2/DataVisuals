@@ -21,6 +21,9 @@ import polars as pl
 from db.database import get_database
 from services.llm_router import llm_router
 from services.datasets.dataset_loader import load_dataset, create_context_string
+from services.datasets.faiss_vector_service import faiss_vector_service
+from services.rag.chunk_service import chunk_service
+from services.rag.reranker_service import reranker_service
 from services.charts.hydrate import hydrate_chart, hydrate_kpi, hydrate_table
 from services.charts.column_matcher import column_matcher
 from services.conversations.conversation_service import load_or_create_conversation, save_conversation
@@ -173,6 +176,67 @@ class AIService:
         return self._db
 
     # -----------------------------------------------------------
+    # RAG CONTEXT RETRIEVAL
+    # -----------------------------------------------------------
+    async def _get_rag_context(
+        self, 
+        query: str, 
+        dataset_id: str, 
+        user_id: str, 
+        metadata: Dict[str, Any]
+    ) -> str:
+        """
+        Get context for LLM using RAG vector retrieval.
+        Falls back to full context string if vector search unavailable.
+        
+        Args:
+            query: User's query for semantic matching
+            dataset_id: Dataset to search in
+            user_id: User for access control
+            metadata: Full dataset metadata for fallback
+            
+        Returns:
+            Context string for LLM prompt
+        """
+        try:
+            # Try vector retrieval
+            if faiss_vector_service.enable_vector_search:
+                chunks = await faiss_vector_service.search_relevant_chunks(
+                    query=query,
+                    dataset_id=dataset_id,
+                    user_id=user_id,
+                    k=10,  # Retrieve more for re-ranking
+                    score_threshold=0.3  # Lower threshold, reranker will filter
+                )
+                
+                if chunks:
+                    # Apply re-ranking for better relevance
+                    reranked_chunks = reranker_service.rerank(
+                        query=query,
+                        chunks=chunks,
+                        top_k=5,
+                        score_threshold=0.4,
+                        use_diversity=True
+                    )
+                    
+                    if reranked_chunks:
+                        context = faiss_vector_service.assemble_context_from_chunks(
+                            reranked_chunks, 
+                            max_tokens=2000
+                        )
+                        logger.info(f"RAG: Retrieved {len(chunks)} -> reranked to {len(reranked_chunks)} chunks")
+                        return context
+                    
+                logger.debug("RAG: No chunks after re-ranking, falling back to full context")
+            
+            # Fallback to full context
+            return create_context_string(metadata)
+            
+        except Exception as e:
+            logger.warning(f"RAG retrieval failed, using fallback: {e}")
+            return create_context_string(metadata)
+
+    # -----------------------------------------------------------
     # CHAT PROCESSING PIPELINE
     # -----------------------------------------------------------
     async def process_chat_message(
@@ -229,22 +293,7 @@ class AIService:
         query = sanitized_query
         query_lower = query.lower()
 
-        off_topic_triggers = [
-            "hello", "hi ", "hey ", "good morning", "good evening", "how are you",
-            "thank you", "thanks", "who is", "what is the capital", "prime minister",
-            "president", "weather", "joke", "tell me a", "what time", "news", "stock",
-            "who are you", "what can you do", "help me", "how do i", "bye", "goodbye"
-        ]
-
-        if any(trigger in query_lower for trigger in off_topic_triggers) or len(query_lower) < 5:
-            return {
-                "response_text": "I'm a specialized data analytics assistant. I can help with trends, charts, forecasts, correlations, or insights from your dataset.\n\n"
-                               "Try asking: \"Show top products by revenue\" or \"What is the sales trend over time?\"",
-                "chart_config": None,
-                "conversation_id": conversation_id
-            }
-
-        conv = await load_or_create_conversation(conversation_id, user_id, dataset_id)
+        # Load or create conversation
         messages = conv.get("messages", [])
         messages.append({"role": "user", "content": query})
 
@@ -256,7 +305,8 @@ class AIService:
         if not metadata:
             raise HTTPException(409, "Dataset is still being processed.")
 
-        dataset_context = create_context_string(metadata)
+        # RAG: Try vector retrieval first, fallback to full context
+        dataset_context = await self._get_rag_context(query, dataset_id, user_id, metadata)
 
         enhanced_query = await rewrite_query(query, dataset_context)
         if enhanced_query != query:

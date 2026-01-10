@@ -113,22 +113,22 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
               </p>
             ) : (
               /* AI messages - render markdown */
-              <div className="prose prose-sm prose-invert max-w-none [&>*:last-child]:mb-0">
+              <div className="prose prose-sm prose-invert max-w-none [&>*:last-child]:mb-0 overflow-hidden">
                 <ReactMarkdown
                   components={{
-                    p: ({ node, ...props }) => <p className="mb-2 last:mb-0 leading-relaxed text-slate-100" {...props} />,
+                    p: ({ node, ...props }) => <p className="mb-2 last:mb-0 leading-relaxed text-slate-100 break-words" {...props} />,
                     ul: ({ node, ...props }) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
                     ol: ({ node, ...props }) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
-                    li: ({ node, ...props }) => <li className="leading-relaxed" {...props} />,
+                    li: ({ node, ...props }) => <li className="leading-relaxed break-words" {...props} />,
                     code: ({ node, inline, ...props }) =>
                       inline ?
-                        <code className="bg-slate-900/50 px-1.5 py-0.5 rounded text-xs text-cyan-300 font-mono" {...props} /> :
-                        <code className="block bg-slate-900 p-3 rounded-lg text-xs overflow-x-auto font-mono border border-slate-700" {...props} />,
+                        <code className="bg-slate-900/50 px-1.5 py-0.5 rounded text-xs text-cyan-300 font-mono break-words" {...props} /> :
+                        <code className="block bg-slate-900 p-3 rounded-lg text-xs font-mono border border-slate-700 overflow-x-auto max-w-full whitespace-pre-wrap break-words" {...props} />,
                     strong: ({ node, ...props }) => <strong className="font-bold text-blue-300" {...props} />,
                     em: ({ node, ...props }) => <em className="italic text-purple-300" {...props} />,
-                    h1: ({ node, ...props }) => <h1 className="text-lg font-bold mb-2 text-cyan-300" {...props} />,
-                    h2: ({ node, ...props }) => <h2 className="text-base font-bold mb-2 text-cyan-300" {...props} />,
-                    h3: ({ node, ...props }) => <h3 className="text-sm font-bold mb-1 text-cyan-300" {...props} />,
+                    h1: ({ node, ...props }) => <h1 className="text-lg font-bold mb-2 text-cyan-300 break-words" {...props} />,
+                    h2: ({ node, ...props }) => <h2 className="text-base font-bold mb-2 text-cyan-300 break-words" {...props} />,
+                    h3: ({ node, ...props }) => <h3 className="text-sm font-bold mb-1 text-cyan-300 break-words" {...props} />,
                   }}
                 >
                   {msg.content}
@@ -207,7 +207,7 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
                 <Pencil size={14} />
               </button>
               <button
-                onClick={() => handleRerunMessage(msg.content)}
+                onClick={() => handleRerunMessage(msg.id)}
                 className="p-1.5 text-slate-500 hover:text-green-400 hover:bg-slate-800 rounded-lg transition-all"
                 title="Rerun this query"
               >
@@ -248,7 +248,8 @@ const Chat = () => {
     cancelStreaming,
     currentConversationId,
     setLoading,
-    editMessage
+    editMessage,
+    rerunMessage
   } = useChatStore();
   const { selectedDataset, setSelectedDataset, datasets } = useDatasetStore();
   const [inputMessage, setInputMessage] = useState('');
@@ -445,8 +446,41 @@ const Chat = () => {
     }
   };
 
-  const handleRerunMessage = (messageContent) => {
-    handleSendMessage(null, messageContent);
+  // Re-execute a query without adding a new user message (for edit/rerun)
+  const reExecuteQuery = async (message, convId) => {
+    if (!message || isAITyping || !selectedDataset?.id) return;
+
+    // Try WebSocket streaming first
+    if (isConnected) {
+      console.log('Re-executing via WebSocket (streaming)');
+      const msgId = `msg_${Date.now()}_ai`;
+      startStreaming(msgId);
+
+      wsSendMessage({
+        message,
+        datasetId: selectedDataset.id,
+        conversationId: convId,
+        streaming: true
+      });
+    } else {
+      // Fallback to HTTP API
+      console.log('WebSocket not connected, using HTTP API');
+      const result = await sendMessage(message, selectedDataset.id, convId);
+      if (result && !result.success) {
+        toast.error(result.error);
+      }
+    }
+  };
+
+  const handleRerunMessage = (messageId) => {
+    const result = rerunMessage(messageId, currentChatId);
+
+    if (result?.success) {
+      // Re-send the message content to get new AI response
+      handleSendMessage(null, result.content);
+    } else {
+      toast.error('Failed to rerun message');
+    }
   };
 
   // Edit message handlers
@@ -476,8 +510,8 @@ const Chat = () => {
       // Clear edit state
       cancelEdit();
 
-      // Re-send the edited message to get new AI response
-      handleSendMessage(null, result.newContent);
+      // Re-execute the edited message without adding new user message
+      reExecuteQuery(result.newContent, result.conversationId);
     } else {
       toast.error('Failed to edit message');
     }
@@ -593,7 +627,7 @@ const Chat = () => {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto relative">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden relative">
         <div className="mx-auto max-w-3xl pt-6 pb-28">
           <AnimatePresence mode="popLayout" initial={false}>
             {messages.map((msg, index) => {

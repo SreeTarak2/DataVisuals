@@ -59,14 +59,17 @@ const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: 0.1 }}
           >
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-cyan-500 flex items-center justify-center shrink-0">
-              <Sparkles className="w-6 h-6 text-primary-foreground" />
-            </div>
+            <img 
+              src="/logo.png" 
+              alt="DataSage Logo" 
+              className="w-10 h-10 rounded-xl object-cover shrink-0"
+            />
             <motion.span
               className="text-xl font-bold gradient-text whitespace-nowrap"
               initial={{ opacity: 0, width: 0 }}
               animate={{ opacity: isOpen || onHover ? 1 : 0, width: isOpen || onHover ? 'auto' : 0 }}
               transition={{ delay: 0.2 }}
+              style={{ fontFamily: "'Rajdhani', sans-serif" }}
             >
               DataSage
             </motion.span>

@@ -338,4 +338,262 @@ class FAISSVectorService:
         self._lazy_rebuild_dataset_index()
         self._lazy_rebuild_query_history_index()
 
+    # =========================================================================
+    # CHUNK-LEVEL VECTOR INDEXING FOR RAG
+    # =========================================================================
+    
+    async def index_dataset_chunks(
+        self, 
+        dataset_id: str, 
+        chunks: List[Dict[str, Any]], 
+        user_id: str
+    ) -> bool:
+        """
+        Index semantic chunks for a dataset for RAG retrieval.
+        
+        Args:
+            dataset_id: Unique dataset identifier
+            chunks: List of chunk dicts from ChunkService
+            user_id: Owner user ID for filtering
+            
+        Returns:
+            True if indexing succeeded
+        """
+        if not self.enable_vector_search or not self.embedding_model:
+            logger.warning("Vector search disabled, skipping chunk indexing")
+            return False
+        
+        if not chunks:
+            logger.warning(f"No chunks to index for dataset {dataset_id}")
+            return False
+        
+        try:
+            # Initialize chunk index if not exists
+            if not hasattr(self, 'chunk_index') or self.chunk_index is None:
+                self._initialize_chunk_index()
+            
+            # Extract text content for embedding
+            texts = [chunk.get("content", "") for chunk in chunks]
+            
+            # Compute embeddings (outside lock for performance)
+            embeddings = np.array(
+                self.embedding_model.embed_documents(texts)
+            ).astype('float32')
+            
+            # Lock for index modification
+            async with self._dataset_index_lock:
+                for i, chunk in enumerate(chunks):
+                    self.chunk_index.add(embeddings[i:i+1])
+                    index_id = self.chunk_index.ntotal - 1
+                    
+                    self.chunk_metadata[index_id] = {
+                        "chunk_id": chunk.get("chunk_id"),
+                        "dataset_id": dataset_id,
+                        "user_id": user_id,
+                        "chunk_type": chunk.get("chunk_type"),
+                        "content": chunk.get("content", ""),
+                        "metadata": chunk.get("metadata", {}),
+                        "indexed_at": datetime.now().isoformat()
+                    }
+                
+                self._persist_chunk_index()
+            
+            logger.info(f"Indexed {len(chunks)} chunks for dataset {dataset_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to index chunks for dataset {dataset_id}: {e}")
+            return False
+    
+    async def search_relevant_chunks(
+        self, 
+        query: str, 
+        dataset_id: str, 
+        user_id: str,
+        k: int = 5,
+        score_threshold: float = 0.5,
+        chunk_types: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for relevant chunks using semantic similarity.
+        
+        Args:
+            query: User query to match against chunks
+            dataset_id: Filter to specific dataset
+            user_id: Filter to user's datasets
+            k: Number of results to return
+            score_threshold: Minimum similarity score (0-1)
+            chunk_types: Optional filter for chunk types
+            
+        Returns:
+            List of matching chunks with similarity scores
+        """
+        if not self.enable_vector_search or not self.embedding_model:
+            return []
+        
+        try:
+            # Initialize chunk index if not exists
+            if not hasattr(self, 'chunk_index') or self.chunk_index is None:
+                self._initialize_chunk_index()
+            
+            if self.chunk_index.ntotal == 0:
+                logger.debug(f"Chunk index is empty, no results for query")
+                return []
+            
+            # Compute query embedding
+            query_embedding = np.array(
+                [self.embedding_model.embed_query(query)]
+            ).astype('float32')
+            
+            # Search with extra results for filtering
+            search_k = min(k * 3, self.chunk_index.ntotal)
+            distances, indices = self.chunk_index.search(query_embedding, search_k)
+            
+            results = []
+            for i, idx in enumerate(indices[0]):
+                if idx < 0 or idx >= len(self.chunk_metadata):
+                    continue
+                    
+                metadata = self.chunk_metadata.get(idx)
+                if not metadata:
+                    continue
+                
+                # Filter by dataset and user
+                if metadata.get("dataset_id") != dataset_id:
+                    continue
+                if metadata.get("user_id") != user_id:
+                    continue
+                
+                # Filter by chunk type if specified
+                if chunk_types and metadata.get("chunk_type") not in chunk_types:
+                    continue
+                
+                # Filter by score threshold
+                score = float(distances[0][i])
+                if score < score_threshold:
+                    continue
+                
+                results.append({
+                    "chunk_id": metadata.get("chunk_id"),
+                    "chunk_type": metadata.get("chunk_type"),
+                    "content": metadata.get("content"),
+                    "metadata": metadata.get("metadata", {}),
+                    "similarity": score
+                })
+                
+                if len(results) >= k:
+                    break
+            
+            logger.debug(f"Found {len(results)} relevant chunks for query: '{query[:50]}...'")
+            return sorted(results, key=lambda x: x["similarity"], reverse=True)
+            
+        except Exception as e:
+            logger.error(f"Failed to search chunks: {e}")
+            return []
+    
+    async def delete_dataset_chunks(self, dataset_id: str, user_id: str) -> bool:
+        """Delete all chunks for a dataset (for re-indexing)."""
+        if not self.enable_vector_search:
+            return False
+        
+        try:
+            if not hasattr(self, 'chunk_metadata'):
+                return True
+            
+            # Remove from metadata (lazy rebuild will handle index)
+            indices_to_remove = [
+                idx for idx, meta in self.chunk_metadata.items()
+                if meta.get("dataset_id") == dataset_id and meta.get("user_id") == user_id
+            ]
+            
+            for idx in indices_to_remove:
+                del self.chunk_metadata[idx]
+            
+            self._chunk_dirty = True
+            logger.info(f"Marked {len(indices_to_remove)} chunks for deletion from dataset {dataset_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to delete chunks for dataset {dataset_id}: {e}")
+            return False
+    
+    def _initialize_chunk_index(self):
+        """Initialize or load chunk index."""
+        try:
+            chunk_index_path = os.path.join(self.vector_db_path, "chunk_index.faiss")
+            chunk_metadata_path = os.path.join(self.vector_db_path, "chunk_metadata.pkl")
+            
+            if os.path.exists(chunk_index_path) and os.path.exists(chunk_metadata_path):
+                self.chunk_index = faiss.read_index(chunk_index_path)
+                with open(chunk_metadata_path, 'rb') as f:
+                    self.chunk_metadata = pickle.load(f)
+                logger.info(f"Loaded chunk index with {self.chunk_index.ntotal} vectors")
+            else:
+                self.chunk_index = faiss.IndexFlatIP(self.embedding_dimension)
+                self.chunk_metadata = {}
+                logger.info("Created new chunk index")
+            
+            self._chunk_dirty = False
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize chunk index: {e}")
+            self.chunk_index = faiss.IndexFlatIP(self.embedding_dimension)
+            self.chunk_metadata = {}
+    
+    def _persist_chunk_index(self):
+        """Persist chunk index to disk."""
+        try:
+            chunk_index_path = os.path.join(self.vector_db_path, "chunk_index.faiss")
+            chunk_metadata_path = os.path.join(self.vector_db_path, "chunk_metadata.pkl")
+            
+            faiss.write_index(self.chunk_index, chunk_index_path)
+            with open(chunk_metadata_path, 'wb') as f:
+                pickle.dump(self.chunk_metadata, f)
+                
+            logger.debug("Chunk index persisted to disk")
+        except Exception as e:
+            logger.error(f"Error persisting chunk index: {e}")
+    
+    def assemble_context_from_chunks(
+        self, 
+        chunks: List[Dict[str, Any]], 
+        max_tokens: int = 2000
+    ) -> str:
+        """
+        Assemble retrieved chunks into a context string for LLM.
+        
+        Args:
+            chunks: Retrieved chunks with content
+            max_tokens: Approximate token limit (1 token ≈ 4 chars)
+            
+        Returns:
+            Assembled context string
+        """
+        max_chars = max_tokens * 4
+        context_parts = []
+        current_chars = 0
+        
+        # Prioritize by chunk type
+        type_priority = ["schema", "statistics", "column", "relationship", "sample"]
+        sorted_chunks = sorted(
+            chunks, 
+            key=lambda c: (type_priority.index(c.get("chunk_type", "sample")) 
+                          if c.get("chunk_type") in type_priority else 99)
+        )
+        
+        for chunk in sorted_chunks:
+            content = chunk.get("content", "")
+            if current_chars + len(content) > max_chars:
+                # Truncate last chunk if needed
+                remaining = max_chars - current_chars
+                if remaining > 100:
+                    context_parts.append(content[:remaining] + "...")
+                break
+            
+            context_parts.append(content)
+            current_chars += len(content) + 2  # +2 for separator
+        
+        return "\n\n".join(context_parts)
+
+
 faiss_vector_service = FAISSVectorService()

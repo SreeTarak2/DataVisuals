@@ -1,313 +1,234 @@
-import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { X, Search, MessageSquare, Clock, Trash2, MoreVertical, Database, ExternalLink, CheckCircle } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+"use client"
+
+import * as React from "react"
+import { Search, MessageSquare, Trash2, Calendar, ExternalLink } from "lucide-react"
 import { useNavigate } from 'react-router-dom';
-import GlassCard from './common/GlassCard';
-import useDatasetStore from '../store/datasetStore';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
+import { DeleteConfirmDialog } from "@/components/ui/delete-confirm-dialog"
+import { cn } from "@/lib/utils"
 import useChatStore from '../store/chatStore';
+import useDatasetStore from '../store/datasetStore';
 import { toast } from 'react-hot-toast';
 
-const ChatHistoryModal = ({ isOpen, onClose }) => {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedChats, setSelectedChats] = useState(new Set());
-  const [loading, setLoading] = useState(false);
-  const { datasets } = useDatasetStore();
-  const { conversations, clearConversation, setCurrentConversation, loadConversations, startNewChat } = useChatStore();
+export default function ChatHistoryModal({ isOpen, onClose }) {
+  const [search, setSearch] = React.useState("")
+  const [activeId, setActiveId] = React.useState(null)
+  const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false)
+  const [chatToDelete, setChatToDelete] = React.useState(null)
   const navigate = useNavigate();
-  
-  // Load conversations when modal opens
-  useEffect(() => {
+
+  const { conversations, clearConversation, setCurrentConversation, loadConversations } = useChatStore();
+  const { datasets } = useDatasetStore();
+
+  // Load conversations on mount or when opened
+  React.useEffect(() => {
     if (isOpen) {
-      setLoading(true);
-      loadConversations().finally(() => setLoading(false));
+      loadConversations();
     }
   }, [isOpen, loadConversations]);
-  
-  // Get real chat history from the chat store
-  const chatHistory = Object.values(conversations).map(conversation => {
-    const dataset = datasets.find(d => d.id === conversation.datasetId);
-    const messages = conversation.messages || [];
-    const lastMessage = messages[messages.length - 1];
-    
-    return {
-      id: conversation.id,
-      title: `Chat with ${conversation.datasetName || dataset?.name || 'Unknown Dataset'}`,
-      timestamp: conversation.createdAt,
-      messageCount: messages.length,
-      lastMessage: lastMessage?.content || 'No messages yet',
-      datasetId: conversation.datasetId,
-      datasetName: conversation.datasetName || dataset?.name || dataset?.filename || 'Unknown Dataset'
-    };
-  }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)); // Sort by newest first
 
-  const filteredChats = chatHistory.filter(chat =>
-    chat.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    chat.datasetName.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Generate a smart title from the first user message
+  const generateTitle = (messages, datasetName) => {
+    // Find the first user message
+    const firstUserMessage = messages.find(m => m.role === 'user');
 
-  const handleSelectChat = (chatId, event) => {
-    // If clicking on the main area (not on selection checkbox), open the conversation
-    if (event.target.closest('.chat-open-area')) {
-      handleOpenChat(chatId);
-      return;
+    if (firstUserMessage?.content && typeof firstUserMessage.content === 'string') {
+      let title = firstUserMessage.content.trim();
+
+      // Remove common prefixes
+      title = title.replace(/^(show me|can you|please|i want to|help me|what is|what are|how do|tell me)/i, '').trim();
+
+      // Capitalize first letter
+      title = title.charAt(0).toUpperCase() + title.slice(1);
+
+      // Truncate to reasonable length
+      if (title.length > 50) {
+        title = title.substring(0, 47) + '...';
+      }
+
+      return title || datasetName || 'New Chat';
     }
-    
-    // Otherwise, handle selection for deletion
-    const newSelected = new Set(selectedChats);
-    if (newSelected.has(chatId)) {
-      newSelected.delete(chatId);
-    } else {
-      newSelected.add(chatId);
-    }
-    setSelectedChats(newSelected);
+
+    // Fallback to dataset name or generic title
+    return datasetName ? `Chat about ${datasetName}` : 'New Chat';
   };
+
+  // Transform conversations to display format
+  const formattedConversations = React.useMemo(() => {
+    return Object.values(conversations).map(conv => {
+      const dataset = datasets.find(d => d.id === conv.datasetId);
+      const messages = conv.messages || [];
+      const lastMessage = messages[messages.length - 1];
+      const datasetName = conv.datasetName || dataset?.name;
+
+      // Generate smart title from first user message
+      const title = generateTitle(messages, datasetName);
+
+      // Determine snippet text from last message
+      let snippet = 'No messages';
+      if (lastMessage?.content) {
+        if (typeof lastMessage.content === 'string') {
+          snippet = lastMessage.content.length > 100
+            ? lastMessage.content.substring(0, 97) + '...'
+            : lastMessage.content;
+        } else {
+          snippet = 'Chart/Analysis';
+        }
+      }
+
+      return {
+        id: conv.id,
+        title: title,
+        snippet: snippet,
+        datasetName: datasetName || 'Unknown Dataset',
+        date: new Date(conv.createdAt || conv.timestamp || Date.now()).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+        timestamp: new Date(conv.createdAt || conv.timestamp || Date.now()),
+        type: lastMessage?.role === 'user' ? 'user' : 'ai',
+        unread: false
+      };
+    }).sort((a, b) => b.timestamp - a.timestamp);
+  }, [conversations, datasets]);
+
+  const filteredConversations = formattedConversations.filter((c) =>
+    c.title.toLowerCase().includes(search.toLowerCase()) ||
+    c.snippet.toLowerCase().includes(search.toLowerCase())
+  )
 
   const handleOpenChat = (chatId) => {
-    try {
-      // Set the current conversation in the store
-      setCurrentConversation(chatId);
-      
-      // Navigate to the chat page with the conversation ID (correct route path)
-      navigate(`/app/chat?chatId=${chatId}`);
-      
-      // Close the modal
-      onClose();
-      
-      toast.success('Chat opened successfully');
-    } catch (error) {
-      console.error('Error opening chat:', error);
-      toast.error('Failed to open chat');
+    setCurrentConversation(chatId);
+    navigate(`/app/chat?chatId=${chatId}`);
+    onClose();
+  };
+
+  const handleDelete = (e, chatId, chatTitle) => {
+    e.stopPropagation();
+    setChatToDelete({ id: chatId, title: chatTitle });
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = () => {
+    if (chatToDelete) {
+      clearConversation(chatToDelete.id);
+      toast.success('Conversation deleted');
+      setChatToDelete(null);
     }
   };
 
-  const handleNewChat = () => {
-    try {
-      // Start a new chat (clear current conversation)
-      startNewChat();
-      
-      // Navigate to the chat page without a conversation ID
-      navigate('/app/chat');
-      
-      // Close the modal
-      onClose();
-      
-      toast.success('New chat started');
-    } catch (error) {
-      console.error('Error starting new chat:', error);
-      toast.error('Failed to start new chat');
-    }
-  };
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="w-[calc(100%-2rem)] sm:max-w-2xl border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl">
+        <DialogHeader className="p-4 sm:p-6 pb-2 pr-12 sm:pr-14">
+          <div className="flex items-center gap-3">
+            <DialogTitle className="text-lg sm:text-xl font-bold tracking-tight">Chat History</DialogTitle>
+            <Badge variant="secondary" className="bg-zinc-900 text-zinc-400 border-zinc-800 text-[10px] sm:text-xs">
+              {formattedConversations.length}
+            </Badge>
+          </div>
+          <div className="relative mt-4">
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-zinc-500" />
+            <Input
+              placeholder="Search conversations..."
+              className="h-9 sm:h-10 border-zinc-800 bg-zinc-900/50 pl-9 text-sm sm:text-base text-zinc-100 placeholder:text-zinc-500 focus-visible:ring-zinc-700"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+        </DialogHeader>
 
-  const handleDeleteSelected = () => {
-    if (selectedChats.size === 0) return;
-    
-    try {
-      // Delete each selected conversation
-      selectedChats.forEach(conversationId => {
-        clearConversation(conversationId);
-      });
-      
-      toast.success(`Deleted ${selectedChats.size} conversation${selectedChats.size > 1 ? 's' : ''}`);
-      setSelectedChats(new Set());
-    } catch (error) {
-      console.error('Error deleting conversations:', error);
-      toast.error('Failed to delete conversations');
-    }
-  };
+        <ScrollArea className="h-[350px] sm:h-[450px] px-2 pb-6">
+          <div className="space-y-1 p-2">
+            {filteredConversations.length > 0 ? (
+              filteredConversations.map((conv) => (
+                <div
+                  key={conv.id}
+                  onClick={() => handleOpenChat(conv.id)}
+                  className={cn(
+                    "group relative flex cursor-pointer items-start gap-3 sm:gap-4 rounded-xl p-3 sm:p-4 transition-all duration-200",
+                    "hover:bg-zinc-900/80 active:scale-[0.98]",
+                    activeId === conv.id ? "bg-zinc-900 ring-1 ring-zinc-800" : "bg-transparent"
+                  )}
+                  onMouseEnter={() => setActiveId(conv.id)}
+                  onMouseLeave={() => setActiveId(null)}
+                >
+                  <Avatar className="mt-0.5 size-8 sm:size-10 shrink-0 border border-zinc-800 shadow-sm">
+                    <AvatarImage src={`https://avatar.vercel.sh/${conv.title}`} />
+                    <AvatarFallback className="bg-zinc-800 text-zinc-400 text-xs sm:text-sm">
+                      {conv.title[0]}
+                    </AvatarFallback>
+                  </Avatar>
 
-  const formatTimestamp = (timestamp) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffSec = Math.floor(diffMs / 1000);
-    const diffMin = Math.floor(diffSec / 60);
-    const diffHr = Math.floor(diffMin / 60);
-    const diffDay = Math.floor(diffHr / 24);
-
-    if (diffSec < 60) return 'just now';
-    if (diffMin < 60) return `${diffMin} min ago`;
-    if (diffHr < 24) return `${diffHr} hour${diffHr !== 1 ? 's' : ''} ago`;
-    if (diffDay < 7) return `${diffDay} day${diffDay !== 1 ? 's' : ''} ago`;
-    return date.toLocaleDateString();
-  };
-
-  return createPortal(
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          {/* Backdrop */}
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-            onClick={onClose}
-          />
-          
-          {/* Modal */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            transition={{ type: "spring", damping: 25, stiffness: 300 }}
-            className="relative w-full max-w-2xl mx-4"
-          >
-            <GlassCard className="p-4">
-              {/* Header */}
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-xl font-bold text-foreground">Chat History</h2>
-                  <p className="text-muted-foreground text-sm">
-                    {loading ? 'Loading...' : `${filteredChats.length} conversation${filteredChats.length !== 1 ? 's' : ''}`}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleNewChat}
-                    className="px-3 py-1.5 rounded-lg bg-primary/20 text-primary hover:bg-primary/30 transition-colors text-sm font-medium"
-                  >
-                    New Chat
-                  </button>
-                  <button
-                    onClick={onClose}
-                    className="p-2 rounded-lg hover:bg-accent/50 transition-colors"
-                  >
-                    <X className="w-4 h-4 text-muted-foreground" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Search */}
-              <div className="relative mb-4">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <input
-                  type="text"
-                  placeholder="Search conversations..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 rounded-lg glass-effect border border-border/50 text-foreground focus:ring-primary focus:border-primary transition-all text-sm"
-                />
-              </div>
-
-              {/* Chat List */}
-              <div className="max-h-96 overflow-y-auto space-y-2">
-                {filteredChats.length === 0 ? (
-                  <div className="text-center py-8">
-                    <MessageSquare className="w-12 h-12 mx-auto mb-3 text-muted-foreground opacity-50" />
-                    <h3 className="text-sm font-medium text-foreground mb-1">
-                      {searchQuery ? 'No conversations found' : 'No chat history'}
-                    </h3>
-                    <p className="text-xs text-muted-foreground">
-                      {searchQuery ? 'Try different search terms' : 'Start chatting to see history here'}
-                    </p>
-                  </div>
-                ) : (
-                  filteredChats.map((chat) => (
-                    <motion.div
-                      key={chat.id}
-                      initial={{ opacity: 0, y: 5 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className={`p-4 rounded-2xl border transition-all ${
-                        selectedChats.has(chat.id)
-                          ? 'border-primary bg-primary/10'
-                          : 'border-border/30 hover:border-border/50 hover:bg-accent/10'
-                      }`}
-                    >
-                      <div className="flex items-start gap-3">
-                        {/* Enhanced Selection Checkbox */}
-                        <div
-                          className={`w-7 h-7 rounded-lg border-2 mt-1 flex items-center justify-center cursor-pointer transition-all duration-150 shadow-sm relative group
-                            ${selectedChats.has(chat.id)
-                              ? 'border-primary bg-primary/90 ring-2 ring-primary/30'
-                              : 'border-border/50 bg-background hover:border-primary/50 hover:bg-accent/30'}
-                          `}
-                          title="Select for delete"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const newSelected = new Set(selectedChats);
-                            if (newSelected.has(chat.id)) {
-                              newSelected.delete(chat.id);
-                            } else {
-                              newSelected.add(chat.id);
-                            }
-                            setSelectedChats(newSelected);
-                          }}
-                        >
-                          {selectedChats.has(chat.id) ? (
-                            <CheckCircle className="w-5 h-5 text-white drop-shadow" />
-                          ) : (
-                            <span className="block w-4 h-4 rounded bg-transparent border border-border/30 group-hover:bg-accent/40"></span>
-                          )}
-                          {/* <span className="absolute left-full ml-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                            Select for delete
-                          </span> */}
-                        </div>
-                        
-                        {/* Chat content - clickable to open */}
-                        <div 
-                          className="flex-1 min-w-0 chat-open-area cursor-pointer"
-                          onClick={(e) => handleSelectChat(chat.id, e)}
-                        >
-                          <div className="flex items-center justify-between mb-2">
-                            <h3 className="text-sm font-medium text-foreground truncate">
-                              {chat.title}
-                            </h3>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-muted-foreground">
-                                {formatTimestamp(chat.timestamp)}
-                              </span>
-                              <ExternalLink className="w-3 h-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                            </div>
-                          </div>
-                          
-                          <p className="text-xs text-muted-foreground mb-3 line-clamp-2">
-                            {chat.lastMessage}
-                          </p>
-                          
-                          <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                            <div className="flex items-center gap-1">
-                              <MessageSquare className="w-3 h-3" />
-                              <span>{chat.messageCount} messages</span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <Database className="w-3 h-3" />
-                              <span className="truncate max-w-32">{chat.datasetName}</span>
-                            </div>
-                          </div>
+                  <div className="flex-1 space-y-0.5 sm:space-y-1 overflow-hidden">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className={cn(
+                        "truncate text-sm sm:text-base font-medium transition-colors",
+                        conv.unread ? "text-zinc-100" : "text-zinc-300",
+                        activeId === conv.id ? "text-white" : ""
+                      )}>
+                        {conv.title}
+                      </h3>
+                      <div className="relative flex items-center gap-2 shrink-0">
+                        <span className="text-[10px] sm:text-[11px] font-medium text-zinc-500 transition-opacity group-hover:opacity-0">
+                          {conv.date}
+                        </span>
+                        <div className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-6 sm:size-7 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+                            onClick={(e) => handleDelete(e, conv.id, conv.title)}
+                          >
+                            <Trash2 className="size-3 sm:size-3.5" />
+                          </Button>
                         </div>
                       </div>
-                    </motion.div>
-                  ))
-                )}
+                    </div>
+                    <p className="line-clamp-1 text-xs sm:text-sm text-zinc-500 transition-colors group-hover:text-zinc-400">
+                      {conv.snippet}
+                    </p>
+                  </div>
+
+                  {conv.unread && (
+                    <div className="absolute right-3 sm:right-4 top-1/2 size-1.5 sm:size-2 -translate-y-1/2 rounded-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]" />
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="flex h-32 flex-col items-center justify-center space-y-2 text-center">
+                <div className="rounded-full bg-zinc-900 p-3">
+                  <Search className="size-6 text-zinc-700" />
+                </div>
+                <p className="text-sm text-zinc-500">No conversations found</p>
               </div>
+            )}
+          </div>
+        </ScrollArea>
 
-              {/* Actions */}
-              {selectedChats.size > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="flex items-center justify-between mt-4 pt-4 border-t border-border/20"
-                >
-                  <span className="text-sm text-muted-foreground">
-                    {selectedChats.size} selected
-                  </span>
-                  <button
-                    onClick={handleDeleteSelected}
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors text-sm"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                    Delete
-                  </button>
-                </motion.div>
-              )}
-            </GlassCard>
-          </motion.div>
+        <div className="border-t border-zinc-800 p-4 bg-zinc-950/50">
+          <Button variant="ghost" className="w-full justify-start gap-2 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => navigate('/app/chat')}>
+            <MessageSquare className="size-4" />
+            <span className="text-xs font-medium">New Chat</span>
+          </Button>
         </div>
-      )}
-    </AnimatePresence>,
-    document.body
-  );
-};
+      </DialogContent>
 
-export default ChatHistoryModal;
+      <DeleteConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        onConfirm={confirmDelete}
+        title="Delete Conversation"
+        description="Are you sure you want to delete this conversation? This action cannot be undone and all messages will be permanently removed."
+        itemName={chatToDelete?.title}
+      />
+    </Dialog>
+  )
+}

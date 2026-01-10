@@ -54,7 +54,7 @@ api.interceptors.response.use(
 // Dataset API calls
 export const datasetAPI = {
   // Get all datasets for the user
-  getDatasets: () => api.get('/datasets'),
+  getDatasets: () => api.get('/datasets/'),
 
   // Get specific dataset
   getDataset: (id) => api.get(`/datasets/${id}`),

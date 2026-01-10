@@ -1,8 +1,95 @@
-import React, { useEffect, useRef, memo } from 'react';
+import React, { useEffect, useRef, memo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+
+const CustomTooltip = ({ visible, x, y, data }) => {
+  if (!visible || !data) return null;
+
+  const { title, items, total } = data;
+
+  // Calculate position to keep tooltip within viewport
+  // Default to top-right of cursor, but flip if near edges
+  const tooltipStyle = {
+    left: x + 20,
+    top: y - 20,
+  };
+
+  // Adjust if too close to right edge
+  if (x > window.innerWidth - 300) {
+    tooltipStyle.left = x - 280;
+  }
+
+  // Adjust if too close to bottom edge
+  if (y > window.innerHeight - 200) {
+    tooltipStyle.top = y - 150;
+  }
+
+  return createPortal(
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        transition={{ duration: 0.15, ease: "easeOut" }}
+        style={{
+          position: 'fixed',
+          ...tooltipStyle,
+          zIndex: 9999,
+          pointerEvents: 'none', // Allow clicking through
+        }}
+        className="w-64 bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden"
+      >
+        {/* Header */}
+        <div className="px-4 py-2 bg-white/5 border-b border-white/5">
+          <span className="text-sm font-medium text-slate-200">{title}</span>
+        </div>
+
+        {/* Body */}
+        <div className="p-3 space-y-2">
+          {items.map((item, index) => (
+            <div key={index} className="flex items-center justify-between text-sm">
+              <div className="flex items-center gap-2">
+                <div 
+                  className="w-1 h-3 rounded-full" 
+                  style={{ backgroundColor: item.color }}
+                />
+                <span className="text-slate-400">{item.name}</span>
+              </div>
+              <span className="font-mono font-medium text-slate-200">
+                {item.value}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer / Total */}
+        {total !== undefined && (
+          <div className="px-4 py-2 bg-white/5 border-t border-white/5 flex items-center justify-between">
+            <span className="text-sm text-slate-400">Total</span>
+            <span className="font-mono font-bold text-white">{total}</span>
+          </div>
+        )}
+      </motion.div>
+    </AnimatePresence>,
+    document.body
+  );
+};
 
 const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartType = 'bar' }) => {
   const plotRef = useRef(null);
   const dataHashRef = useRef(null);
+  const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, data: null });
+
+  // Helper to format numbers
+  const formatValue = (val) => {
+    if (typeof val === 'number') {
+      if (val >= 1000000000) return (val / 1000000000).toFixed(1) + 'B';
+      if (val >= 1000000) return (val / 1000000).toFixed(1) + 'M';
+      if (val >= 1000) return (val / 1000).toFixed(1) + 'K';
+      return val.toLocaleString(); // Add commas
+    }
+    return val;
+  };
 
   useEffect(() => {
     // Create a simple hash of the data to avoid unnecessary re-renders
@@ -27,7 +114,10 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
 
           if (isPlotlyFormat) {
             // Data is already in Plotly format, use it directly
-            processedData = data;
+            processedData = data.map(trace => ({
+              ...trace,
+              hoverinfo: 'none', // Disable default tooltip
+            }));
           }
           // Handle histogram data (bin/count format)
           else if (chartType === 'histogram' && Array.isArray(data) && data.length > 0) {
@@ -49,7 +139,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                   line: { width: 0 }
                 },
                 name: 'Frequency',
-                hovertemplate: '<b>%{x}</b><br>Count: %{y:,.0f}<extra></extra>'
+                hoverinfo: 'none'
               }];
             } else {
               // Fallback to first two keys
@@ -67,7 +157,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                   line: { width: 0 }
                 },
                 name: yKey,
-                hovertemplate: '<b>%{x}</b><br>' + yKey + ': %{y:,.0f}<extra></extra>'
+                hoverinfo: 'none'
               }];
             }
           }
@@ -112,9 +202,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                 } : { width: 0 }
               },
               name: yLabel,
-              hovertemplate: (chartType === 'bar' || chartType === 'bar_chart')
-                ? '<b>%{x}</b><br>' + yLabel + ': %{y:,.2f}<extra></extra>'
-                : '<b>%{x}</b><br>' + yLabel + ': %{y:,.2f}<extra></extra>'
+              hoverinfo: 'none'
             }];
           } else if ((chartType === 'pie' || chartType === 'pie_chart') && Array.isArray(data) && data.length > 0) {
             // Check if data is in Plotly format with labels/values
@@ -136,7 +224,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                     width: 2
                   }
                 },
-                hovertemplate: '<b>%{label}</b><br>%{value}<br>%{percent}<extra></extra>'
+                hoverinfo: 'none'
               }];
             } else {
               // Data is in array format with name/value or similar keys
@@ -162,7 +250,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                     width: 2
                   }
                 },
-                hovertemplate: '<b>%{label}</b><br>%{value}<br>%{percent}<extra></extra>'
+                hoverinfo: 'none'
               }];
             }
           } else if (chartType === 'donut' && data.length > 0 && data[0].labels && data[0].values) {
@@ -184,7 +272,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                   width: 2
                 }
               },
-              hovertemplate: '<b>%{label}</b><br>%{value}<br>%{percent}<extra></extra>'
+              hoverinfo: 'none'
             }];
           } else if (Array.isArray(data) && data.length > 0) {
             // Generic fallback for any unhandled chart types
@@ -210,7 +298,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                 line: { width: 0 }
               },
               name: yLabel,
-              hovertemplate: '<b>%{x}</b><br>' + yLabel + ': %{y:,.2f}<extra></extra>'
+              hoverinfo: 'none'
             }];
           }
 
@@ -249,16 +337,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
               t: 40,
               b: 60
             },
-            hovermode: 'closest',
-            hoverlabel: {
-              bgcolor: '#161b22',
-              bordercolor: '#30363d',
-              font: {
-                family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-                size: 13,
-                color: '#e6edf3'
-              }
-            },
+            hovermode: 'x unified', // Keep 'x unified' to get all points at the same x
             showlegend: chartType !== 'pie' && chartType !== 'donut',
             legend: {
               orientation: 'h',
@@ -275,7 +354,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             }
           };
 
-          Plotly.newPlot(plotRef.current, processedData, {
+          await Plotly.newPlot(plotRef.current, processedData, {
             ...defaultLayout,
             ...layout
           }, {
@@ -293,8 +372,69 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             },
             ...config
           });
+
+          // Attach hover event
+          plotRef.current.on('plotly_hover', (eventData) => {
+            if (!eventData || !eventData.points || eventData.points.length === 0) return;
+
+            const points = eventData.points;
+            const xVal = points[0].x; // Assuming shared X
+            
+            // Calculate Total
+            let total = 0;
+            const items = points.map(pt => {
+              const val = pt.y || pt.value || 0; // Handle bar/line (y) and pie (value)
+              total += (typeof val === 'number' ? val : 0);
+              
+              return {
+                name: pt.data.name || pt.fullData.name || 'Series',
+                value: formatValue(val),
+                color: pt.fullData.marker?.color || pt.fullData.line?.color || '#fff'
+              };
+            });
+
+            // For Pie charts, we might want to show just the hovered slice
+            if (chartType === 'pie' || chartType === 'donut') {
+               // Pie charts usually trigger one point at a time
+               // No "Total" needed in tooltip usually, or total of all slices?
+               // Let's just show the slice info
+               const pt = points[0];
+               setTooltip({
+                 visible: true,
+                 x: eventData.event.clientX,
+                 y: eventData.event.clientY,
+                 data: {
+                   title: pt.label,
+                   items: [{
+                     name: pt.label,
+                     value: formatValue(pt.value),
+                     color: pt.color || '#fff' // Plotly might not give easy access to slice color here without digging
+                   }],
+                   total: pt.percent // Show percent instead of total for pie
+                 }
+               });
+            } else {
+              setTooltip({
+                visible: true,
+                x: eventData.event.clientX,
+                y: eventData.event.clientY,
+                data: {
+                  title: xVal,
+                  items: items,
+                  total: formatValue(total)
+                }
+              });
+            }
+          });
+
+          // Attach unhover event
+          plotRef.current.on('plotly_unhover', () => {
+             setTooltip(prev => ({ ...prev, visible: false }));
+          });
+
         }
       } catch (error) {
+        console.error("Plotly load error:", error);
         // Chart failed to render - show fallback UI
         if (plotRef.current) {
           plotRef.current.innerHTML = `
@@ -323,21 +463,25 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
     loadPlotly();
     return () => {
       if (plotRef.current) {
+        // Plotly.purge(plotRef.current); // Ideally purge, but might need to import Plotly again
         plotRef.current.innerHTML = '';
       }
     };
   }, [data, layout, config, chartType]);
 
   return (
-    <div
-      ref={plotRef}
-      style={{
-        width: '100%',
-        height: '100%',
-        minHeight: '200px',
-        ...style
-      }}
-    />
+    <>
+      <div
+        ref={plotRef}
+        style={{
+          width: '100%',
+          height: '100%',
+          minHeight: '200px',
+          ...style
+        }}
+      />
+      <CustomTooltip {...tooltip} />
+    </>
   );
 }, (prevProps, nextProps) => {
   // Custom comparison - only re-render if data or layout actually changed
