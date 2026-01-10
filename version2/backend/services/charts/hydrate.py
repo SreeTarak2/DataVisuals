@@ -327,6 +327,264 @@ def _hydrate_area(df, config):
     return traces
 
 
+# =====================================================
+# NEW CHART TYPE HANDLERS
+# =====================================================
+
+def _hydrate_radar(df, config):
+    """Radar/Spider chart - multi-dimensional comparison."""
+    if len(config.columns) < 2:
+        return []
+    
+    category_col = config.columns[0]
+    value_cols = config.columns[1:] if len(config.columns) > 1 else []
+    
+    if not value_cols:
+        # Single value column - aggregate by category
+        cat, val = config.columns[0], config.columns[1] if len(config.columns) > 1 else config.columns[0]
+        agg_df = _safe_aggregate(df, cat, val, config.aggregation)
+        categories = agg_df["x"].to_list()
+        values = agg_df["y"].to_list()
+        # Close the radar loop
+        categories.append(categories[0])
+        values.append(values[0])
+        return [{
+            "type": "scatterpolar",
+            "r": values,
+            "theta": categories,
+            "fill": "toself",
+            "name": val
+        }]
+    else:
+        # Multiple value columns for each category
+        traces = []
+        for _, row in df.head(10).to_pandas().iterrows():
+            values = [row[col] for col in value_cols if col in df.columns]
+            values.append(values[0])  # Close loop
+            cols = value_cols + [value_cols[0]]
+            traces.append({
+                "type": "scatterpolar",
+                "r": values,
+                "theta": cols,
+                "fill": "toself",
+                "name": str(row[category_col]) if category_col in df.columns else f"Series {len(traces)}"
+            })
+        return traces[:5]  # Limit to 5 series
+
+
+def _hydrate_bubble(df, config):
+    """Bubble chart - scatter with size dimension."""
+    if len(config.columns) < 3:
+        # Need x, y, and size columns
+        return _hydrate_scatter(df, config)
+    
+    x, y, size = config.columns[0], config.columns[1], config.columns[2]
+    color = config.columns[3] if len(config.columns) > 3 else None
+    
+    # Filter valid rows
+    valid_cols = [x, y, size] + ([color] if color else [])
+    valid_rows = df.select(valid_cols).drop_nulls()
+    
+    if valid_rows.is_empty():
+        return []
+    
+    # Normalize size for bubble display
+    size_vals = valid_rows[size].to_numpy()
+    size_min, size_max = size_vals.min(), size_vals.max()
+    if size_max > size_min:
+        normalized_size = 10 + 40 * (size_vals - size_min) / (size_max - size_min)
+    else:
+        normalized_size = [25] * len(size_vals)
+    
+    trace = {
+        "type": "scatter",
+        "mode": "markers",
+        "x": valid_rows[x].to_list(),
+        "y": valid_rows[y].to_list(),
+        "marker": {
+            "size": normalized_size.tolist(),
+            "sizemode": "diameter"
+        },
+        "text": [f"{size}: {s:.2f}" for s in size_vals]
+    }
+    
+    if color and color in valid_rows.columns:
+        trace["marker"]["color"] = valid_rows[color].to_list()
+        trace["marker"]["colorscale"] = "Viridis"
+    
+    return [trace]
+
+
+def _hydrate_waterfall(df, config):
+    """Waterfall chart - cumulative effect visualization."""
+    if len(config.columns) < 2:
+        return []
+    
+    x, y = config.columns[0], config.columns[1]
+    agg_df = _safe_aggregate(df, x, y, config.aggregation)
+    
+    x_vals = agg_df["x"].to_list()
+    y_vals = agg_df["y"].to_list()
+    
+    # Determine measure types (relative for all, total for last)
+    measures = ["relative"] * len(y_vals)
+    if measures:
+        measures[-1] = "total"
+    
+    return [{
+        "type": "waterfall",
+        "x": x_vals,
+        "y": y_vals,
+        "measure": measures,
+        "connector": {"line": {"color": "rgb(63, 63, 63)"}}
+    }]
+
+
+def _hydrate_funnel(df, config):
+    """Funnel chart - stage-based conversion visualization."""
+    if len(config.columns) < 2:
+        return []
+    
+    stage, value = config.columns[0], config.columns[1]
+    agg_df = _safe_aggregate(df, stage, value, config.aggregation)
+    
+    # Sort by value descending for proper funnel shape
+    agg_df = agg_df.sort("y", descending=True)
+    
+    return [{
+        "type": "funnel",
+        "y": agg_df["x"].to_list(),
+        "x": agg_df["y"].to_list(),
+        "textinfo": "value+percent initial"
+    }]
+
+
+def _hydrate_candlestick(df, config):
+    """Candlestick chart - OHLC financial data."""
+    # Requires: date, open, high, low, close columns
+    if len(config.columns) < 5:
+        logger.warning("Candlestick requires 5 columns: date, open, high, low, close")
+        return _hydrate_line(df, config)
+    
+    date_col, open_col, high_col, low_col, close_col = config.columns[:5]
+    
+    # Validate columns exist
+    for col in [date_col, open_col, high_col, low_col, close_col]:
+        if col not in df.columns:
+            logger.warning(f"Missing column {col} for candlestick")
+            return _hydrate_line(df, config)
+    
+    # Sort by date
+    df_sorted = df.sort(date_col)
+    
+    return [{
+        "type": "candlestick",
+        "x": df_sorted[date_col].to_list(),
+        "open": df_sorted[open_col].to_list(),
+        "high": df_sorted[high_col].to_list(),
+        "low": df_sorted[low_col].to_list(),
+        "close": df_sorted[close_col].to_list()
+    }]
+
+
+def _hydrate_violin(df, config):
+    """Violin plot - distribution shape visualization."""
+    if len(config.columns) < 2:
+        return []
+    
+    cat, num = config.columns[0], config.columns[1]
+    traces = []
+    
+    for c in df[cat].unique().to_list()[:10]:  # Limit categories
+        group = df.filter(pl.col(cat) == c)[num].drop_nulls().to_list()
+        if group:
+            traces.append({
+                "type": "violin",
+                "name": str(c),
+                "y": group,
+                "box": {"visible": True},
+                "meanline": {"visible": True}
+            })
+    
+    return traces
+
+
+def _hydrate_sunburst(df, config):
+    """Sunburst chart - hierarchical radial visualization."""
+    if not config.columns:
+        return []
+    
+    path = config.columns[:-1] if len(config.columns) > 1 else [config.columns[0]]
+    val_col = config.columns[-1]
+    
+    if val_col not in df.columns or df[val_col].dtype not in NUMERIC_DTYPES:
+        agg_df = df.group_by(path).agg(pl.count().alias("value"))
+    else:
+        agg_df = df.group_by(path).agg(pl.sum(val_col).alias("value"))
+    
+    rows = agg_df.to_dicts()
+    ids, parents, labels, values = [], [], [], []
+    
+    for r in rows:
+        full_path = "/".join(str(r[p]) for p in path)
+        parent = "/".join(full_path.split("/")[:-1]) or ""
+        ids.append(full_path)
+        parents.append(parent)
+        labels.append(full_path.split("/")[-1])
+        values.append(r["value"])
+    
+    return [{
+        "type": "sunburst",
+        "ids": ids,
+        "parents": parents,
+        "labels": labels,
+        "values": values,
+        "branchvalues": "total"
+    }]
+
+
+def _hydrate_gauge(df, config):
+    """Gauge chart - single KPI meter visualization."""
+    if not config.columns:
+        return []
+    
+    col = config.columns[0]
+    if col not in df.columns:
+        return []
+    
+    # Calculate the value based on aggregation
+    if config.aggregation == AggregationType.COUNT:
+        value = len(df)
+    elif config.aggregation == AggregationType.SUM:
+        value = df[col].sum()
+    elif config.aggregation == AggregationType.MEAN:
+        value = df[col].mean()
+    else:
+        value = df[col].sum()
+    
+    # Determine range based on data
+    if df[col].dtype in NUMERIC_DTYPES:
+        max_val = float(df[col].max()) * 1.2  # 20% headroom
+    else:
+        max_val = value * 2
+    
+    return [{
+        "type": "indicator",
+        "mode": "gauge+number",
+        "value": float(value) if value is not None else 0,
+        "gauge": {
+            "axis": {"range": [0, max_val]},
+            "bar": {"color": "#3b82f6"},
+            "steps": [
+                {"range": [0, max_val * 0.5], "color": "#dcfce7"},
+                {"range": [max_val * 0.5, max_val * 0.8], "color": "#fef9c3"},
+                {"range": [max_val * 0.8, max_val], "color": "#fee2e2"}
+            ]
+        },
+        "title": {"text": config.title}
+    }]
+
+
 def _hydrate_fallback(df, config):
     temp = ChartConfig(
         type=config.type,

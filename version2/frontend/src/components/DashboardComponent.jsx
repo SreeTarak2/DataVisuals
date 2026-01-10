@@ -1,25 +1,27 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  TrendingUp, TrendingDown, Database, Users, FileText, BarChart3, 
-  PieChart, LineChart, Activity, DollarSign, Target, Zap, 
+import {
+  TrendingUp, TrendingDown, Database, Users, FileText, BarChart3,
+  PieChart, LineChart, Activity, DollarSign, Target, Zap,
   Lightbulb, ChevronDown, ChevronUp, Eye, EyeOff
 } from 'lucide-react';
 import PlotlyChart from './PlotlyChart';
 import IntelligentChartExplanation from './IntelligentChartExplanation';
+import EnterpriseKpiCard from './ui/EnterpriseKpiCard';
+import { hydrateEnterpriseKpiComponent } from '../pages/Dashboard/utils/kpiCalculations';
 
 const COLORS = ['#06b6d4', '#a78bfa', '#34d399', '#fbbf24', '#f87171', '#fb923c', '#84cc16', '#ec4899'];
 
 const DashboardComponent = ({ component, datasetData }) => {
   const [showInsights, setShowInsights] = useState(false);
-  
+
   // Only apply grid span for non-KPI components since KPIs have their own grid
   const gridSpanStyle = component.type === 'kpi' ? {} : { gridColumn: `span ${component.span || 1}` };
-  
+
   // Icon mapping for KPIs
-  const kpiIconMap = { 
-    TrendingUp, TrendingDown, Database, Users, FileText, BarChart3, 
-    PieChart, LineChart, Activity, DollarSign, Target, Zap 
+  const kpiIconMap = {
+    TrendingUp, TrendingDown, Database, Users, FileText, BarChart3,
+    PieChart, LineChart, Activity, DollarSign, Target, Zap
   };
   const IconComponent = kpiIconMap[component.config?.icon] || Database;
 
@@ -98,7 +100,7 @@ const DashboardComponent = ({ component, datasetData }) => {
     console.log('Config received:', JSON.stringify(config, null, 2));
     console.log('Data length:', data?.length);
     console.log('Data is array?', Array.isArray(data));
-    
+
     if (!data || data.length === 0 || !config) {
       console.log('❌ No data or config, returning fallback');
       console.log('data?', !!data, 'data.length?', data?.length, 'config?', !!config);
@@ -115,29 +117,29 @@ const DashboardComponent = ({ component, datasetData }) => {
       console.log('📊 Chart config:', { chart_type, columns, aggregation, group_by });
       // Find actual column names in dataset
       const availableColumns = data.length > 0 ? Object.keys(data[0]) : [];
-      
+
       if (!columns || columns.length === 0) {
         console.error('❌ No columns specified in config');
         return generateFallbackChartData(config);
       }
-      
+
       console.log('🔍 Looking for columns:', columns);
       console.log('📋 Available columns:', availableColumns);
-      
+
       // Filter out null/undefined columns before matching (pie charts only need one column)
       const validColumns = columns.filter(col => col != null && col !== '');
       console.log('🔍 Valid columns (after filtering nulls):', validColumns);
-      
+
       const actualCols = validColumns.map(col => findActualCol(col, availableColumns));
       console.log('✅ Matched columns:', actualCols);
-      
+
       const missingColumns = actualCols.filter(col => !col);
       if (missingColumns.length > 0) {
         console.error('❌ Missing columns after matching!');
         console.error('   Requested:', columns);
         console.error('   Available:', availableColumns);
         console.error('   Matched:', actualCols);
-        
+
         // Try to use any available numeric and categorical columns
         const numericCols = availableColumns.filter(col => {
           const val = data[0][col];
@@ -147,10 +149,10 @@ const DashboardComponent = ({ component, datasetData }) => {
           const val = data[0][col];
           return typeof val === 'string' || val instanceof String;
         });
-        
+
         console.log('   Numeric columns available:', numericCols);
         console.log('   Categorical columns available:', categoricalCols);
-        
+
         if (numericCols.length > 0 && categoricalCols.length > 0) {
           console.log('✅ Using fallback columns:', categoricalCols[0], numericCols[0]);
           actualCols[0] = categoricalCols[0];
@@ -164,9 +166,9 @@ const DashboardComponent = ({ component, datasetData }) => {
       const xCol = actualCols[0];
       const yCol = actualCols[1]; // May be undefined for single-column charts like pie
       const groupCol = group_by ? findActualCol(group_by, availableColumns) : xCol;
-      
+
       console.log('📍 Using columns - X:', xCol, 'Y:', yCol, 'Group:', groupCol);
-      
+
       // Handle different chart types from backend
       if ((chart_type === 'line_chart' || chart_type === 'line') && actualCols.length >= 2) {
         const grouped = {};
@@ -183,9 +185,9 @@ const DashboardComponent = ({ component, datasetData }) => {
         const result = Object.entries(grouped).map(([key, values]) => ({
           [groupCol]: key,
           [yCol]: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
-                   aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
-                   aggregation === 'count' ? values.length :
-                   values.length
+            aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
+              aggregation === 'count' ? values.length :
+                values.length
         })).slice(0, 50); // Limit to 50 data points for performance
         console.log('✅ Generated line chart data:', result.length, 'points');
         console.log('   Sample point:', result[0]);
@@ -206,9 +208,9 @@ const DashboardComponent = ({ component, datasetData }) => {
           .map(([key, values]) => ({
             [groupCol]: key,
             [yCol]: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
-                     aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
-                     aggregation === 'count' ? values.length :
-                     values.length
+              aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
+                aggregation === 'count' ? values.length :
+                  values.length
           }))
           .sort((a, b) => b[yCol] - a[yCol]) // Sort by value descending
           .slice(0, 20); // Limit to top 20 categories for readability
@@ -217,7 +219,7 @@ const DashboardComponent = ({ component, datasetData }) => {
         return result.length > 0 ? result : generateFallbackChartData(config);
       } else if ((chart_type === 'pie_chart' || chart_type === 'pie') && actualCols.length >= 1) {
         const grouped = {};
-        
+
         // Pie charts can work with just one column (count occurrences) or two columns (aggregate values)
         if (!yCol || yCol === xCol) {
           // Single column: count occurrences of each unique value
@@ -255,9 +257,9 @@ const DashboardComponent = ({ component, datasetData }) => {
             .map(([key, values]) => ({
               name: String(key),
               value: aggregation === 'sum' ? values.reduce((a, b) => a + b, 0) :
-                     aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
-                     aggregation === 'count' ? values.length :
-                     values.length
+                aggregation === 'mean' ? values.reduce((a, b) => a + b, 0) / values.length :
+                  aggregation === 'count' ? values.length :
+                    values.length
             }))
             .sort((a, b) => b.value - a.value)
             .slice(0, 8);
@@ -288,21 +290,21 @@ const DashboardComponent = ({ component, datasetData }) => {
         const values = data
           .map(row => parseFloat(row[xCol]))
           .filter(val => !isNaN(val) && isFinite(val));
-        
+
         if (values.length === 0) {
           return generateFallbackChartData(config);
         }
-        
+
         const bins = {};
         const min = Math.min(...values);
         const max = Math.max(...values);
         const binSize = (max - min) / 10 || 1;
-        
+
         values.forEach(val => {
           const bin = Math.floor((val - min) / binSize) * binSize + min;
           bins[bin] = (bins[bin] || 0) + 1;
         });
-        
+
         const result = Object.entries(bins)
           .map(([bin, count]) => ({
             bin: parseFloat(bin).toFixed(2),
@@ -319,34 +321,10 @@ const DashboardComponent = ({ component, datasetData }) => {
     return generateFallbackChartData(config);
   };
 
+  // No fallback data - return empty array to show proper empty states
+  // Previously returned fake placeholder data which was misleading
   const generateFallbackChartData = (config) => {
-    const { chart_type, columns } = config || {};
-    
-    if (chart_type === 'line_chart') {
-      return [
-        { [columns?.[0] || 'Period']: 'Period 1', [columns?.[1] || 'Value']: 45000 },
-        { [columns?.[0] || 'Period']: 'Period 2', [columns?.[1] || 'Value']: 35000 },
-        { [columns?.[0] || 'Period']: 'Period 3', [columns?.[1] || 'Value']: 35000 },
-        { [columns?.[0] || 'Period']: 'Period 4', [columns?.[1] || 'Value']: 40000 },
-        { [columns?.[0] || 'Period']: 'Period 5', [columns?.[1] || 'Value']: 37000 },
-        { [columns?.[0] || 'Period']: 'Period 6', [columns?.[1] || 'Value']: 32000 }
-      ];
-    } else if (chart_type === 'bar_chart') {
-      return [
-        { [columns?.[0] || 'Category']: 'Category A', [columns?.[1] || 'Value']: 25000 },
-        { [columns?.[0] || 'Category']: 'Category B', [columns?.[1] || 'Value']: 18000 },
-        { [columns?.[0] || 'Category']: 'Category C', [columns?.[1] || 'Value']: 12000 },
-        { [columns?.[0] || 'Category']: 'Category D', [columns?.[1] || 'Value']: 15000 }
-      ];
-    } else if (chart_type === 'pie_chart') {
-      return [
-        { name: 'Category A', value: 45 },
-        { name: 'Category B', value: 25 },
-        { name: 'Category C', value: 15 },
-        { name: 'Category D', value: 10 }
-      ];
-    }
-    
+    // Return empty array - the chart component will show an empty state
     return [];
   };
 
@@ -395,113 +373,96 @@ const DashboardComponent = ({ component, datasetData }) => {
 
   switch (component.type) {
     case 'kpi':
-      const kpiValue = calculateKPIValue(component.config, datasetData);
-      const colorClass = colorClasses[component.config?.color] || colorClasses.emerald;
-      
+      // Hydrate with enterprise data (comparisons, goals, sparklines)
+      // Use real data only - no mock comparison or target values
+      const enterpriseKpiData = hydrateEnterpriseKpiComponent(component, datasetData, {
+        enableMockComparison: false,
+        enableMockTarget: false
+      });
+
       return (
-        <motion.div 
+        <EnterpriseKpiCard
+          title={component.title}
+          value={enterpriseKpiData.value}
+          format={enterpriseKpiData.format}
+          comparisonValue={enterpriseKpiData.comparisonValue}
+          comparisonLabel={enterpriseKpiData.comparisonLabel}
+          targetValue={enterpriseKpiData.targetValue}
+          targetLabel={enterpriseKpiData.targetLabel}
+          sparklineData={enterpriseKpiData.sparklineData}
+          icon={enterpriseKpiData.icon}
+          animationDelay={0}
+        />
+      );
+
+    case 'chart':
+      const chartData = generateChartData(component.config, datasetData);
+
+      return (
+        <motion.div
           style={gridSpanStyle}
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="group"
         >
           <div className="bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-3xl p-6 hover:border-slate-700 transition-all duration-300 hover:shadow-xl hover:shadow-slate-900/20">
-            <div className="flex items-center justify-between mb-4">
-              <div className="text-sm font-medium text-slate-400 uppercase tracking-wide">
-                {component.title}
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="text-2xl font-bold text-white mb-2">{component.title}</h2>
+                <p className="text-slate-400 text-sm">
+                  {component.config?.chart_type === 'line_chart' ? 'Showing trends and patterns' :
+                    component.config?.chart_type === 'bar_chart' ? 'Comparing categories and values' :
+                      component.config?.chart_type === 'pie_chart' ? 'Distribution breakdown' :
+                        'Data visualization'}
+                </p>
               </div>
-              <div className={`w-2 h-2 rounded-full ${
-                  component.config?.color === 'emerald' ? 'bg-emerald-500' :
-                  component.config?.color === 'sky' ? 'bg-sky-500' :
-                  component.config?.color === 'teal' ? 'bg-teal-500' :
-                  component.config?.color === 'amber' ? 'bg-amber-500' :
-                  component.config?.color === 'purple' ? 'bg-purple-500' :
-                  component.config?.color === 'red' ? 'bg-red-500' :
-                  component.config?.color === 'blue' ? 'bg-blue-500' :
-                  component.config?.color === 'green' ? 'bg-green-500' : 'bg-slate-500'
-                }`}></div>
-            </div>
-            <div className="space-y-2">
-              <div className="text-3xl font-bold text-white">
-                {formatValue(kpiValue, component.config?.aggregation)}
-              </div>
-              <div className="flex items-center text-sm text-slate-400">
-                <IconComponent className="w-4 h-4 mr-1" />
-                {component.config?.aggregation || 'total'}
+              <div className="text-right">
+                <div className="text-sm text-slate-500">Data Points</div>
+                <div className="text-xl font-bold text-white">
+                  {chartData.length > 0 ? chartData.length : 0}
+                </div>
               </div>
             </div>
-          </div>
-        </motion.div>
-      );
 
-      case 'chart':
-        const chartData = generateChartData(component.config, datasetData);
-        
-        return (
-          <motion.div 
-            style={gridSpanStyle}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="group"
-          >
-            <div className="bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-3xl p-6 hover:border-slate-700 transition-all duration-300 hover:shadow-xl hover:shadow-slate-900/20">
-              <div className="flex items-center justify-between mb-6">
-                <div>
-                  <h2 className="text-2xl font-bold text-white mb-2">{component.title}</h2>
-                  <p className="text-slate-400 text-sm">
-                    {component.config?.chart_type === 'line_chart' ? 'Showing trends and patterns' :
-                     component.config?.chart_type === 'bar_chart' ? 'Comparing categories and values' :
-                     component.config?.chart_type === 'pie_chart' ? 'Distribution breakdown' :
-                     'Data visualization'}
-                  </p>
-                </div>
-                  <div className="text-right">
-                    <div className="text-sm text-slate-500">Data Points</div>
-                    <div className="text-xl font-bold text-white">
-                      {chartData.length > 0 ? chartData.length : 0}
-                  </div>
-                </div>
-              </div>
-              
-              <div className="h-[600px] bg-[#0d1117] rounded-xl p-4">
-                {chartData.length > 0 ? (
-                  <PlotlyChart
-                    data={chartData}
-                    chartType={component.config?.chart_type}
-                    config={{
-                      columns: component.config?.columns || Object.keys(chartData[0] || {})
-                    }}
-                    style={{ width: '100%', height: '100%' }}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center">
-                      <div className="w-16 h-16 bg-slate-800/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                        <BarChart3 className="w-8 h-8 text-slate-500" />
-                      </div>
-                      <p className="text-slate-500 text-sm">Chart will appear when data is available</p>
+            <div className="h-[600px] bg-[#0d1117] rounded-xl p-4">
+              {chartData.length > 0 ? (
+                <PlotlyChart
+                  data={chartData}
+                  chartType={component.config?.chart_type}
+                  config={{
+                    columns: component.config?.columns || Object.keys(chartData[0] || {})
+                  }}
+                  style={{ width: '100%', height: '100%' }}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <div className="w-16 h-16 bg-slate-800/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                      <BarChart3 className="w-8 h-8 text-slate-500" />
                     </div>
+                    <p className="text-slate-500 text-sm">Chart will appear when data is available</p>
                   </div>
-                )}
-              </div>
-              
-              {/* Intelligent Chart Explanation */}
-              {/* <IntelligentChartExplanation 
+                </div>
+              )}
+            </div>
+
+            {/* Intelligent Chart Explanation */}
+            {/* <IntelligentChartExplanation 
                 component={component} 
                 datasetData={datasetData}
                 datasetInfo={{ name: 'BMW Dataset' }}
               /> */}
 
-            </div>
-          </motion.div>
-        );
+          </div>
+        </motion.div>
+      );
 
     case 'table':
       const tableData = generateTableData(component.config, datasetData);
       const columns = component.config?.columns || [];
-      
+
       return (
-        <motion.div 
+        <motion.div
           style={gridSpanStyle}
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -520,7 +481,7 @@ const DashboardComponent = ({ component, datasetData }) => {
                 </div>
               </div>
             </div>
-            
+
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>

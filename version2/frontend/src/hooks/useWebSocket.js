@@ -177,15 +177,16 @@ export const useWebSocket = ({
             setIsConnecting(false);
             wsRef.current = null;
 
-            // If there are pending messages (mid-stream disconnect), notify error
-            if (pendingMessagesRef.current.size > 0) {
-                console.warn('WebSocket closed with pending messages:', pendingMessagesRef.current.size);
+            // If there are pending messages AND it was an abnormal close, notify error
+            if (pendingMessagesRef.current.size > 0 && event.code !== 1000 && event.code !== 1001) {
+                console.warn('WebSocket closed abnormally with pending messages:', pendingMessagesRef.current.size);
                 onError?.({ type: 'disconnect', detail: 'Connection lost while processing' });
-                pendingMessagesRef.current.clear();
             }
 
+            pendingMessagesRef.current.clear();
+
             // Auto-reconnect after 3 seconds if not intentionally closed
-            if (event.code !== 1000) {
+            if (event.code !== 1000 && event.code !== 1001) {
                 console.log('Scheduling reconnect...');
                 reconnectTimeoutRef.current = setTimeout(() => {
                     connect();

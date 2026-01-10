@@ -17,8 +17,9 @@ const Register = lazy(() => import("./pages/Register"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Datasets = lazy(() => import("./pages/Datasets"));
 const Chat = lazy(() => import("./pages/Chat"));
-const Charts = lazy(() => import("./pages/Charts"));
+const ChartsStudio = lazy(() => import("./pages/ChartsStudio"));
 const Settings = lazy(() => import("./pages/Settings"));
+const Profile = lazy(() => import("./pages/Profile"));
 
 // Loading fallback component
 const PageLoader = () => (
@@ -60,8 +61,9 @@ function App() {
               <Route path="dashboard" element={<Dashboard />} />
               <Route path="datasets" element={<Datasets />} />
               <Route path="chat" element={<Chat />} />
-              <Route path="charts" element={<Charts />} />
+              <Route path="charts" element={<ChartsStudio />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="profile" element={<Profile />} />
             </Route>
 
             {/* Catch all - redirect to landing */}

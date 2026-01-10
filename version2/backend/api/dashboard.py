@@ -48,11 +48,11 @@ async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(g
             max_kpis=4
         )
         
-        # Format KPIs for frontend
+        # Format KPIs for frontend with enterprise data
         kpis = []
         for kpi in intelligent_kpis:
             value = kpi["value"]
-            # Format large numbers
+            # Format large numbers for display
             if isinstance(value, (int, float)):
                 if value >= 1_000_000:
                     formatted_value = f"{value/1_000_000:.2f}M"
@@ -67,7 +67,17 @@ async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(g
                 "title": kpi["title"],
                 "value": formatted_value,
                 "subtitle": kpi.get("subtitle", ""),
-                "raw_value": value
+                "raw_value": value,
+                # Enterprise KPI fields
+                "format": kpi.get("format", "number"),
+                "comparison_value": kpi.get("comparison_value"),
+                "comparison_label": kpi.get("comparison_label", "vs last period"),
+                "target_value": kpi.get("target_value"),
+                "target_label": kpi.get("target_label"),
+                "sparkline_data": kpi.get("sparkline_data", []),
+                "context": kpi.get("context", ""),
+                "column": kpi.get("column", ""),
+                "aggregation": kpi.get("aggregation", "")
             })
 
         return {
