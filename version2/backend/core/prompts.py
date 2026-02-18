@@ -206,56 +206,105 @@ class PromptFactory:
 
     def get_prompt(self, prompt_type: PromptType, user_message: str = "", **kwargs) -> str:
         context = self.get_context(user_message)
-        base = f"{SYSTEM_JSON_RULES}\n{PERSONA}\n{RULES}\n\nCONTEXT:\n{context}\n"
+        # JSON rules only for non-conversational prompts
+        json_base = f"{SYSTEM_JSON_RULES}\n{PERSONA}\n{RULES}\n\nCONTEXT:\n{context}\n"
+        # Conversational prompts use a simpler context without JSON rules
+        conversational_base = f"{RULES}\n\nDATASET CONTEXT:\n{context}\n"
 
         if prompt_type == PromptType.KPI_GENERATOR:
-            return self._kpi_generator_prompt(base)
+            return self._kpi_generator_prompt(json_base)
 
         if prompt_type == PromptType.CONVERSATIONAL:
-            return f"""{base}
-USER: {user_message}
-ANSWER:"""
+            # Don't include JSON rules - the LLM router adds the conversational system prompt
+            return f"""{conversational_base}
+USER QUESTION: {user_message}"""
 
         if prompt_type == PromptType.DASHBOARD_DESIGNER:
-            return f"""{base}
+            return f"""{json_base}
 TASK: Build an executive dashboard with 3–4 KPIs, 4–6 charts, 1 table.
 Use only real columns.
 OUTPUT:
 {{"dashboard":{{"layout_grid":"repeat(4,1fr)","components":[]}},"reasoning":""}}"""
 
         if prompt_type == PromptType.AI_DESIGNER:
-            return self._ai_designer_prompt(base, **kwargs)
+            return self._ai_designer_prompt(json_base, **kwargs)
 
         if prompt_type == PromptType.INSIGHT_SUMMARY:
-            return self._insight_summary_prompt(base, **kwargs)
+            return self._insight_summary_prompt(json_base, **kwargs)
 
         if prompt_type == PromptType.FORECASTING:
-            return self._forecasting_prompt(base, **kwargs)
+            return self._forecasting_prompt(json_base, **kwargs)
 
         if prompt_type == PromptType.ERROR_RECOVERY:
-            return self._error_recovery_prompt(base, user_message, **kwargs)
+            return self._error_recovery_prompt(json_base, user_message, **kwargs)
 
         if prompt_type == PromptType.FOLLOW_UP:
-            return self._follow_up_prompt(base, **kwargs)
+            return self._follow_up_prompt(json_base, **kwargs)
 
         if prompt_type == PromptType.CHART_RECOMMENDATION:
-            return self._chart_recommendation_prompt(base, user_message)
+            return self._chart_recommendation_prompt(json_base, user_message)
 
         if prompt_type == PromptType.QUIS_ANSWER:
-            return self._quis_answer_prompt(base, **kwargs)
+            return self._quis_answer_prompt(json_base, **kwargs)
 
         raise ValueError(f"Unknown prompt type: {prompt_type}")
 
     def _kpi_generator_prompt(self, base: str) -> str:
+        # Build domain context section if available
+        domain_section = ""
+        domain_ctx = self.metadata.get("domain_context", {})
+        if domain_ctx:
+            parts = [f"DOMAIN: {domain_ctx.get('domain', 'unknown')}"]
+            if domain_ctx.get("key_metrics"):
+                parts.append(f"KEY METRICS: {', '.join(domain_ctx['key_metrics'][:10])}")
+            if domain_ctx.get("measures"):
+                parts.append(f"MEASURES: {', '.join(domain_ctx['measures'][:10])}")
+            if domain_ctx.get("dimensions"):
+                parts.append(f"DIMENSIONS: {', '.join(domain_ctx['dimensions'][:10])}")
+            if domain_ctx.get("time_columns"):
+                parts.append(f"TIME COLUMNS: {', '.join(domain_ctx['time_columns'][:5])}")
+            domain_section = "\n".join(parts) + "\n"
+
+        # Build profile section
+        profile_section = ""
+        profile = self.metadata.get("data_profile", {})
+        if profile:
+            parts = []
+            if profile.get("id_columns"):
+                parts.append(f"ID COLUMNS (skip these): {', '.join(profile['id_columns'][:5])}")
+            if profile.get("low_cardinality_dims"):
+                parts.append(f"CATEGORICAL DIMS: {', '.join(profile['low_cardinality_dims'][:5])}")
+            if parts:
+                profile_section = "\n".join(parts) + "\n"
+
+        # Build correlation section
+        corr_section = ""
+        top_corr = self.metadata.get("top_correlations", [])
+        if top_corr:
+            corr_lines = [f"  {c['columns'][0]} ↔ {c['columns'][1]} (r={c['r']}, {c['strength']})" for c in top_corr]
+            corr_section = "NOTABLE CORRELATIONS:\n" + "\n".join(corr_lines) + "\n"
+
+        # Build skewed columns section
+        skew_section = ""
+        skewed = self.metadata.get("skewed_columns", [])
+        if skewed:
+            skew_section = f"SKEWED COLUMNS (be careful with mean): {', '.join(skewed)}\n"
+
         return f"""{base}
 
+{domain_section}{profile_section}{corr_section}{skew_section}
 You are a McKinsey partner presenting to a Fortune 10 CEO tomorrow.
 One mistake and you're fired.
 
 TASK: Generate exactly 6–8 perfect executive KPI cards.
 Detect archetype first.
 Never use raw column names in titles.
-Always add context (% change, % of total, concentration, benchmark).
+Never use ID or index columns as KPIs.
+Pick aggregations that match the column's business meaning:
+- Revenue/sales/cost columns → sum
+- Rate/score/percentage columns → mean
+- Category/type columns → count_unique
+Always add context (% change, concentration, distribution note).
 
 OUTPUT:
 {{

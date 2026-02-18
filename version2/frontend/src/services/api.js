@@ -3,14 +3,16 @@ import axios from 'axios';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 // Helper to get auth token from Zustand persisted store
+// Checks both localStorage (Remember Me ON) and sessionStorage (Remember Me OFF)
 export const getAuthToken = () => {
-  const authData = localStorage.getItem('datasage-auth');
+  // Try localStorage first, then sessionStorage
+  const authData = localStorage.getItem('datasage-auth') || sessionStorage.getItem('datasage-auth');
   if (authData) {
     try {
       const parsed = JSON.parse(authData);
       return parsed?.state?.token || null;
     } catch (e) {
-      console.warn('Failed to parse auth data from localStorage');
+      console.warn('Failed to parse auth data from storage');
     }
   }
   return null;
@@ -43,8 +45,9 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid, clear auth and redirect to login
+      // Token expired or invalid, clear auth from both storages and redirect
       localStorage.removeItem('datasage-auth');
+      sessionStorage.removeItem('datasage-auth');
       window.location.href = '/login';
     }
     return Promise.reject(error);
@@ -93,6 +96,13 @@ export const datasetAPI = {
     console.log('API: Reprocessing dataset with ID:', id);
     return api.post(`/datasets/${id}/reprocess`);
   },
+
+  // Trigger Deep Analysis (QUIS)
+  analyzeDataset: (id, query = null, noveltyThreshold = 0.35) =>
+    api.post(`/datasets/${id}/analyze`, {
+      query,
+      novelty_threshold: noveltyThreshold
+    }),
 };
 
 // AI API calls

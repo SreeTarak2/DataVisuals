@@ -5,7 +5,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
  */
 const getAuthToken = () => {
     try {
-        const stored = localStorage.getItem('datasage-auth');
+        const stored = localStorage.getItem('datasage-auth') || sessionStorage.getItem('datasage-auth');
         if (stored) {
             const parsed = JSON.parse(stored);
             return parsed?.state?.token || null;
@@ -78,7 +78,7 @@ export const useWebSocket = ({
     }, []);
 
     const connect = useCallback(() => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
+        if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
             return;
         }
 
@@ -168,7 +168,8 @@ export const useWebSocket = ({
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
             setIsConnecting(false);
-            onError?.({ type: 'connection', detail: 'Connection error' });
+            // Don't fire error callback here - let onclose handle it
+            // onerror always fires before onclose, so we avoid duplicate error toasts
         };
 
         ws.onclose = (event) => {
@@ -191,6 +192,9 @@ export const useWebSocket = ({
                 reconnectTimeoutRef.current = setTimeout(() => {
                     connect();
                 }, 3000);
+            } else if (event.code === 1008) {
+                // Policy violation (auth failure, rate limit, etc.)
+                onError?.({ type: 'connection', detail: event.reason || 'Connection rejected' });
             }
         };
     }, [cleanup, onToken, onResponseComplete, onChart, onDone, onError, onStatus]);

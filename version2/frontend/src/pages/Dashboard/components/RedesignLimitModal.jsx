@@ -8,7 +8,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
-import { Button } from '../../../components/Button';
+import { Button } from '../../../components/common/Button';
 
 const RedesignLimitModal = ({ isOpen, onClose, onRefresh, MAX_REDESIGNS }) => {
     return (

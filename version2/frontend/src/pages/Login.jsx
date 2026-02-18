@@ -19,6 +19,7 @@ export default function LoginPage() {
     const [showPassword, setShowPassword] = useState(false);
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
+    const [rememberMe, setRememberMe] = useState(true);
     const [isLoading, setIsLoading] = useState(false);
 
     const { login } = useAuth();
@@ -33,7 +34,7 @@ export default function LoginPage() {
 
         setIsLoading(true);
         try {
-            const result = await login(email, password);
+            const result = await login(email, password, rememberMe);
             if (result.success) {
                 toast.success("Welcome back!");
                 navigate("/app/dashboard");
@@ -114,7 +115,12 @@ export default function LoginPage() {
                             </div>
 
                             <div className="flex items-center space-x-2">
-                                <Checkbox id="remember" className="w-4 h-4 border-zinc-700 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600" />
+                                <Checkbox
+                                    id="remember"
+                                    checked={rememberMe}
+                                    onCheckedChange={(checked) => setRememberMe(!!checked)}
+                                    className="w-4 h-4 border-zinc-700 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600"
+                                />
                                 <label htmlFor="remember" className="text-sm text-zinc-400 cursor-pointer select-none">
                                     Remember me
                                 </label>
