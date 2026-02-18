@@ -5,10 +5,10 @@ import { initAuth } from "./store/authStore";
 import useThemeStore from "./store/themeStore";
 import ProtectedRoute from "./components/ProtectedRoute";
 import DashboardLayout from "./components/layout/DashboardLayout";
-import ErrorBoundary from "./components/ErrorBoundary";
+import ErrorBoundary from "./components/common/ErrorBoundary";
 import { Loader2 } from "lucide-react";
 
-import "./App.css";
+import "./assets/styles/App.css";
 
 // Lazy load pages for code splitting - reduces initial bundle size
 const Landing = lazy(() => import("./pages/Landing"));
@@ -60,7 +60,6 @@ function App() {
               <Route index element={<Navigate to="/app/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
               <Route path="datasets" element={<Datasets />} />
-              <Route path="chat" element={<Chat />} />
               <Route path="charts" element={<ChartsStudio />} />
               <Route path="settings" element={<Settings />} />
               <Route path="profile" element={<Profile />} />

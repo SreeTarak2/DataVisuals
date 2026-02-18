@@ -1,0 +1,444 @@
+================================================================================
+           DATASAGE AI STRATEGY QUESTIONNAIRE — FILLED FROM CODE ANALYSIS
+================================================================================
+
+Generated: February 10, 2026
+Source: Automated analysis of /home/vamsi/nothing/datasage codebase
+
+================================================================================
+                       CURRENT AI MODEL STRATEGY
+================================================================================
+
+a) How do you currently route queries to different models?
+
+   ANSWER: Rule-based routing by task type with fallback chains.
+   
+   Implementation (from config.py):
+   - Role mapping: Each task type maps to a primary model
+   - Fallback chain: If primary fails, tries secondary models in order
+   
+   Current routing:
+   ┌─────────────────────┬─────────────────┬────────────────────────────────┐
+   │ Task Role           │ Primary Model   │ Fallback Chain                 │
+   ├─────────────────────┼─────────────────┼────────────────────────────────┤
+   │ chat_engine         │ mistral_24b     │ → hermes_405b → qwen_4b        │
+   │ chat_streaming      │ mistral_24b     │ (same)                         │
+   │ kpi_suggestion      │ hermes_405b     │ → mistral_24b → devstral_2     │
+   │ insight_generation  │ hermes_405b     │ → mistral_24b                  │
+   │ layout_designer     │ devstral_2      │ → hermes_405b → mistral_24b    │
+   │ rewrite_engine      │ qwen_4b         │ (fast, simple queries)         │
+   │ chart_recommendation│ mistral_24b     │                                │
+   └─────────────────────┴─────────────────┴────────────────────────────────┘
+   
+   Query complexity analyzer exists (QueryComplexityAnalyzer class) but is used
+   for prompt formatting, NOT model selection.
+
+--------------------------------------------------------------------------------
+
+b) What prompts/techniques enforce structured outputs (JSON for charts/KPIs)?
+
+   ANSWER: Multiple techniques layered together:
+   
+   1. OpenRouter JSON Mode:
+      payload["response_format"] = {"type": "json_object"}
+      (when expect_json=True)
+   
+   2. System prompt instructions:
+      "Return ONLY valid JSON with no markdown formatting, no code blocks 
+       (no ```), and no additional text or explanations."
+   
+   3. JSON extraction with fallback (prompts.py extract_json()):
+      - Bracket-balanced parser that finds JSON even in messy output
+      - Handles {"..." or [{...}] patterns
+   
+   4. Markdown cleanup:
+      - Strips ```json and ``` code fences
+      - Attempts re-parse after cleanup
+   
+   5. Pydantic validation (PROMPT_SCHEMAS):
+      - ConversationalResponse, DashboardDesignerResponse, KPIGeneratorResponse
+      - Validates required fields, lengths, allowed values
+   
+   6. Retry on failure:
+      - Exponential backoff (2.0 → 4.0 → 8.0 seconds)
+      - Up to 3 retries per request
+      - Falls back to next model in chain
+   
+   NO external libraries like instructor/outlines currently used.
+
+--------------------------------------------------------------------------------
+
+c) Have you customized system prompts for specific roles?
+
+   [X] Yes
+   
+   Customizations found:
+   
+   1. CONVERSATIONAL_SYSTEM_PROMPT (llm_router.py, 70 lines):
+      - Detailed formatting rules (headers, bullets, bold for metrics)
+      - Complexity-specific hints (simple → 1-2 sentences, complex → full sections)
+      - Data grounding rules ("Never invent data points")
+      - Anti-JSON output rules for chat ("NEVER return JSON unless asked")
+   
+   2. PromptFactory per prompt type (prompts.py):
+      - KPI_GENERATOR: "You are a McKinsey partner presenting to Fortune 10 CEO"
+      - DASHBOARD_DESIGNER: "Build executive dashboard with 3-4 KPIs, 4-6 charts"
+      - CHART_RECOMMENDATION: Lists valid chart types
+      - CONVERSATIONAL: Minimal JSON rules, uses RULES + context only
+   
+   3. Model-strength-aware prompts (_build_system_prompt):
+      - Adds "You excel at structured JSON" for hermes_405b
+      - Adds "You have advanced reasoning capabilities" for reasoning models
+
+--------------------------------------------------------------------------------
+
+d) How do you handle model failures?
+
+   ANSWER: Multi-layer fallback strategy:
+   
+   1. Retry with exponential backoff:
+      - 3 retries, delays: 6s → 12s → 24s
+      - Specifically for 429 (rate limit) errors
+   
+   2. Fallback to different model:
+      - Uses FALLBACKS chain from config.py
+      - Example: mistral_24b fails → tries hermes_405b → tries qwen_4b
+   
+   3. JSON repair attempts:
+      - Strips markdown code fences
+      - extract_json() with bracket balancing
+      - Returns {"error": "llm_json_parse_failed", "raw": content[:500]}
+   
+   4. Column fuzzy matching (column_matcher.py):
+      - Auto-corrects hallucinated column names
+      - Uses SequenceMatcher with 0.6 threshold
+      - Synonym matching ("revenue" → "sales", "date" → "timestamp")
+   
+   5. Silent failures for charts:
+      - If chart hydration fails, chart_data = None
+      - Text response still returned
+      - Error logged but not surfaced to user
+   
+   6. Guardrail fallback:
+      - Off-topic queries → static response without LLM call
+      - Empty/short responses → HTTPException(500)
+
+
+================================================================================
+                 RESEARCH PAPERS / METHODOLOGIES / FRAMEWORKS
+================================================================================
+
+a) Are you following any specific research papers or frameworks?
+
+   [X] Yes
+   
+   Primary papers/methodologies:
+   
+   1. QUIS (Question-guided Insight Summarization) — EMNLP 2024
+      Source: enhanced_quis.py header comment
+      "Research-backed implementation based on EMNLP 2024 paper:
+       QUIS: Question-guided Insights Generation for Automated EDA"
+      
+      Key concepts implemented:
+      - QUGEN: LLM-driven question generation (hypothesis proposals)
+      - Beam search subspace exploration
+      - Statistical significance testing (Fisher's z-test)
+      - FDR correction (Benjamini-Hochberg)
+      - Simpson's Paradox detection
+   
+   2. LangGraph for Agentic Architecture
+      Source: quis_graph.py, research_paper_extended.tex
+      Graph topology: START → planner → analyst → critic → [conditional branches]
+      Self-correcting loop with REJECT → retry and BORING → re-plan
+   
+   3. Subjective Novelty Detection (SND) — Your own research paper
+      Source: research_paper_extended.tex
+      - Semantic Surprisal (embedding distance to user's Belief Graph)
+      - Bayesian Surprise (KL divergence between prior/posterior)
+      - Hybrid metric for filtering "boring" insights
+
+--------------------------------------------------------------------------------
+
+b) For the chatbot specifically, what inspired its design?
+
+   ANSWER: Hybrid approach:
+   
+   1. RAG (Retrieval-Augmented Generation):
+      - FAISS vector search for dataset metadata chunks
+      - BGE-large embeddings (BAAI/bge-large-en-v1.5)
+      - Reranker with diversity sampling
+   
+   2. Query rewriting (meaning-preserving):
+      - Separate LLM call to clarify ambiguous queries
+      - Inspired by query expansion techniques
+   
+   3. Adaptive prompting:
+      - QueryComplexityAnalyzer classifies simple/moderate/complex
+      - Different formatting depth per complexity level
+   
+   4. Conversation history:
+      - Full history passed (no summarization yet)
+      - MongoDB storage per conversation thread
+   
+   No explicit Chain-of-Thought or ReAct mentioned in chat code.
+
+--------------------------------------------------------------------------------
+
+c) Any other external influences for chart/dashboard/analysis?
+
+   ANSWER:
+   
+   1. Chart recommendations:
+      - Rule-based chart type selection (DashboardComponent.jsx)
+      - LLM-generated suggestions validated against schema
+   
+   2. Dashboard generation:
+      - Devstral 2 model (256K context) for layout planning
+      - Component hydration with Polars → Plotly traces
+   
+   3. Statistical analysis (advanced_stats.py):
+      - Scipy for hypothesis testing
+      - Effect size calculators (Cohen's d, etc.)
+      - Confidence interval calculations
+   
+   4. Data profiling:
+      - Custom implementation, not using pandas-profiling
+      - Polars-based for performance
+
+--------------------------------------------------------------------------------
+
+d) If using agentic flows (LangGraph), what research guided that?
+
+   ANSWER: From research_paper_extended.tex and quis_graph.py:
+   
+   - LangGraph state graphs for cyclic self-correction
+   - Extends QUIS with "Critic" agent for novelty evaluation
+   - Graph nodes: planner → analyst → critic → [conditional]
+   - REJECT branch loops back to analyst
+   - BORING branch loops back to planner
+   - NOVEL insights proceed to synthesizer
+   
+   Citations in paper:
+   - QUIS paper (EMNLP 2024)
+   - Bayesian Surprise (Itti & Baldi 2009)
+   - InsightPilot (Wang 2023)
+
+
+================================================================================
+                       UPGRADE GOALS & PRIORITIES
+================================================================================
+
+a) Top 3 goals for the AI upgrade (NEEDS YOUR INPUT):
+
+   Based on code analysis, likely priorities:
+   
+   1: ________________________________________________________________________
+      (Suggested: Better chart reliability — keyword detection is weak)
+   
+   2: ________________________________________________________________________
+      (Suggested: Reduce latency — query rewrite adds extra LLM call)
+   
+   3: ________________________________________________________________________
+      (Suggested: Improve follow-up handling — no conversation summarization)
+
+--------------------------------------------------------------------------------
+
+b) How much are you planning to spend on OpenRouter credits initially?
+
+   CURRENT STATE: All models configured are FREE tier
+   
+   Free models in use:
+   - nousresearch/hermes-3-llama-3.1-405b:free
+   - mistralai/mistral-small-3.1-24b-instruct:free
+   - mistralai/devstral-2512:free
+   - qwen/qwen3-4b:free
+   
+   Exception: qwen/qwen3-vl-8b-instruct (marked as "paid" in config)
+   
+   YOUR BUDGET: $_____________ initially, $_____________ per month ongoing
+
+--------------------------------------------------------------------------------
+
+c) Are you open to reducing the number of models?
+
+   [ ] Yes  [ ] No  [ ] Maybe
+   
+   Why or why not? ____________________________________________________________
+
+--------------------------------------------------------------------------------
+
+d) What latency targets do you have for chat responses?
+
+   CURRENT (from code):
+   - HTTP timeout: 180 seconds (very generous)
+   - Streaming enabled by default
+   
+   YOUR TARGETS:
+   - First token: _______ seconds
+   - Full response: _______ seconds
+
+--------------------------------------------------------------------------------
+
+e) Any specific constraints for the upgrade?
+
+   [ ] Must stay zero-cost for now
+   [ ] No major backend rewrites
+   [ ] Prioritize offline/local fallback
+   [ ] Other: _______________________________________________________________
+
+
+================================================================================
+                  PERFORMANCE & ISSUES WITH CURRENT SETUP
+================================================================================
+
+a) What is the average cost per query right now?
+
+   ANSWER: $0.00 (free tier only, per config.py)
+   
+   All models marked "cost": "free" except qwen_vl_8b
+
+--------------------------------------------------------------------------------
+
+b) How often do model-related issues occur? (NEEDS YOUR INPUT)
+
+   JSON failures:       ___% of responses
+   Hallucinations:      ___% of responses
+   Wrong columns:       ___% of responses
+   Chart render errors: ___% of responses
+
+--------------------------------------------------------------------------------
+
+c) Example of a recent model failure (NEEDS YOUR INPUT):
+
+   User query: __________________________________________________________________
+   Model used: __________________________________________________________________
+   Bad output: __________________________________________________________________
+   What went wrong: _____________________________________________________________
+
+--------------------------------------------------------------------------------
+
+d) For SQL-like queries: How common are they? (NEEDS YOUR INPUT)
+
+   [ ] Rarely  [ ] Sometimes  [ ] Often  [ ] Very often
+   
+   Example user query that fails: ________________________________________________
+   
+   NOTE: No SQL generation found in codebase. All queries go through natural
+   language → LLM → chart config → Polars execution.
+
+
+================================================================================
+                      INTEGRATION & TECH STACK CONTEXT
+================================================================================
+
+a) How is model calling implemented?
+
+   ANSWER: Direct httpx async client to OpenRouter
+   
+   Implementation: services/llm_router.py
+   - httpx.AsyncClient with 180s timeout
+   - SSE parsing for streaming
+   - No LangChain LLM wrapper used for chat
+   - LangGraph used ONLY for QUIS agentic analysis (not chat)
+
+--------------------------------------------------------------------------------
+
+b) Are you using any caching for prompts/responses?
+
+   [X] Yes — Partial caching implemented:
+   
+   1. Model health cache (in-memory, 60-second TTL):
+      self.model_health_cache[key] = (healthy, timestamp)
+   
+   2. RAG chunks (FAISS persisted to disk):
+      - faiss_db/dataset_index.faiss
+      - faiss_db/query_index.faiss
+   
+   3. Redis for WebSocket tracking:
+      - Connection counts per user
+      - Message rate limiting
+   
+   NOT cached:
+   - LLM responses (no semantic cache)
+   - Prompt embeddings
+
+--------------------------------------------------------------------------------
+
+c) For Polars/MongoDB integration: How do you handle analytical queries?
+
+   ANSWER: LLM describes operation → Backend executes Polars code
+   
+   Flow:
+   1. LLM returns chart_config JSON: {"type": "bar", "x": "product", "y": "revenue"}
+   2. column_matcher validates/fixes column names
+   3. hydrate_chart() loads Parquet file with Polars
+   4. Polars aggregates data based on config
+   5. Returns Plotly trace format
+   
+   No SQL generation — all operations are Polars-native.
+
+--------------------------------------------------------------------------------
+
+d) Any plans for local models (e.g., Ollama fallback)?
+
+   [X] Yes — Code exists but is COMMENTED OUT
+   
+   From llm_router.py line 505-530:
+   # async def _call_ollama(self, prompt: str, ...):
+   #     """DISABLED: User is using OpenRouter exclusively."""
+   
+   Comment says: "Uncomment this method if you want to enable local Ollama fallback."
+   
+   Which local models would you use? ____________________________________________
+
+
+================================================================================
+                           ADDITIONAL CONTEXT
+================================================================================
+
+What I found in the codebase that may be relevant:
+
+1. Research paper in progress (research_paper_extended.tex):
+   - Subjective Novelty Detection framework
+   - Hybrid Bayesian-Semantic Surprisal approach
+   - Belief Graph for personalized insights
+   - Claims 47% higher precision, 62% less redundancy
+
+2. QUIS implementation is sophisticated (enhanced_quis.py, 840 lines):
+   - Beam search subspace exploration
+   - Simpson's Paradox detection
+   - FDR correction for multiple testing
+   - Insight scoring by significance × effect size × novelty
+
+3. LangGraph orchestrator exists but may not be production-ready:
+   - File: quis_graph.py (669 lines)
+   - PROJECT_OVERVIEW.md says: "⚠️ Partial — not fully production-tested"
+
+4. Multi-agent orchestrator exists (multi_agent_orchestrator.py):
+   - Not explored in detail — may have additional capabilities
+
+5. Column matcher is well-designed (column_matcher.py):
+   - Fuzzy matching with synonyms
+   - 0.6 similarity threshold
+   - Auto-correction logging
+
+
+================================================================================
+                         QUESTIONS STILL NEEDING INPUT
+================================================================================
+
+Please fill in the following sections:
+
+1. TOP 3 UPGRADE GOALS (Section: Upgrade Goals, item a)
+2. BUDGET for OpenRouter (Section: Upgrade Goals, item b)  
+3. REDUCE MODELS preference (Section: Upgrade Goals, item c)
+4. LATENCY TARGETS (Section: Upgrade Goals, item d)
+5. CONSTRAINTS (Section: Upgrade Goals, item e)
+6. FAILURE FREQUENCY estimates (Section: Performance, item b)
+7. EXAMPLE FAILURE (Section: Performance, item c)
+8. SQL QUERY FREQUENCY (Section: Performance, item d)
+9. LOCAL MODELS preference (Section: Integration, item d)
+
+================================================================================
+                              END OF QUESTIONNAIRE
+================================================================================

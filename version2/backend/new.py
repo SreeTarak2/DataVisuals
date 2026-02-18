@@ -4,11 +4,11 @@ import json
 response = requests.post(
   url="https://openrouter.ai/api/v1/chat/completions",
   headers={
-    "Authorization": "Bearer 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",
+    "Authorization": "Bearer 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",
     "Content-Type": "application/json",
   },
   data=json.dumps({
-    "model": "mistralai/mistral-small-3.1-24b-instruct:free",
+    "model": "anthropic/claude-3-opus",
     "messages": [
       {
         "role": "user",

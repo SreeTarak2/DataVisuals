@@ -1,0 +1,178 @@
+================================================================================
+                    DATASAGE CHAT SYSTEM - QUESTIONNAIRE
+================================================================================
+
+Please answer these questions to help prioritize improvements.
+Fill in your answers directly in this file.
+
+--------------------------------------------------------------------------------
+1. LLM CONFIGURATION (CONFIRMED)
+--------------------------------------------------------------------------------
+
+Current setup from code analysis:
+
+  Primary (chat):      Mistral Small 3.1 24B (free tier)
+  Fallback chain:      Hermes 405B → Qwen 4B
+  Query rewriting:     Qwen3-4B (fast, simple)
+  KPI/Insights:        Hermes 3 405B
+
+Is this still accurate?  [ ] Yes  [ ] No
+
+If No, what changed? __________________________________________________________
+
+--------------------------------------------------------------------------------
+2. USER COMPLAINTS - FREQUENCY
+--------------------------------------------------------------------------------
+
+How often do users complain about these issues?
+
+  a) Wrong charts generated:        [ ] rarely  [ ] sometimes  [ ] often  [ ] very often
+  b) Hallucinated numbers:          [ ] rarely  [ ] sometimes  [ ] often  [ ] very often
+  c) Wrong columns used:            [ ] rarely  [ ] sometimes  [ ] often  [ ] very often
+  d) Generic/vague answers:         [ ] rarely  [ ] sometimes  [ ] often  [ ] very often
+  e) Slow responses:                [ ] rarely  [ ] sometimes  [ ] often  [ ] very often
+  f) Off-topic responses:           [ ] rarely  [ ] sometimes  [ ] often  [ ] very often
+  g) Chart rendering failures:      [ ] rarely  [ ] sometimes  [ ] often  [ ] very often
+
+--------------------------------------------------------------------------------
+3. BAD INTERACTION EXAMPLES
+--------------------------------------------------------------------------------
+
+Please provide 2-3 real examples of user message → bad AI response.
+(Even rough descriptions help)
+
+Example 1:
+  User asked: ________________________________________________________________
+  AI responded: ______________________________________________________________
+  What was wrong: ____________________________________________________________
+
+Example 2:
+  User asked: ________________________________________________________________
+  AI responded: ______________________________________________________________
+  What was wrong: ____________________________________________________________
+
+Example 3:
+  User asked: ________________________________________________________________
+  AI responded: ______________________________________________________________
+  What was wrong: ____________________________________________________________
+
+--------------------------------------------------------------------------------
+4. MOST COMMON CHART TYPES
+--------------------------------------------------------------------------------
+
+What chart types do users most commonly request or expect?
+(Rank 1-5, where 1 = most common)
+
+  [ ] Bar chart
+  [ ] Line chart
+  [ ] Pie chart
+  [ ] Scatter plot
+  [ ] Histogram
+  [ ] Heatmap
+  [ ] Other: _______________
+
+Which chart type works best (fewest failures)? ________________________________
+
+Which chart type fails most often? ____________________________________________
+
+--------------------------------------------------------------------------------
+5. USER CONVERSATION PATTERNS
+--------------------------------------------------------------------------------
+
+How do most users interact with the chat?
+
+  [ ] Single question → answer (one-shot)
+  [ ] Multi-turn conversations (follow-ups like "now group by region")
+  [ ] Mix of both (roughly ___% single, ___% multi-turn)
+
+Common follow-up patterns you've seen:
+  - _________________________________________________________________________
+  - _________________________________________________________________________
+  - _________________________________________________________________________
+
+--------------------------------------------------------------------------------
+6. AUTOMATED TESTS
+--------------------------------------------------------------------------------
+
+Do you have any existing tests for the chat endpoint?
+
+  [ ] No tests currently
+  [ ] Curl/HTTP scripts (location: ___________________________________)
+  [ ] Pytest/unittest files (location: ___________________________________)
+  [ ] Manual testing only
+  [ ] Other: _______________
+
+Would you like me to create test cases?  [ ] Yes  [ ] No
+
+--------------------------------------------------------------------------------
+7. TOP PAIN POINTS
+--------------------------------------------------------------------------------
+
+Pick your TOP 2 biggest issues with the chatbot right now:
+
+  [ ] Wrong charts generated
+  [ ] Generic/vague answers
+  [ ] Slow first token (streaming latency)
+  [ ] Chart hydration/rendering failures
+  [ ] Off-topic responses
+  [ ] Token limit problems (long conversations)
+  [ ] Wrong columns used in analysis
+  [ ] Hallucinated numbers/statistics
+  [ ] Poor follow-up handling
+  [ ] Other: _______________
+
+--------------------------------------------------------------------------------
+8. ARCHITECTURE PREFERENCE
+--------------------------------------------------------------------------------
+
+Current: Streaming text FIRST, then separate LLM call for chart detection
+
+Option A: Keep current (streaming + separate chart call)
+  + Real-time text display
+  + Better perceived responsiveness
+  - Extra latency for charts
+  - Keyword-based chart detection is weak
+
+Option B: Single LLM call returning text + chart JSON together
+  + Guaranteed chart when appropriate
+  + Faster total time
+  - No streaming (user waits for complete response)
+
+Option C: Hybrid (stream text, then append structured chart JSON)
+  + Best of both worlds
+  - More complex to implement
+
+Your preference:  [ ] A  [ ] B  [ ] C  [ ] Not sure
+
+--------------------------------------------------------------------------------
+9. ADDITIONAL CONTEXT
+--------------------------------------------------------------------------------
+
+Any other information that would help improve the chat system?
+
+______________________________________________________________________________
+______________________________________________________________________________
+______________________________________________________________________________
+______________________________________________________________________________
+
+--------------------------------------------------------------------------------
+10. PRIORITY FOR NEXT 1-3 MONTHS
+--------------------------------------------------------------------------------
+
+What should the chatbot become? (Rank 1-6, where 1 = highest priority)
+
+  [ ] Much more accurate answers
+  [ ] Better & more consistent chart suggestions
+  [ ] Faster responses / streaming improvements
+  [ ] Ability to take actions (apply filters, create columns, export)
+  [ ] Handle follow-up questions much better
+  [ ] Explain charts & insights in natural language
+  [ ] Support multi-dataset questions
+  [ ] Other: _______________
+
+================================================================================
+                              END OF QUESTIONNAIRE
+================================================================================
+
+Please save this file after filling in your answers.
+Return it to me and I will create a prioritized improvement plan.

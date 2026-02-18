@@ -21,7 +21,7 @@ import {
     Activity, Target, Zap, Database, Package,
     ShoppingCart, Percent, Hash, Calendar
 } from 'lucide-react';
-import PlotlyChart from '../PlotlyChart';
+import PlotlyChart from '../features/charts/PlotlyChart';
 import { cn } from '../../lib/utils';
 
 // Icon mapping for semantic KPI icons

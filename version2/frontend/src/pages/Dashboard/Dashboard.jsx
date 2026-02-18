@@ -26,13 +26,10 @@ import { useDataPreview } from './hooks/useDataPreview';
 import DashboardHeader from './components/DashboardHeader';
 import EmptyStates from './components/EmptyStates';
 import DataPreviewTable from './components/DataPreviewTable';
-import InsightsSection from './components/InsightsSection';
+import InsightsBar from './components/InsightsBar';
 import RedesignLimitModal from './components/RedesignLimitModal';
 import LoadingState from './components/LoadingState';
 import DashboardComponent from '../../components/DashboardComponent';
-import DashboardToolbar from '../../components/DashboardToolbar';
-import InsightsPanel from '../../components/InsightsPanel';
-import ExecutiveSummary from '../../components/ExecutiveSummary';
 import UploadModal from '../../components/UploadModal';
 
 // Utils
@@ -47,8 +44,6 @@ const Dashboard = () => {
     // Local UI state
     const [showUploadModal, setShowUploadModal] = useState(false);
     const [showRedesignLimitModal, setShowRedesignLimitModal] = useState(false);
-    const [timeRange, setTimeRange] = useState('all');
-    const [lastUpdated, setLastUpdated] = useState(new Date());
 
     // Custom hooks for data and state management
     const {
@@ -131,7 +126,7 @@ const Dashboard = () => {
 
     // Main dashboard render
     return (
-        <div className="min-h-screen bg-slate-950 p-6 space-y-8">
+        <div className="min-h-full bg-slate-950 p-6 space-y-8">
             {/* Header with metadata and redesign button */}
             <DashboardHeader
                 selectedDataset={selectedDataset}
@@ -141,20 +136,6 @@ const Dashboard = () => {
                 layoutLoading={layoutLoading}
                 onRegenerate={onRegenerateClick}
                 MAX_REDESIGNS={MAX_REDESIGNS}
-            />
-
-            {/* Enterprise Toolbar */}
-            <DashboardToolbar
-                datasetName={selectedDataset?.name}
-                workspaceName="Analytics"
-                onRefresh={() => {
-                    refreshDashboard();
-                    setLastUpdated(new Date());
-                }}
-                isRefreshing={loading || layoutLoading}
-                lastUpdated={lastUpdated}
-                selectedTimeRange={timeRange}
-                onTimeRangeChange={setTimeRange}
             />
 
             {/* AI-Generated Dashboard */}
@@ -222,22 +203,8 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Insights Panel */}
-            <InsightsPanel
-                insights={insights}
-                prioritizedColumns={[]}
-                datasetInfo={datasetInfo}
-            />
-
-            {/* Executive Summary */}
-            <ExecutiveSummary
-                datasetId={selectedDataset?.id}
-                insights={insights}
-                prioritizedColumns={[]}
-            />
-
-            {/* AI Insights Section */}
-            <InsightsSection
+            {/* Statistical Insights */}
+            <InsightsBar
                 insights={insights}
                 loading={loading}
             />

@@ -1,0 +1,153 @@
+@import "tailwindcss";
+
+@theme {
+  /* Design System Colors - Midnight Void Theme (User Selection) */
+  --color-noir: #020203;
+  /* Black Hole */
+  --color-midnight: #1A191C;
+  /* Gluon Grey */
+  --color-pearl: #CAD2FD;
+  /* Pale Phthalo Blue (Text/Highlight) */
+  --color-ocean: #5B88B2;
+  /* Legacy Ocean (Keep for safe ref) */
+  --color-granite: #6C6E79;
+  /* Granite Canyon (Muted) */
+  --color-gold: #C7BC92;
+  /* Morning Tea (Accent) */
+  --color-avocado: #39373D;
+  /* Avocado Peel (Surface 2) */
+
+  /* Extended Theme Colors from previous config (mapped or kept) */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Animations */
+  --animate-float: float 8s ease-in-out infinite;
+
+  @keyframes float {
+
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  /* Shadows */
+  --shadow-deep: 0 20px 50px -12px rgba(0, 0, 0, 1),
+  0 0 0 1px rgba(202, 210, 253, 0.1);
+  /* Updated to Pale Phthalo Blue glow */
+}
+
+/* Base Variables - Re-mapping to new palette where appropriate */
+:root {
+  --background: #020203;
+  /* Black Hole */
+  --foreground: #CAD2FD;
+  /* Pale Phthalo Blue */
+
+  --card: #1A191C;
+  /* Gluon Grey */
+  --card-foreground: #CAD2FD;
+
+  --popover: #39373D;
+  /* Avocado Peel */
+  --popover-foreground: #CAD2FD;
+
+  --primary: #CAD2FD;
+  /* Pale Phthalo Blue */
+  --primary-foreground: #020203;
+  /* Black Hole text on primary */
+
+  --secondary: #39373D;
+  /* Avocado Peel */
+  --secondary-foreground: #C7BC92;
+  /* Morning Tea */
+
+  --muted: rgba(108, 110, 121, 0.5);
+  /* Granite Canyon with transparency */
+  --muted-foreground: #6C6E79;
+  /* Granite Canyon */
+
+  --accent: #C7BC92;
+  /* Morning Tea */
+  --accent-foreground: #020203;
+  /* Black Hole text */
+
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+
+  --border: rgba(108, 110, 121, 0.2);
+  /* Granite Canyon low opacity */
+  --input: rgba(108, 110, 121, 0.2);
+  --ring: #CAD2FD;
+  /* Pale Phthalo Blue */
+
+  --radius: 0.25rem;
+  /* Tighter radius for IDE feel */
+}
+
+/* Utility Classes */
+.glass-panel {
+  @apply bg-midnight/60 backdrop-blur-md border border-white/5 shadow-lg rounded-lg;
+}
+
+.glass-effect {
+  @apply bg-noir/80 backdrop-blur-xl shadow-sm border-b border-white/5;
+}
+
+.text-pearl-glow {
+  color: var(--color-pearl);
+  text-shadow: 0 0 10px rgba(251, 249, 228, 0.3);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: black;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-midnight);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ocean);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-noir text-pearl font-sans antialiased;
+  }
+}

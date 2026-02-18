@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from core.config import settings
-from api import auth, datasets, chat, dashboard, analysis, models, charts
+from api import auth, datasets, chat, dashboard, analysis, models, charts, agentic
 from core.rate_limiter import limiter, rate_limit_exceeded_handler
 from db.database import connect_to_mongo, close_mongo_connection
 from services.ai.ai_service import ai_service
@@ -76,6 +76,9 @@ app.include_router(analysis.router, prefix="/api/ai", tags=["5. Advanced AI & An
 app.include_router(analysis.router, prefix="/api/analysis", tags=["5. Advanced AI & Analysis (Legacy)"])
 # Model management and testing
 app.include_router(models.router, tags=["6. Model Management"])
+
+# Agentic QUIS (LangGraph-based analysis with subjective novelty)
+app.include_router(agentic.router, prefix="/api", tags=["7. Agentic AI"])
 
 
 

@@ -5,7 +5,7 @@
  * Extracted from Dashboard.jsx to separate data preview concerns.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { getAuthToken } from '../../../services/api';
 
 export const useDataPreview = (selectedDataset) => {
@@ -75,6 +75,13 @@ export const useDataPreview = (selectedDataset) => {
             setPreviewLoading(false);
         }
     }, [selectedDataset]);
+
+    // Auto-load when dataset changes
+    useEffect(() => {
+        if (selectedDataset?.id) {
+            loadDataPreview();
+        }
+    }, [selectedDataset?.id, loadDataPreview]);
 
     return {
         dataPreview,

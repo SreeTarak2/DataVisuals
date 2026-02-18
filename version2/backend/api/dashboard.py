@@ -38,14 +38,15 @@ async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(g
         # Load actual dataframe for intelligent KPI generation
         df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
         
-        # Detect domain from metadata if available
-        domain = metadata.get("dataset_overview", {}).get("domain")
+        # Detect domain from metadata
+        domain = metadata.get("domain_intelligence", {}).get("domain") or dataset.get("domain")
         
-        # Generate intelligent, context-aware KPIs
+        # Generate intelligent, context-aware KPIs with full metadata
         intelligent_kpis = await intelligent_kpi_generator.generate_intelligent_kpis(
             df=df,
             domain=domain,
-            max_kpis=4
+            max_kpis=4,
+            dataset_metadata=metadata,
         )
         
         # Format KPIs for frontend with enterprise data
@@ -103,31 +104,138 @@ async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(g
 @router.get("/{dataset_id}/insights")
 async def get_dashboard_insights(dataset_id: str, current_user: dict = Depends(get_current_user)):
     try:
-        df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
-        quis_results = analysis_service.run_quis_analysis(df, dataset_id=dataset_id)
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        metadata = dataset.get("metadata", {})
+        deep_analysis = metadata.get("deep_analysis", {})
 
         insights = []
 
-        # Deep insights
-        for finding in quis_results.get("deep_insights", [])[:4]:
-            insights.append({
-                "id": f"deep_{len(insights)}",
-                "type": "success",
-                "title": finding.get("type", "Deep Insight").replace("_", " ").title(),
-                "description": f"A strong pattern was found in the subspace: {finding.get('subspace', 'N/A')}",
-                "confidence": 95,
-            })
+        # ── If deep_analysis was pre-computed at upload (pipeline v3.0+) ──
+        if deep_analysis and deep_analysis.get("analysis_version"):
+            enhanced = deep_analysis.get("enhanced_analysis", {})
+            quis = deep_analysis.get("quis_insights", {})
+            executive_summary = deep_analysis.get("executive_summary", "")
 
-        # Basic insights
-        for finding in quis_results.get("basic_insights", [])[:4 - len(insights)]:
-            if finding.get("type") in ["correlation", "outlier"]:
+            # Top QUIS insights (beam-search validated, FDR-corrected)
+            for i, finding in enumerate(quis.get("top_insights", [])[:6]):
+                insight_type = finding.get("insight_type", "insight")
+                desc = finding.get("description", "")
+                p_val = finding.get("p_value")
+                effect = finding.get("effect_size")
+                effect_interp = finding.get("effect_interpretation", "")
+                ci = finding.get("confidence_interval")
+
+                # Build rich description
+                stat_parts = [desc]
+                if p_val is not None and p_val < 1.0:
+                    stat_parts.append(f"p={p_val:.4f}")
+                if effect is not None and effect > 0:
+                    stat_parts.append(f"effect size={effect:.3f} ({effect_interp})" if effect_interp else f"effect={effect:.3f}")
+                if ci:
+                    stat_parts.append(f"95% CI: [{ci[0]:.3f}, {ci[1]:.3f}]")
+
+                type_map = {
+                    "correlation": "info",
+                    "comparison": "warning",
+                    "subspace": "success",
+                    "trend": "info",
+                    "anomaly": "warning",
+                    "simpson_paradox": "success",
+                }
+
+                confidence = max(10, int((1 - (p_val or 0.5)) * 100))
+
                 insights.append({
-                    "id": f"basic_{len(insights)}",
-                    "type": "warning" if finding.get("type") == "outlier" else "info",
-                    "title": finding.get("type", "Insight").title(),
-                    "description": f"Column '{finding.get('column', finding.get('columns'))}' shows notable {finding.get('type')}.",
-                    "confidence": 85,
+                    "id": f"quis_{i}",
+                    "type": type_map.get(insight_type, "info"),
+                    "title": insight_type.replace("_", " ").title(),
+                    "description": ". ".join(stat_parts),
+                    "confidence": min(confidence, 99),
+                    "p_value": p_val,
+                    "effect_size": effect,
+                    "is_simpson_paradox": finding.get("is_simpson_paradox", False),
                 })
+
+            # Strong correlations from enhanced analysis
+            for i, corr in enumerate(enhanced.get("correlations", [])[:4]):
+                if abs(corr.get("correlation", 0)) >= 0.5 and len(insights) < 10:
+                    r = corr["correlation"]
+                    col1 = corr.get("column1", "?")
+                    col2 = corr.get("column2", "?")
+                    method = corr.get("method", "pearson")
+                    p = corr.get("p_value")
+                    ci = corr.get("confidence_interval")
+
+                    desc = f"{corr.get('strength', 'Notable')} {method} correlation (r={r:.3f}"
+                    if p is not None:
+                        desc += f", p={p:.4f}"
+                    desc += f") between {col1} and {col2}"
+                    if ci:
+                        desc += f". 95% CI: [{ci[0]:.3f}, {ci[1]:.3f}]"
+
+                    insights.append({
+                        "id": f"corr_{i}",
+                        "type": "info",
+                        "title": f"Correlation: {col1} ↔ {col2}",
+                        "description": desc,
+                        "confidence": max(10, int((1 - (p or 0.5)) * 100)),
+                        "p_value": p,
+                        "effect_size": abs(r),
+                    })
+
+            # Distribution anomalies
+            for i, dist in enumerate(enhanced.get("distributions", [])[:3]):
+                skew = dist.get("skewness", 0)
+                if abs(skew) > 1.0 and len(insights) < 12:
+                    col = dist.get("column", "?")
+                    norm_p = dist.get("normality_p_value")
+                    dist_type = dist.get("distribution_type", "unknown")
+
+                    desc = f"{col} follows a {dist_type} distribution (skewness={skew:.2f}, kurtosis={dist.get('kurtosis', 0):.2f})"
+                    if norm_p is not None:
+                        desc += f". Normality test: p={norm_p:.4f}"
+
+                    insights.append({
+                        "id": f"dist_{i}",
+                        "type": "warning" if abs(skew) > 2 else "info",
+                        "title": f"Distribution: {col}",
+                        "description": desc,
+                        "confidence": 90,
+                    })
+
+            # Executive summary as first insight if available
+            if executive_summary:
+                insights.insert(0, {
+                    "id": "executive_summary",
+                    "type": "success",
+                    "title": "Executive Summary",
+                    "description": executive_summary,
+                    "confidence": 100,
+                })
+
+        else:
+            # ── Fallback for datasets processed before v3.0 ──
+            df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
+            quis_results = analysis_service.run_quis_analysis(df, dataset_id=dataset_id)
+
+            for finding in quis_results.get("deep_insights", [])[:4]:
+                insights.append({
+                    "id": f"deep_{len(insights)}",
+                    "type": "success",
+                    "title": finding.get("type", "Deep Insight").replace("_", " ").title(),
+                    "description": f"A strong pattern was found in the subspace: {finding.get('subspace', 'N/A')}",
+                    "confidence": 95,
+                })
+
+            for finding in quis_results.get("basic_insights", [])[:4 - len(insights)]:
+                if finding.get("type") in ["correlation", "outlier"]:
+                    insights.append({
+                        "id": f"basic_{len(insights)}",
+                        "type": "warning" if finding.get("type") == "outlier" else "info",
+                        "title": finding.get("type", "Insight").title(),
+                        "description": f"Column '{finding.get('column', finding.get('columns'))}' shows notable {finding.get('type')}.",
+                        "confidence": 85,
+                    })
 
         if not insights:
             insights.append({

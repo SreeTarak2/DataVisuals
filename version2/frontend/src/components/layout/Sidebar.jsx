@@ -1,162 +1,70 @@
-import React, { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import React from 'react';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, BarChart3, Settings, LogOut, Sparkles, History,Layers3,MessagesSquare
+  LayoutDashboard, BarChart3, Layers3, Settings, LogOut, Sparkles
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../../store/authStore';
-import ChatHistoryModal from '../ChatHistoryModal';
 import { cn } from '../../lib/utils';
 
-const Sidebar = ({ isOpen, setIsOpen, onHover }) => {
-  const { logout, user } = useAuth();
-  const [showHistoryModal, setShowHistoryModal] = useState(false);
+const NAV_ITEMS = [
+  { icon: LayoutDashboard, label: 'Dashboard', path: '/app/dashboard' },
+  { icon: Layers3, label: 'Datasets', path: '/app/datasets' },
+  { icon: BarChart3, label: 'Charts', path: '/app/charts' },
+  { icon: Settings, label: 'Settings', path: '/app/settings' },
+];
 
-  const navItems = [
-    { icon: LayoutDashboard, label: 'Dashboard', path: '/app/dashboard' },
-    { icon: Layers3, label: 'Datasets', path: '/app/datasets' },
-    { icon: MessagesSquare, label: 'AI Chat', path: '/app/chat' },
-    { icon: BarChart3, label: 'Charts', path: '/app/charts' },
-    { icon: History, label: 'Chat History', path: '/app/chat-history', isButton: true, onClick: () => setShowHistoryModal(true) },
-  ];
+const Sidebar = () => {
+  const { logout } = useAuth();
+  const navigate = useNavigate();
 
   return (
-    <>
-      {/* Mobile Overlay */}
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-30 lg:hidden"
-            onClick={() => setIsOpen(false)}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Sidebar */}
-      <motion.aside
-        initial={false}
-        animate={{
-          width: isOpen ? 256 : (onHover ? 256 : 80),
-          x: isOpen ? 0 : (onHover ? 0 : -176)
-        }}
-        transition={{ duration: 0.3, ease: "easeInOut" }}
-        onHoverStart={() => window.innerWidth >= 1024 && onHover(true)}
-        onHoverEnd={() => window.innerWidth >= 1024 && onHover(false)}
-        className={cn(
-          "fixed lg:sticky top-0 left-0 h-screen glass-effect border-r border-border/50 z-50"
-        )}
-        role="navigation"
-        aria-label="Main navigation"
+    <aside className="w-[60px] h-full flex flex-col items-center py-4 border-r border-white/[0.06] bg-[#0a0f1a]">
+      {/* Logo */}
+      <button
+        onClick={() => navigate('/app/dashboard')}
+        className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-cyan-500 flex items-center justify-center mb-8 hover:shadow-lg hover:shadow-primary/20 transition-all"
+        title="DataSage"
       >
-        <div className="flex flex-col h-full p-4 overflow-y-auto">
-          {/* Logo */}
-          <motion.div
-            className="flex items-center gap-3 mb-8"
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.1 }}
+        <Sparkles className="w-5 h-5 text-white" />
+      </button>
+
+      {/* Navigation Icons */}
+      <nav className="flex-1 flex flex-col items-center gap-1.5">
+        {NAV_ITEMS.map((item) => (
+          <NavLink
+            key={item.path}
+            to={item.path}
+            className={({ isActive }) =>
+              cn(
+                "w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 group relative",
+                isActive
+                  ? "bg-primary/15 text-primary shadow-sm"
+                  : "text-slate-500 hover:text-slate-200 hover:bg-white/[0.05]"
+              )
+            }
+            title={item.label}
           >
-            <img 
-              src="/logo.png" 
-              alt="DataSage Logo" 
-              className="w-10 h-10 rounded-xl object-cover shrink-0"
-            />
-            <motion.span
-              className="text-xl font-bold gradient-text whitespace-nowrap"
-              initial={{ opacity: 0, width: 0 }}
-              animate={{ opacity: isOpen || onHover ? 1 : 0, width: isOpen || onHover ? 'auto' : 0 }}
-              transition={{ delay: 0.2 }}
-              style={{ fontFamily: "'Rajdhani', sans-serif" }}
-            >
-              DataSage
-            </motion.span>
-          </motion.div>
+            <item.icon className="w-5 h-5" />
+            {/* Tooltip */}
+            <span className="absolute left-full ml-3 px-2.5 py-1 rounded-md bg-slate-800 text-white text-xs font-medium whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity shadow-lg border border-white/10 z-50">
+              {item.label}
+            </span>
+          </NavLink>
+        ))}
+      </nav>
 
-          {/* Navigation */}
-          <nav className="flex-1 space-y-2" role="menubar">
-            <AnimatePresence>
-              {navItems.map((item, index) => (
-                <motion.div
-                  key={item.path}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: index * 0.05 }}
-                >
-                  {item.isButton ? (
-                    <button
-                      onClick={item.onClick}
-                      className={cn(
-                        "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 focus-visible-ring relative w-full text-left",
-                        "text-muted-foreground hover:bg-accent hover:text-foreground shadow-inner-custom"
-                      )}
-                    >
-                      <item.icon className="w-5 h-5 shrink-0" aria-hidden="true" />
-                      <motion.span
-                        className="whitespace-nowrap"
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: isOpen || onHover ? 1 : 0, x: 0 }}
-                        transition={{ delay: 0.1 }}
-                      >
-                        {item.label}
-                      </motion.span>
-                    </button>
-                  ) : (
-                    <NavLink
-                      to={item.path}
-                      className={({ isActive }) =>
-                        cn(
-                          "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 focus-visible-ring relative shadow-inner-custom",
-                          isActive
-                            ? "bg-primary/10 text-primary border border-primary/20 shadow-md"
-                            : "text-muted-foreground hover:bg-accent hover:text-foreground"
-// Add custom inner shadow style
-// You can add this to your global CSS (e.g., index.css or a relevant CSS file):
-// .shadow-inner-custom { box-shadow: inset 0 2px 8px 0 rgba(0,0,0,0.18); }
-                        )
-                      }
-                    >
-                      <item.icon className="w-5 h-5 shrink-0" aria-hidden="true" />
-                      <motion.span
-                        className="whitespace-nowrap"
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: isOpen || onHover ? 1 : 0, x: 0 }}
-                        transition={{ delay: 0.1 }}
-                      >
-                        {item.label}
-                      </motion.span>
-                    </NavLink>
-                  )}
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </nav>
-
-
-          {/* Logout Button */}
-          <button
-            onClick={logout}
-            className={cn(
-              "flex items-center gap-3 px-4 py-3 mt-2 rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors w-full focus-visible-ring",
-              !(isOpen || onHover) && "justify-center"
-            )}
-            aria-label="Logout"
-            style={{ marginTop: 'auto' }}
-          >
-            <LogOut className="w-5 h-5" />
-            <span className={cn("whitespace-nowrap", !(isOpen || onHover) && "hidden")}>Logout</span>
-          </button>
-        </div>
-      </motion.aside>
-
-      {/* Chat History Modal */}
-      <ChatHistoryModal
-        isOpen={showHistoryModal}
-        onClose={() => setShowHistoryModal(false)}
-      />
-    </>
+      {/* Bottom: Logout */}
+      <button
+        onClick={logout}
+        className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all duration-200 group relative"
+        title="Logout"
+      >
+        <LogOut className="w-5 h-5" />
+        <span className="absolute left-full ml-3 px-2.5 py-1 rounded-md bg-slate-800 text-white text-xs font-medium whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity shadow-lg border border-white/10 z-50">
+          Logout
+        </span>
+      </button>
+    </aside>
   );
 };
 
