@@ -21,6 +21,9 @@ import polars as pl
 from db.database import get_database
 from services.llm_router import llm_router
 from services.datasets.dataset_loader import load_dataset, create_context_string
+from services.datasets.faiss_vector_service import faiss_vector_service
+from services.rag.chunk_service import chunk_service
+from services.rag.reranker_service import reranker_service
 from services.charts.hydrate import hydrate_chart, hydrate_kpi, hydrate_table
 from services.charts.column_matcher import column_matcher
 from services.conversations.conversation_service import load_or_create_conversation, save_conversation
@@ -144,6 +147,117 @@ class QueryComplexityAnalyzer:
         }
 
 
+# -----------------------------------------------------------
+# DEEP ANALYSIS ROUTER (LangGraph QUIS)
+# -----------------------------------------------------------
+class DeepAnalysisRouter:
+    """
+    Determines when to route queries to LangGraph QUIS for deep analysis.
+    
+    Triggers on queries that need:
+    - Statistical correlation analysis
+    - Anomaly detection
+    - Time-series trend analysis
+    - Multi-variable comparisons
+    - Novelty filtering (avoid boring insights)
+    """
+    
+    # Explicit deep analysis triggers
+    DEEP_ANALYSIS_TRIGGERS = [
+        r"\b(deep\s*dive|in[- ]?depth|comprehensive|thorough)\s*(analysis|look|review)",
+        r"\b(correlation|correlate|correlations)\b",
+        r"\b(anomal\w+|outlier|unusual|strange|odd)\b",
+        r"\b(statistical|statistic|p[- ]?value|significance)\b",
+        r"\b(simpson'?s?\s*paradox)\b",
+        r"\b(hidden\s*pattern|underlying\s*(pattern|trend))\b",
+        r"\bfull\s*analysis\b",
+        r"\banalyze\s*(everything|all|the\s*data)\b",
+        r"\b(insight|insights)\s*(generation|report)\b",
+        r"\bwhat\s*(can\s*you\s*(tell|find|discover)|should\s*i\s*know)\b",
+    ]
+    
+    # Negative patterns - these prefer direct LLM response
+    SIMPLE_QUERY_PATTERNS = [
+        r"^(show|display|get|fetch)\s*(me\s*)?(the\s*)?\w+",
+        r"^what\s*(is|was|are|were)\s*the\s*(total|sum|count|average|max|min)\b",
+        r"^how\s*(many|much)\b",
+        r"^list\s*(all|the|top|bottom)?\b",
+    ]
+    
+    @classmethod
+    def should_route_to_quis(cls, query: str) -> bool:
+        """
+        Determine if query should be routed to LangGraph QUIS.
+        
+        Args:
+            query: User's natural language query
+            
+        Returns:
+            True if query would benefit from deep QUIS analysis
+        """
+        if not query:
+            return False
+            
+        query_lower = query.lower().strip()
+        
+        # Check for explicit deep analysis triggers
+        for pattern in cls.DEEP_ANALYSIS_TRIGGERS:
+            if re.search(pattern, query_lower):
+                return True
+        
+        # Check if it's a simple query that shouldn't go to QUIS
+        for pattern in cls.SIMPLE_QUERY_PATTERNS:
+            if re.match(pattern, query_lower):
+                return False
+        
+        # For ambiguous cases, use complexity analysis
+        complexity = QueryComplexityAnalyzer.classify(query)
+        
+        # Only route "complex" queries with analytical keywords
+        if complexity == "complex":
+            # Additional check for analytical intent
+            analytical_keywords = [
+                "trend", "pattern", "relationship", "compare",
+                "impact", "effect", "change", "growth", "decline",
+                "segment", "breakdown", "distribution"
+            ]
+            return any(kw in query_lower for kw in analytical_keywords)
+        
+        return False
+    
+    @classmethod
+    def get_routing_info(cls, query: str) -> Dict[str, Any]:
+        """
+        Get detailed routing decision with explanation.
+        
+        Useful for debugging and logging.
+        """
+        query_lower = query.lower().strip()
+        
+        trigger_matches = [
+            p for p in cls.DEEP_ANALYSIS_TRIGGERS
+            if re.search(p, query_lower)
+        ]
+        simple_matches = [
+            p for p in cls.SIMPLE_QUERY_PATTERNS
+            if re.match(p, query_lower)
+        ]
+        
+        should_route = cls.should_route_to_quis(query)
+        
+        return {
+            "route_to_quis": should_route,
+            "trigger_matches": trigger_matches,
+            "simple_matches": simple_matches,
+            "complexity": QueryComplexityAnalyzer.classify(query),
+            "reason": (
+                "explicit_trigger" if trigger_matches else
+                "simple_query" if simple_matches else
+                "complexity_analysis"
+            )
+        }
+
+
 
 class AIService:
     """
@@ -171,6 +285,67 @@ class AIService:
         if self._db is None:
             self._db = get_database()
         return self._db
+
+    # -----------------------------------------------------------
+    # RAG CONTEXT RETRIEVAL
+    # -----------------------------------------------------------
+    async def _get_rag_context(
+        self, 
+        query: str, 
+        dataset_id: str, 
+        user_id: str, 
+        metadata: Dict[str, Any]
+    ) -> str:
+        """
+        Get context for LLM using RAG vector retrieval.
+        Falls back to full context string if vector search unavailable.
+        
+        Args:
+            query: User's query for semantic matching
+            dataset_id: Dataset to search in
+            user_id: User for access control
+            metadata: Full dataset metadata for fallback
+            
+        Returns:
+            Context string for LLM prompt
+        """
+        try:
+            # Try vector retrieval
+            if faiss_vector_service.enable_vector_search:
+                chunks = await faiss_vector_service.search_relevant_chunks(
+                    query=query,
+                    dataset_id=dataset_id,
+                    user_id=user_id,
+                    k=10,  # Retrieve more for re-ranking
+                    score_threshold=0.3  # Lower threshold, reranker will filter
+                )
+                
+                if chunks:
+                    # Apply re-ranking for better relevance
+                    reranked_chunks = reranker_service.rerank(
+                        query=query,
+                        chunks=chunks,
+                        top_k=5,
+                        score_threshold=0.4,
+                        use_diversity=True
+                    )
+                    
+                    if reranked_chunks:
+                        context = faiss_vector_service.assemble_context_from_chunks(
+                            reranked_chunks, 
+                            max_tokens=2000
+                        )
+                        logger.info(f"RAG: Retrieved {len(chunks)} -> reranked to {len(reranked_chunks)} chunks")
+                        return context
+                    
+                logger.debug("RAG: No chunks after re-ranking, falling back to full context")
+            
+            # Fallback to full context
+            return create_context_string(metadata)
+            
+        except Exception as e:
+            logger.warning(f"RAG retrieval failed, using fallback: {e}")
+            return create_context_string(metadata)
 
     # -----------------------------------------------------------
     # CHAT PROCESSING PIPELINE
@@ -229,22 +404,36 @@ class AIService:
         query = sanitized_query
         query_lower = query.lower()
 
-        off_topic_triggers = [
-            "hello", "hi ", "hey ", "good morning", "good evening", "how are you",
-            "thank you", "thanks", "who is", "what is the capital", "prime minister",
-            "president", "weather", "joke", "tell me a", "what time", "news", "stock",
-            "who are you", "what can you do", "help me", "how do i", "bye", "goodbye"
-        ]
-
-        if any(trigger in query_lower for trigger in off_topic_triggers) or len(query_lower) < 5:
-            return {
-                "response_text": "I'm a specialized data analytics assistant. I can help with trends, charts, forecasts, correlations, or insights from your dataset.\n\n"
-                               "Try asking: \"Show top products by revenue\" or \"What is the sales trend over time?\"",
-                "chart_config": None,
-                "conversation_id": conversation_id
-            }
-
-        conv = await load_or_create_conversation(conversation_id, user_id, dataset_id)
+        # --- SMART ROUTING: Check if query needs deep QUIS analysis ---
+        routing_info = DeepAnalysisRouter.get_routing_info(query)
+        if routing_info["route_to_quis"]:
+            logger.info(f"Routing to LangGraph QUIS: {routing_info['reason']}")
+            try:
+                from services.agents.quis_graph import run_quis_analysis
+                
+                quis_result = await run_quis_analysis(
+                    dataset_id=dataset_id,
+                    user_id=user_id,
+                    query=query,
+                    novelty_threshold=0.35
+                )
+                
+                # Format QUIS response for chat compatibility
+                return {
+                    "response_text": quis_result.get("response", "Analysis complete."),
+                    "chart_config": quis_result.get("charts", [None])[0] if quis_result.get("charts") else None,
+                    "additional_charts": quis_result.get("charts", [])[1:] if len(quis_result.get("charts", [])) > 1 else [],
+                    "conversation_id": conversation_id,
+                    "analysis_type": "deep_quis",
+                    "stats": quis_result.get("stats", {})
+                }
+            except ImportError as e:
+                logger.warning(f"LangGraph not available, falling back to standard pipeline: {e}")
+            except Exception as e:
+                logger.error(f"QUIS analysis failed, falling back: {e}", exc_info=True)
+        
+        # --- Standard Chat Pipeline ---
+        # Load or create conversation
         messages = conv.get("messages", [])
         messages.append({"role": "user", "content": query})
 
@@ -256,7 +445,8 @@ class AIService:
         if not metadata:
             raise HTTPException(409, "Dataset is still being processed.")
 
-        dataset_context = create_context_string(metadata)
+        # RAG: Try vector retrieval first, fallback to full context
+        dataset_context = await self._get_rag_context(query, dataset_id, user_id, metadata)
 
         enhanced_query = await rewrite_query(query, dataset_context)
         if enhanced_query != query:
@@ -663,14 +853,14 @@ class AIService:
         """
         query_lower = query.strip().lower()
 
+        # Only block truly off-topic queries (not greetings — let the LLM handle those)
         off_topic_triggers = [
-            "hello", "hi ", "hey ", "good morning", "good evening", "how are you",
-            "thank you", "thanks", "who is", "what is the capital", "prime minister",
-            "president", "weather", "joke", "tell me a", "what time", "news", "stock",
-            "who are you", "what can you do", "help me", "how do i", "bye", "goodbye"
+            "what is the capital", "prime minister", "president",
+            "weather", "joke", "tell me a joke", "what time is it",
+            "news today", "stock price", "stock market",
         ]
 
-        if any(trigger in query_lower for trigger in off_topic_triggers) or len(query_lower) < 5:
+        if any(trigger in query_lower for trigger in off_topic_triggers) or len(query_lower) < 3:
             guardrail_response = (
                 "I'm a specialized data analytics assistant. I can help with trends, charts, "
                 "forecasts, correlations, or insights from your dataset.\n\n"
@@ -697,11 +887,13 @@ class AIService:
 
         dataset_context = create_context_string(metadata)
 
+        # Rewrite query internally for better LLM understanding (NOT shown to user)
         enhanced_query = await rewrite_query(query, dataset_context)
         if enhanced_query != query:
             logger.info(f"Query rewritten: '{query[:50]}...' → '{enhanced_query[:50]}...'")
         
-        messages[-1]["content"] = enhanced_query
+        # Keep original query in messages for conversation history (shown to user)
+        # Only use enhanced_query for the LLM prompt
 
         factory = PromptFactory(dataset_metadata=metadata)
         prompt = factory.get_prompt(PromptType.CONVERSATIONAL, user_message=enhanced_query, history=messages)

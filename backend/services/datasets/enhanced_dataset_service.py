@@ -400,7 +400,7 @@ class EnhancedDatasetService:
     async def auto_index_dataset_to_vector_db(self, dataset_id: str, user_id: str) -> bool:
         """
         Automatically index a dataset to vector database after processing.
-        This is called internally when dataset processing is complete.
+        Creates semantic chunks and indexes them for RAG retrieval.
         
         Args:
             dataset_id: Dataset ID to index
@@ -412,22 +412,70 @@ class EnhancedDatasetService:
         try:
             dataset_doc = await self.get_dataset(dataset_id, user_id)
             
-            if dataset_doc and dataset_doc.get("metadata"):
-                success = await faiss_vector_service.add_dataset_to_vector_db(
-                    dataset_id=dataset_id,
-                    dataset_metadata=dataset_doc["metadata"],
-                    user_id=user_id
-                )
-                
-                if success:
-                    logger.info(f"Dataset {dataset_id} auto-indexed to vector database")
-                    return True
-                else:
-                    logger.warning(f"Failed to auto-index dataset {dataset_id} to vector database")
-                    return False
-            else:
+            if not dataset_doc or not dataset_doc.get("metadata"):
                 logger.warning(f"Dataset {dataset_id} not ready for vector indexing")
                 return False
+            
+            metadata = dataset_doc["metadata"]
+            
+            # 1. Index dataset-level metadata (existing behavior)
+            await faiss_vector_service.add_dataset_to_vector_db(
+                dataset_id=dataset_id,
+                dataset_metadata=metadata,
+                user_id=user_id
+            )
+            
+            # 2. Create and index semantic chunks for RAG
+            try:
+                from services.rag.chunk_service import chunk_service
+                
+                # Load DataFrame for sample extraction
+                df = None
+                try:
+                    df = await self.load_dataset_data(dataset_id, user_id)
+                except Exception as e:
+                    logger.warning(f"Could not load DataFrame for chunk creation: {e}")
+                
+                # Create chunks
+                chunks = chunk_service.create_chunks_from_metadata(
+                    dataset_id=dataset_id,
+                    metadata=metadata,
+                    df=df
+                )
+                
+                if chunks:
+                    # Delete existing chunks for this dataset (for re-indexing)
+                    await faiss_vector_service.delete_dataset_chunks(dataset_id, user_id)
+                    
+                    # Index new chunks in FAISS (dense retrieval)
+                    success = await faiss_vector_service.index_dataset_chunks(
+                        dataset_id=dataset_id,
+                        chunks=chunks,
+                        user_id=user_id
+                    )
+                    
+                    if success:
+                        logger.info(f"Dataset {dataset_id} indexed with {len(chunks)} RAG chunks")
+                        
+                        # Also build BM25 index for hybrid search
+                        try:
+                            from services.rag.hybrid_search import hybrid_search_service
+                            hybrid_search_service.build_bm25_index(dataset_id, chunks)
+                        except ImportError:
+                            pass  # Hybrid search not available
+                        except Exception as e:
+                            logger.warning(f"BM25 indexing optional failure: {e}")
+                    else:
+                        logger.warning(f"Failed to index chunks for dataset {dataset_id}")
+                else:
+                    logger.warning(f"No chunks created for dataset {dataset_id}")
+                    
+            except ImportError:
+                logger.warning("ChunkService not available, skipping RAG chunk indexing")
+            except Exception as e:
+                logger.error(f"RAG chunk indexing failed for {dataset_id}: {e}")
+            
+            return True
                 
         except Exception as e:
             logger.error(f"Auto-indexing failed for dataset {dataset_id}: {e}")

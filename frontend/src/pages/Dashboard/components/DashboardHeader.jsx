@@ -9,7 +9,7 @@ import React from 'react';
 import { useAuth } from '../../../store/authStore';
 import { motion } from 'framer-motion';
 import { Sparkles, RefreshCw, Loader2 } from 'lucide-react';
-import { Button } from '../../../components/Button';
+import { Button } from '../../../components/common/Button';
 import DomainBadge from '../../../components/DomainBadge';
 
 const DashboardHeader = ({
@@ -95,8 +95,8 @@ const DashboardHeader = ({
                             onClick={onRegenerate}
                             disabled={layoutLoading || !selectedDataset?.is_processed || redesignCount >= MAX_REDESIGNS}
                             className={`${redesignCount >= MAX_REDESIGNS
-                                    ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                                ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                                : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
                                 } border border-slate-700 hover:border-slate-600 transition-all duration-200 shadow-lg`}
                             title={`Ask AI to redesign this dashboard with fresh analysis (${redesignCount}/${MAX_REDESIGNS} used)`}
                         >
@@ -110,10 +110,10 @@ const DashboardHeader = ({
 
                         {redesignCount > 0 && (
                             <div className={`px-3 py-1 rounded-lg text-xs font-medium ${redesignCount >= MAX_REDESIGNS
-                                    ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                                    : redesignCount >= MAX_REDESIGNS - 1
-                                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                                        : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                : redesignCount >= MAX_REDESIGNS - 1
+                                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                    : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                                 }`}>
                                 {redesignCount}/{MAX_REDESIGNS}
                             </div>
