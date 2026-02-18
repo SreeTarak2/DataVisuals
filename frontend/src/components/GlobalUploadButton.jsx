@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Upload } from 'lucide-react'
-import UploadModal from './UploadModal'
+import UploadModal from './features/datasets/UploadModal'
 import useDatasetStore from '../store/datasetStore'
 
 const GlobalUploadButton = ({ className = '', variant = 'default' }) => {

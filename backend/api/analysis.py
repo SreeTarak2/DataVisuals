@@ -10,10 +10,117 @@ from services.ai.ai_service import ai_service
 from services.ai.ai_designer_service import ai_designer_service
 from services.analysis.analysis_service import analysis_service
 from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+from services.datasets.dataset_loader import load_dataset
+from services.charts.hydrate import hydrate_chart, hydrate_kpi, hydrate_table
+from db.schemas_dashboard import ChartConfig, KpiConfig, TableConfig, ComponentType
+from db.database import get_database
+from bson import ObjectId
 
 # --- Configuration ---
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+# ---------------------------------------------------------
+# Hydrate a raw blueprint dict with actual data from the dataset
+# ---------------------------------------------------------
+async def _hydrate_blueprint(blueprint: Dict[str, Any], dataset_id: str, user_id: str) -> Dict[str, Any]:
+    """
+    Take a designer-produced blueprint (column names + chart types only)
+    and hydrate every component with real Plotly traces / KPI values / table rows.
+    """
+    components = blueprint.get("components", [])
+    if not components:
+        return blueprint
+
+    # Load the dataset file
+    db = get_database()
+    try:
+        dataset_oid = ObjectId(dataset_id)
+    except Exception:
+        dataset_oid = dataset_id
+    dataset_doc = await db.datasets.find_one({"_id": dataset_oid, "user_id": user_id})
+    if not dataset_doc or not dataset_doc.get("file_path"):
+        logger.warning(f"Cannot hydrate blueprint — dataset {dataset_id} not found or has no file_path")
+        return blueprint
+
+    try:
+        df = await load_dataset(dataset_doc["file_path"])
+    except Exception as e:
+        logger.error(f"Failed to load dataset for hydration: {e}")
+        return blueprint
+
+    hydrated = []
+    for comp in components:
+        ctype = comp.get("type", "")
+        cfg = comp.get("config", {})
+
+        try:
+            if ctype == "kpi":
+                kpi_cfg = KpiConfig(
+                    title=cfg.get("title", comp.get("title", "KPI")),
+                    span=comp.get("span", 1),
+                    column=cfg.get("column", "__all__"),
+                    aggregation=cfg.get("aggregation", "count"),
+                    icon=cfg.get("icon"),
+                    color=cfg.get("color"),
+                )
+                result = hydrate_kpi(df, kpi_cfg)
+                comp["value"] = result.get("value", 0) if isinstance(result, dict) else result
+
+            elif ctype == "chart":
+                columns = cfg.get("columns", [])
+                if isinstance(columns, str):
+                    columns = [columns]
+                # Filter to columns that actually exist in the dataframe
+                safe_columns = [c for c in columns if c in df.columns]
+                if not safe_columns:
+                    logger.warning(f"Chart '{comp.get('title')}' has no valid columns. Skipping hydration.")
+                    comp["chart_data"] = {"data": [], "layout": {}}
+                    hydrated.append(comp)
+                    continue
+
+                chart_cfg = ChartConfig(
+                    title=cfg.get("title", comp.get("title", "Chart")),
+                    span=comp.get("span", 2),
+                    chart_type=cfg.get("chart_type", "bar"),
+                    columns=safe_columns,
+                    aggregation=cfg.get("aggregation", "sum"),
+                    group_by=cfg.get("group_by"),
+                )
+                traces, rows_used = hydrate_chart(df, chart_cfg)
+                comp["chart_data"] = {
+                    "data": traces,
+                    "layout": {"title": comp.get("title", "Chart")},
+                    "rows_used": rows_used,
+                }
+
+            elif ctype == "table":
+                columns = cfg.get("columns", [])
+                safe_columns = [c for c in columns if c in df.columns]
+                if not safe_columns:
+                    safe_columns = list(df.columns[:6])
+                table_cfg = TableConfig(
+                    title=cfg.get("title", comp.get("title", "Table")),
+                    span=comp.get("span", 4),
+                    columns=safe_columns,
+                    limit=cfg.get("limit", 200),
+                )
+                comp["table_data"] = hydrate_table(df, table_cfg)
+
+        except Exception as e:
+            logger.error(f"Hydration failed for component '{comp.get('title')}' ({ctype}): {e}")
+            if ctype == "chart":
+                comp["chart_data"] = {"data": [], "layout": {}}
+            elif ctype == "kpi":
+                comp["value"] = "N/A"
+            elif ctype == "table":
+                comp["table_data"] = []
+
+        hydrated.append(comp)
+
+    blueprint["components"] = hydrated
+    return blueprint
 
 
 # --- AI-Powered Dashboard and Story Generation ---
@@ -37,15 +144,8 @@ async def design_intelligent_dashboard(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Creates an intelligent dashboard design using the AI Designer service.
-    
-    By default, returns cached dashboard if it exists. To regenerate, pass force_regenerate=true.
-    
-    Request body (optional):
-    {
-        "design_preference": "executive_kpi_trend",  // Optional pattern preference
-        "force_regenerate": false                     // Set to true to regenerate existing dashboard
-    }
+    Creates an intelligent dashboard design using the AI Designer service,
+    then hydrates each component with real data (Plotly traces, KPI values, table rows).
     """
     try:
         force_regenerate = request.get("force_regenerate", False)
@@ -57,6 +157,16 @@ async def design_intelligent_dashboard(
             design_preference=design_preference,
             force_regenerate=force_regenerate
         )
+
+        # Hydrate the blueprint with actual data
+        blueprint = response.get("dashboard_blueprint")
+        if blueprint and isinstance(blueprint, dict):
+            logger.info(f"Hydrating designer blueprint for dataset {dataset_id}...")
+            response["dashboard_blueprint"] = await _hydrate_blueprint(
+                blueprint, dataset_id, current_user["id"]
+            )
+            logger.info(f"Blueprint hydration complete.")
+
         return response
     except Exception as e:
         logger.error(f"AI Designer error: {e}", exc_info=True)

@@ -6,42 +6,57 @@ const DEFAULT_API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/
 
 /**
  * Extract text content from potentially JSON-formatted LLM responses.
- * Handles cases where LLM returns: { "response": "..." } or { "tasks": [...] }
- * instead of plain text/markdown.
+ * Handles: { "response": "..." }, partial JSON, malformed streaming responses.
  */
 const extractTextFromResponse = (content) => {
   if (!content || typeof content !== 'string') return content || '';
 
   const trimmed = content.trim();
 
-  // If it doesn't look like JSON, return as-is
+  // Check for partial JSON fragments first (e.g., 'ng": "Hello...')
   if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    // Look for pattern like: key": "value or just extract after ": "
+    const partialMatch = trimmed.match(/^[a-z_]*"?\s*:\s*"(.+)/is);
+    if (partialMatch) {
+      let extracted = partialMatch[1].replace(/"\s*[,}]?\s*$/, '');
+      if (extracted.length > 10) return extracted;
+    }
     return content;
   }
 
-  // Try to parse as JSON and extract text
+  // Try to parse as valid JSON
   try {
     const parsed = JSON.parse(trimmed);
 
-    // Handle { "response": "..." } or { "response_text": "..." }
+    // Extract from known fields
     if (parsed.response) return parsed.response;
     if (parsed.response_text) return parsed.response_text;
+    if (parsed.greeting) return parsed.greeting;
     if (parsed.text) return parsed.text;
     if (parsed.content) return parsed.content;
     if (parsed.answer) return parsed.answer;
     if (parsed.message) return parsed.message;
+    if (parsed.reasoning) return parsed.reasoning;
+    if (parsed.output) return parsed.output;
 
-    // Handle { "tasks": [...] } - format as bullet list
+    // Handle tasks array
     if (parsed.tasks && Array.isArray(parsed.tasks)) {
       return parsed.tasks.map((t, i) =>
         `${i + 1}. **${t.task || t.name}**: ${t.description || ''}`
       ).join('\n');
     }
 
-    // If we can't extract, convert to readable string
+    // Find any long string value
+    const stringVals = Object.values(parsed).filter(v => typeof v === 'string' && v.length > 20);
+    if (stringVals.length > 0) return stringVals.join('\n\n');
+
     return JSON.stringify(parsed, null, 2);
   } catch {
-    // Not valid JSON, return original
+    // Regex fallback for malformed JSON
+    const match = trimmed.match(/"(?:response|text|content|answer|message)"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
+    if (match && match[1]) {
+      return match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+    }
     return content;
   }
 };
@@ -201,6 +216,56 @@ const useChatStore = create(
         return {
           success: true,
           newContent,
+          conversationId: convId,
+          truncatedCount: conversation.messages.length - messageIndex - 1
+        };
+      },
+
+      // Rerun a user message (removes AI response and allows re-execution)
+      rerunMessage: (messageId, conversationId) => {
+        const state = get();
+        const convId = conversationId || state.currentConversationId;
+
+        if (!convId || !state.conversations[convId]) {
+          console.error('Cannot rerun message: conversation not found');
+          return null;
+        }
+
+        const conversation = state.conversations[convId];
+        const messageIndex = conversation.messages.findIndex(m => m.id === messageId);
+
+        if (messageIndex === -1) {
+          console.error('Cannot rerun message: message not found');
+          return null;
+        }
+
+        const message = conversation.messages[messageIndex];
+
+        // Only allow rerunning user messages
+        if (message.role !== 'user') {
+          console.error('Cannot rerun non-user messages');
+          return null;
+        }
+
+        // Truncate all messages after this user message (remove AI response)
+        const truncatedMessages = conversation.messages.slice(0, messageIndex + 1);
+
+        // Update the conversation
+        set(state => ({
+          conversations: {
+            ...state.conversations,
+            [convId]: {
+              ...state.conversations[convId],
+              messages: truncatedMessages,
+              updatedAt: new Date().toISOString()
+            }
+          }
+        }));
+
+        // Return the message content so caller can re-send
+        return {
+          success: true,
+          content: message.content,
           conversationId: convId,
           truncatedCount: conversation.messages.length - messageIndex - 1
         };

@@ -26,12 +26,10 @@ import { useDataPreview } from './hooks/useDataPreview';
 import DashboardHeader from './components/DashboardHeader';
 import EmptyStates from './components/EmptyStates';
 import DataPreviewTable from './components/DataPreviewTable';
-import InsightsSection from './components/InsightsSection';
+import InsightsBar from './components/InsightsBar';
 import RedesignLimitModal from './components/RedesignLimitModal';
 import LoadingState from './components/LoadingState';
 import DashboardComponent from '../../components/DashboardComponent';
-import InsightsPanel from '../../components/InsightsPanel';
-import ExecutiveSummary from '../../components/ExecutiveSummary';
 import UploadModal from '../../components/UploadModal';
 
 // Utils
@@ -128,7 +126,7 @@ const Dashboard = () => {
 
     // Main dashboard render
     return (
-        <div className="min-h-screen bg-slate-950 p-6 space-y-8">
+        <div className="min-h-full bg-slate-950 p-6 space-y-8">
             {/* Header with metadata and redesign button */}
             <DashboardHeader
                 selectedDataset={selectedDataset}
@@ -205,22 +203,8 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Insights Panel */}
-            <InsightsPanel
-                insights={insights}
-                prioritizedColumns={[]}
-                datasetInfo={datasetInfo}
-            />
-
-            {/* Executive Summary */}
-            <ExecutiveSummary
-                datasetId={selectedDataset?.id}
-                insights={insights}
-                prioritizedColumns={[]}
-            />
-
-            {/* AI Insights Section */}
-            <InsightsSection
+            {/* Statistical Insights */}
+            <InsightsBar
                 insights={insights}
                 loading={loading}
             />

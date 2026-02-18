@@ -11,7 +11,7 @@
 
 import React from 'react';
 import { Database, AlertTriangle, Upload } from 'lucide-react';
-import { Button } from '../../../components/Button';
+import { Button } from '../../../components/common/Button';
 
 const EmptyStates = ({ type, selectedDataset, onUpload, onNavigateToDatasets }) => {
     if (type === 'no-dataset') {

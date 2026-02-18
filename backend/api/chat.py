@@ -223,6 +223,86 @@ async def process_chat(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
+# Import BaseModel for the request schema
+from pydantic import BaseModel
+from typing import Optional as OptionalType
+
+# --- Deep Analysis Endpoint (LangGraph QUIS) ---
+
+class DeepAnalysisRequest(BaseModel):
+    """Request schema for deep analysis."""
+    query: Optional[str] = None
+    novelty_threshold: Optional[float] = 0.35
+    
+    class Config:
+        extra = "forbid"
+
+@router.post("/datasets/{dataset_id}/analyze")
+@limiter.limit(RateLimits.AI_INSIGHTS)
+async def trigger_deep_analysis(
+    request: Request,
+    dataset_id: str,
+    analysis_request: DeepAnalysisRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Trigger deep statistical analysis using LangGraph QUIS pipeline.
+    
+    This endpoint provides comprehensive dataset analysis including:
+    - Correlation analysis between numeric columns
+    - Group comparisons across categorical variables
+    - Trend detection for temporal data
+    - Anomaly identification
+    - Simpson's Paradox detection
+    - Novelty filtering based on user's prior knowledge
+    
+    The analysis generates:
+    - Statistically validated insights with p-values and effect sizes
+    - Automatically generated Plotly visualizations
+    - Markdown-formatted summary suitable for chat display
+    
+    Args:
+        dataset_id: MongoDB ObjectId of the dataset to analyze
+        analysis_request: Optional query to focus analysis, novelty threshold
+        
+    Returns:
+        - response: Markdown-formatted analysis summary
+        - charts: List of Plotly chart configurations
+        - insights: List of approved insight objects
+        - boring_filtered: Count of insights filtered as not novel
+        - stats: Execution statistics
+    """
+    try:
+        from services.agents.quis_graph import run_quis_analysis
+        
+        result = await run_quis_analysis(
+            dataset_id=dataset_id,
+            user_id=current_user["id"],
+            query=analysis_request.query,
+            novelty_threshold=analysis_request.novelty_threshold or 0.35
+        )
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except ImportError as e:
+        logger.warning(f"LangGraph not installed: {e}")
+        return {
+            "response": "Deep analysis requires additional dependencies. Please contact support.",
+            "charts": [],
+            "insights": [],
+            "stats": {"error": "dependencies_missing"},
+            "analysis_type": "error"
+        }
+    except Exception as e:
+        logger.error(f"Deep analysis error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Analysis failed: {str(e)}"
+        )
+
+
 # --- Conversation History Management Endpoints ---
 
 @router.get("/conversations")
@@ -273,13 +353,22 @@ async def chat_socket(websocket: WebSocket):
     """
     user_id = None  # Track for cleanup in finally block
     
+    # Accept the WebSocket connection first so the browser gets proper close frames
+    await websocket.accept()
+    
     # --- WebSocket Authentication ---
     token = websocket.query_params.get("token")
     if not token:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing authorization token")
         return
 
-    user_claims = auth_service.decode_token(token)
+    try:
+        user_claims = auth_service.decode_token(token)
+    except Exception as e:
+        logger.warning(f"WebSocket token decode failed: {e}")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid or expired token")
+        return
+        
     if not user_claims or not user_claims.get("id"):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid or expired token")
         return
@@ -305,7 +394,6 @@ async def chat_socket(websocket: WebSocket):
     logger.info(f"WebSocket connection established for user {user_id} (active: {connection_count})")
 
     try:
-        await websocket.accept()
         while True:
             try:
                 message_text = await websocket.receive_text()

@@ -33,6 +33,7 @@ from bson import ObjectId
 
 # Service imports
 from services.analysis.analysis_service import analysis_service
+from services.analysis.insight_interpreter import insight_interpreter
 from services.datasets.faiss_vector_service import faiss_vector_service
 from services.datasets.domain_detector import domain_detector
 from services.datasets.data_profiler import data_profiler
@@ -429,20 +430,65 @@ def process_dataset_task(self, dataset_id: str, file_path: str, user_id: str = "
             }
         
         # =========================================================================
-        # STAGE 6: STATISTICAL ANALYSIS
+        # STAGE 6: DEEP STATISTICAL ANALYSIS
         # =========================================================================
-        _update_progress(self, datasets_collection, dataset_id, "Running statistical analysis", 60, "analysis")
+        _update_progress(self, datasets_collection, dataset_id, "Running deep statistical analysis", 55, "analysis")
         
+        # 6a: Enhanced analysis (hypothesis tests, CIs, effect sizes, distributions)
+        try:
+            enhanced_results = analysis_service.run_enhanced_analysis(df, depth="standard")
+            logger.info(f"✓ Enhanced analysis complete: {len(enhanced_results)} sections")
+        except Exception as e:
+            logger.warning(f"Enhanced analysis failed: {e}")
+            enhanced_results = {
+                "depth": "fallback",
+                "row_count": len(df),
+                "column_count": len(df.columns),
+                "distributions": [],
+                "correlations": [],
+            }
+        
+        _update_progress(self, datasets_collection, dataset_id, "Running QUIS subspace analysis", 65, "quis_analysis")
+        
+        # 6b: Enhanced QUIS sync (beam search subspace exploration, FDR correction)
+        try:
+            quis_results = analysis_service.run_enhanced_quis_sync(df, dataset_id=dataset_id)
+            logger.info(f"✓ Enhanced QUIS complete: {quis_results.get('summary', {}).get('significant_insights', 0)} significant insights")
+        except Exception as e:
+            logger.warning(f"Enhanced QUIS failed: {e}")
+            quis_results = {
+                "summary": {"total_questions": 0, "significant_insights": 0},
+                "insights": [],
+                "top_insights": [],
+            }
+        
+        # 6c: Generate professional text summary
+        try:
+            executive_summary = insight_interpreter.generate_summary(enhanced_results)
+            logger.info(f"✓ Executive summary generated")
+        except Exception as e:
+            logger.warning(f"Summary generation failed: {e}")
+            executive_summary = ""
+        
+        # 6d: Also run basic checks for backward compatibility
         try:
             statistical_findings = analysis_service.run_all_statistical_checks(df)
-            logger.info(f"✓ Statistical analysis complete")
+            logger.info(f"✓ Basic statistical checks complete")
         except Exception as e:
-            logger.warning(f"Statistical analysis failed: {e}")
+            logger.warning(f"Basic statistical analysis failed: {e}")
             statistical_findings = {
                 "correlations": [],
                 "outliers": [],
                 "distributions": {}
             }
+        
+        # Consolidate deep analysis results
+        deep_analysis = {
+            "enhanced_analysis": enhanced_results,
+            "quis_insights": quis_results,
+            "executive_summary": executive_summary,
+            "analysis_version": "2.0",
+        }
         
         # =========================================================================
         # STAGE 7: CHART RECOMMENDATIONS
@@ -499,12 +545,13 @@ def process_dataset_task(self, dataset_id: str, file_path: str, user_id: str = "
             "domain_intelligence": domain_info,
             "data_profile": profile_info,
             "statistical_findings": statistical_findings,
+            "deep_analysis": deep_analysis,
             "chart_recommendations": chart_recommendations,
             "data_quality": data_quality,
             "sample_data": sample_rows[:3],  # Store 3 sample rows
             "processing_info": {
                 "processed_at": datetime.utcnow(),
-                "pipeline_version": "2.0",
+                "pipeline_version": "3.0",
                 "celery_task_id": self.request.id
             }
         }

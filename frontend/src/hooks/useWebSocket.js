@@ -5,7 +5,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
  */
 const getAuthToken = () => {
     try {
-        const stored = localStorage.getItem('datasage-auth');
+        const stored = localStorage.getItem('datasage-auth') || sessionStorage.getItem('datasage-auth');
         if (stored) {
             const parsed = JSON.parse(stored);
             return parsed?.state?.token || null;
@@ -78,7 +78,7 @@ export const useWebSocket = ({
     }, []);
 
     const connect = useCallback(() => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
+        if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
             return;
         }
 
@@ -168,7 +168,8 @@ export const useWebSocket = ({
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
             setIsConnecting(false);
-            onError?.({ type: 'connection', detail: 'Connection error' });
+            // Don't fire error callback here - let onclose handle it
+            // onerror always fires before onclose, so we avoid duplicate error toasts
         };
 
         ws.onclose = (event) => {
@@ -177,19 +178,23 @@ export const useWebSocket = ({
             setIsConnecting(false);
             wsRef.current = null;
 
-            // If there are pending messages (mid-stream disconnect), notify error
-            if (pendingMessagesRef.current.size > 0) {
-                console.warn('WebSocket closed with pending messages:', pendingMessagesRef.current.size);
+            // If there are pending messages AND it was an abnormal close, notify error
+            if (pendingMessagesRef.current.size > 0 && event.code !== 1000 && event.code !== 1001) {
+                console.warn('WebSocket closed abnormally with pending messages:', pendingMessagesRef.current.size);
                 onError?.({ type: 'disconnect', detail: 'Connection lost while processing' });
-                pendingMessagesRef.current.clear();
             }
 
+            pendingMessagesRef.current.clear();
+
             // Auto-reconnect after 3 seconds if not intentionally closed
-            if (event.code !== 1000) {
+            if (event.code !== 1000 && event.code !== 1001) {
                 console.log('Scheduling reconnect...');
                 reconnectTimeoutRef.current = setTimeout(() => {
                     connect();
                 }, 3000);
+            } else if (event.code === 1008) {
+                // Policy violation (auth failure, rate limit, etc.)
+                onError?.({ type: 'connection', detail: event.reason || 'Connection rejected' });
             }
         };
     }, [cleanup, onToken, onResponseComplete, onChart, onDone, onError, onStatus]);
