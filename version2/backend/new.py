@@ -4,7 +4,7 @@ import json
 response = requests.post(
   url="https://openrouter.ai/api/v1/chat/completions",
   headers={
-    "Authorization": "Bearer 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",
+    "Authorization": "Bearer sk",
     "Content-Type": "application/json",
   },
   data=json.dumps({
