@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const USER_SCOPED_STORAGE_KEYS = ['dataset-storage', 'datasage-chat-store', 'chat-history-storage'];
 
 // Helper to get auth token from Zustand persisted store
 // Checks both localStorage (Remember Me ON) and sessionStorage (Remember Me OFF)
@@ -11,7 +12,7 @@ export const getAuthToken = () => {
     try {
       const parsed = JSON.parse(authData);
       return parsed?.state?.token || null;
-    } catch (e) {
+    } catch {
       console.warn('Failed to parse auth data from storage');
     }
   }
@@ -48,6 +49,10 @@ api.interceptors.response.use(
       // Token expired or invalid, clear auth from both storages and redirect
       localStorage.removeItem('datasage-auth');
       sessionStorage.removeItem('datasage-auth');
+      USER_SCOPED_STORAGE_KEYS.forEach((key) => {
+        localStorage.removeItem(key);
+        sessionStorage.removeItem(key);
+      });
       window.location.href = '/login';
     }
     return Promise.reject(error);

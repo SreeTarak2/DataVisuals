@@ -1,8 +1,12 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import axios from 'axios';
+import useDatasetStore from './datasetStore';
+import useChatStore from './chatStore';
+import useChatHistoryStore from './chatHistoryStore';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const USER_SCOPED_STORAGE_KEYS = ['dataset-storage', 'datasage-chat-store', 'chat-history-storage'];
 
 /**
  * Determine the storage backend based on the user's "Remember me" preference.
@@ -15,6 +19,31 @@ const getStorageBackend = () => {
         return sessionStorage;
     }
     return localStorage;
+};
+
+const clearUserScopedClientState = () => {
+    try {
+        useDatasetStore.getState().resetState();
+    } catch (error) {
+        console.warn('Failed to reset dataset store:', error);
+    }
+
+    try {
+        useChatStore.getState().resetState();
+    } catch (error) {
+        console.warn('Failed to reset chat store:', error);
+    }
+
+    try {
+        useChatHistoryStore.getState().resetState();
+    } catch (error) {
+        console.warn('Failed to reset chat history store:', error);
+    }
+
+    USER_SCOPED_STORAGE_KEYS.forEach((key) => {
+        localStorage.removeItem(key);
+        sessionStorage.removeItem(key);
+    });
 };
 
 const useAuthStore = create(
@@ -61,6 +90,9 @@ const useAuthStore = create(
 
                     axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
 
+                    // Security: never carry user-scoped caches across logins
+                    clearUserScopedClientState();
+
                     // If "Remember me" is unchecked, migrate to sessionStorage
                     if (!rememberMe) {
                         // Clear any existing localStorage entry
@@ -101,9 +133,44 @@ const useAuthStore = create(
                 }
             },
 
+            updateProfile: async (profileData) => {
+                try {
+                    const response = await axios.put(`${API_URL}/auth/profile`, profileData);
+                    const updatedUser = response.data;
+                    set((state) => ({
+                        user: {
+                            ...state.user,
+                            ...updatedUser,
+                        },
+                    }));
+                    return { success: true, user: updatedUser };
+                } catch (error) {
+                    return {
+                        success: false,
+                        error: error.response?.data?.detail || 'Failed to update profile',
+                    };
+                }
+            },
+
+            changePassword: async (oldPassword, newPassword) => {
+                try {
+                    await axios.post(`${API_URL}/auth/change-password`, {
+                        old_password: oldPassword,
+                        new_password: newPassword,
+                    });
+                    return { success: true };
+                } catch (error) {
+                    return {
+                        success: false,
+                        error: error.response?.data?.detail || 'Failed to change password',
+                    };
+                }
+            },
+
             logout: () => {
                 delete axios.defaults.headers.common['Authorization'];
                 set({ token: null, user: null, loading: false });
+                clearUserScopedClientState();
                 // Clear from both storage backends
                 localStorage.removeItem('datasage-auth');
                 sessionStorage.removeItem('datasage-auth');
@@ -157,6 +224,8 @@ export const useAuth = () => {
     const loading = useAuthStore((state) => state.loading);
     const login = useAuthStore((state) => state.login);
     const register = useAuthStore((state) => state.register);
+    const updateProfile = useAuthStore((state) => state.updateProfile);
+    const changePassword = useAuthStore((state) => state.changePassword);
     const logout = useAuthStore((state) => state.logout);
     const hasHydrated = useAuthStore((state) => state._hasHydrated);
 
@@ -165,6 +234,8 @@ export const useAuth = () => {
         token,
         login,
         register,
+        updateProfile,
+        changePassword,
         logout,
         loading,
         hasHydrated,

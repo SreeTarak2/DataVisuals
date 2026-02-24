@@ -20,6 +20,12 @@ from datetime import datetime
 
 from services.llm_router import llm_router
 from core.prompts import PromptFactory, PromptType
+from core.prompt_templates import (
+    get_chart_recommendation_prompt,
+    get_kpi_suggestion_prompt,
+    get_chart_explanation_prompt,
+    get_insight_generation_prompt
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,18 +73,26 @@ class MultiAgentOrchestrator:
             chart_recommendations, kpi_suggestions = await self._stage_1_parallel(
                 dataset_context, metadata
             )
-            
-            # Stage 2: Chart Explanation (depends on chart recommendations)
-            logger.info("📝 Stage 2: Generating chart explanations")
-            chart_explanations = await self._stage_2_explanations(
-                chart_recommendations, dataset_context
-            )
-            
-            # Stage 3: Insight Generation (synthesize everything)
-            logger.info("💡 Stage 3: Generating insights from analysis")
-            insights = await self._stage_3_insights(
-                chart_recommendations, kpi_suggestions, dataset_context, metadata
-            )
+
+            has_charts = bool(chart_recommendations.get("charts"))
+            has_kpis = bool(kpi_suggestions.get("kpis"))
+
+            if not has_charts and not has_kpis:
+                logger.warning("⚠️ Stage 1 produced no charts or KPIs; skipping stages 2 and 3")
+                chart_explanations = []
+                insights = {"insights": [], "summary": ""}
+            else:
+                # Stage 2: Chart Explanation (depends on chart recommendations)
+                logger.info("📝 Stage 2: Generating chart explanations")
+                chart_explanations = await self._stage_2_explanations(
+                    chart_recommendations, dataset_context
+                )
+                
+                # Stage 3: Insight Generation (synthesize everything)
+                logger.info("💡 Stage 3: Generating insights from analysis")
+                insights = await self._stage_3_insights(
+                    chart_recommendations, kpi_suggestions, dataset_context, metadata
+                )
             
             # Combine results into final dashboard blueprint
             blueprint = self._assemble_dashboard(
@@ -135,7 +149,8 @@ class MultiAgentOrchestrator:
             # Step 1: Get chart recommendation
             chart_config = await self._agent_chart_recommendation(
                 dataset_context, 
-                user_query=user_query
+                user_query=user_query,
+                metadata=metadata
             )
             
             # Step 2: Generate explanation
@@ -172,7 +187,7 @@ class MultiAgentOrchestrator:
         """
         # Run both tasks concurrently
         results = await asyncio.gather(
-            self._agent_chart_recommendation(dataset_context),
+            self._agent_chart_recommendation(dataset_context, metadata=metadata),
             self._agent_kpi_suggestion(dataset_context, metadata),
             return_exceptions=True  # Don't fail if one agent fails
         )
@@ -244,6 +259,10 @@ class MultiAgentOrchestrator:
         Returns:
             Insights dict with key findings
         """
+        if not chart_recommendations.get("charts") and not kpi_suggestions.get("kpis"):
+            logger.warning("No charts or KPIs available for insight generation")
+            return {"insights": [], "summary": ""}
+
         return await self._agent_insight_generation(
             chart_recommendations,
             kpi_suggestions,
@@ -258,49 +277,25 @@ class MultiAgentOrchestrator:
     async def _agent_chart_recommendation(
         self,
         dataset_context: str,
-        user_query: Optional[str] = None
+        user_query: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Chart Recommendation Agent (Qwen3-235B)
         
         Analyzes data and recommends optimal chart types.
+        Uses enriched dataset context with cardinality, correlations, and domain info
+        to make data-aware chart decisions.
         """
-        prompt = f"""Analyze this dataset and recommend the best chart visualizations.
-
-DATASET:
-{dataset_context}
-
-{f"USER REQUEST: {user_query}" if user_query else ""}
-
-Recommend 3-5 charts that best visualize this data. For each chart, specify:
-1. Chart type - MUST be EXACTLY one of: "bar", "line", "pie", "scatter", "histogram", "heatmap" (lowercase only!)
-2. X-axis column - MUST be an EXACT column name from the dataset above
-3. Y-axis column - MUST be an EXACT column name (null for pie charts)
-4. Title - Descriptive chart title
-5. Reasoning - Why this chart is appropriate
-
-CRITICAL: Use ONLY the exact column names shown in DATASET above. Do NOT invent columns!
-
-Return ONLY valid JSON in this format:
-{{
-  "charts": [
-    {{
-      "type": "bar",
-      "x": "column_name",
-      "y": "column_name",
-      "title": "Chart Title",
-      "reasoning": "Why this chart"
-    }}
-  ]
-}}
-"""
+        prompt = get_chart_recommendation_prompt(dataset_context, user_query)
         
         try:
             response = await self.llm_router.call(
                 prompt=prompt,
                 model_role="chart_recommendation",
                 expect_json=True,
-                temperature=0.7
+                temperature=0.4,
+                max_tokens=900
             )
             
             logger.info(f"✓ Chart recommendation generated: {len(response.get('charts', []))} charts")
@@ -319,37 +314,31 @@ Return ONLY valid JSON in this format:
         KPI Suggestion Agent (Hermes 3 405B)
         
         Identifies key performance indicators from the data.
+        Uses domain intelligence and data profile for smarter KPI selection.
         """
-        prompt = f"""Analyze this dataset and suggest the most important KPIs (Key Performance Indicators).
+        # Build extra domain context for KPI-specific intelligence
+        domain_intel = metadata.get("domain_intelligence", {})
+        data_profile = metadata.get("data_profile", {})
 
-DATASET:
-{dataset_context}
+        kpi_hints = []
+        if domain_intel.get("key_metrics"):
+            kpi_hints.append(f"Domain-identified key metrics: {', '.join(domain_intel['key_metrics'][:6])}")
+        if domain_intel.get("measures"):
+            kpi_hints.append(f"Numeric columns suitable for aggregation: {', '.join(domain_intel['measures'][:8])}")
+        if data_profile.get("id_columns"):
+            kpi_hints.append(f"ID columns (DO NOT use for KPIs): {', '.join(data_profile['id_columns'][:6])}")
 
-Suggest 3-6 KPIs that provide the most valuable insights. For each KPI:
-1. Title (user-friendly name)
-2. Column to aggregate
-3. Aggregation type (sum, mean, count, max, min)
-4. Why this KPI matters
+        kpi_context = "\n".join(kpi_hints) if kpi_hints else ""
 
-Return ONLY valid JSON:
-{{
-  "kpis": [
-    {{
-      "title": "Total Revenue",
-      "column": "revenue",
-      "aggregation": "sum",
-      "reasoning": "Shows overall performance"
-    }}
-  ]
-}}
-"""
+        prompt = get_kpi_suggestion_prompt(dataset_context, kpi_context)
         
         try:
             response = await self.llm_router.call(
                 prompt=prompt,
                 model_role="kpi_suggestion",
                 expect_json=True,
-                temperature=0.5  # Lower temperature for structured output
+                temperature=0.3,  # Lower temperature for structured output
+                max_tokens=700
             )
             
             logger.info(f"✓ KPI suggestions generated: {len(response.get('kpis', []))} KPIs")
@@ -367,37 +356,26 @@ Return ONLY valid JSON:
         """
         Chart Explanation Agent (Hermes 3 405B)
         
-        Generates clear explanations for why a chart was chosen.
+        Generates clear, non-technical explanations for each chart.
+        Tells users what to look for and why this visualization matters.
         """
-        prompt = f"""Explain this chart visualization choice.
+        # Build a compact chart summary instead of dumping raw dict
+        chart_summary = (
+            f"Type: {chart_config.get('type', 'bar')}, "
+            f"X-axis: {chart_config.get('x', 'N/A')}, "
+            f"Y-axis: {chart_config.get('y', 'N/A')}, "
+            f"Title: {chart_config.get('title', 'Chart')}"
+        )
 
-CHART CONFIG:
-{chart_config}
-
-DATASET:
-{dataset_context}
-
-Provide a clear explanation covering:
-1. What the chart shows
-2. Why this chart type is appropriate
-3. Key insights viewers should notice
-4. Who benefits most from this view
-
-Return ONLY valid JSON:
-{{
-  "chart_id": "{chart_config.get('title', 'chart')}",
-  "explanation": "Full explanation text",
-  "key_insights": ["insight 1", "insight 2"],
-  "target_audience": "who this helps"
-}}
-"""
+        prompt = get_chart_explanation_prompt(chart_summary, dataset_context)
         
         try:
             response = await self.llm_router.call(
                 prompt=prompt,
                 model_role="chart_explanation",
                 expect_json=True,
-                temperature=0.7
+                temperature=0.5,
+                max_tokens=600
             )
             
             logger.info(f"✓ Chart explanation generated for: {chart_config.get('title', 'chart')}")
@@ -417,44 +395,47 @@ Return ONLY valid JSON:
         """
         Insight Generation Agent (Qwen3-235B)
         
-        Synthesizes deep insights from all analysis.
+        Synthesizes deep, actionable insights from all analysis.
+        Uses structured summaries instead of raw dict dumps to save tokens.
         """
-        prompt = f"""Generate strategic insights from this data analysis.
+        # Build compact structured summaries instead of dumping raw dicts
+        chart_summary_lines = []
+        for c in chart_recommendations.get("charts", [])[:5]:
+            chart_summary_lines.append(
+                f"  • {c.get('type', 'bar')}: {c.get('title', '')} "
+                f"({c.get('x', '')} vs {c.get('y', '')})"
+            )
+        charts_text = "\n".join(chart_summary_lines) if chart_summary_lines else "No charts recommended"
 
-DATASET:
-{dataset_context}
+        kpi_summary_lines = []
+        for k in kpi_suggestions.get("kpis", [])[:6]:
+            kpi_summary_lines.append(
+                f"  • {k.get('title', '')}: {k.get('aggregation', 'sum')}({k.get('column', '')})"
+            )
+        kpis_text = "\n".join(kpi_summary_lines) if kpi_summary_lines else "No KPIs suggested"
 
-RECOMMENDED CHARTS:
-{chart_recommendations}
+        # Pull executive summary from metadata if available
+        deep_analysis = metadata.get("deep_analysis", {})
+        exec_summary = deep_analysis.get("executive_summary", "")
+        exec_text = ""
+        if exec_summary and isinstance(exec_summary, str) and len(exec_summary) > 20:
+            truncated = exec_summary[:400].rsplit(".", 1)[0] + "." if len(exec_summary) > 400 else exec_summary
+            exec_text = f"\nPRE-COMPUTED EXECUTIVE SUMMARY:\n{truncated}"
 
-SUGGESTED KPIs:
-{kpi_suggestions}
-
-Provide 3-5 high-level insights that:
-1. Identify patterns or trends
-2. Suggest actionable recommendations
-3. Highlight potential opportunities or risks
-
-Return ONLY valid JSON:
-{{
-  "insights": [
-    {{
-      "title": "Key Finding",
-      "description": "Detailed insight",
-      "impact": "high|medium|low",
-      "action": "Recommended next step"
-    }}
-  ],
-  "summary": "Overall analysis summary"
-}}
-"""
+        prompt = get_insight_generation_prompt(
+            dataset_context,
+            charts_text,
+            kpis_text,
+            exec_text
+        )
         
         try:
             response = await self.llm_router.call(
                 prompt=prompt,
                 model_role="insight_generation",
                 expect_json=True,
-                temperature=0.8  # Higher temperature for creative insights
+                temperature=0.6,  # Keep insights useful but reduce verbosity/latency
+                max_tokens=900
             )
             
             logger.info(f"✓ Insights generated: {len(response.get('insights', []))} insights")
@@ -520,7 +501,8 @@ Return ONLY valid JSON:
                 "metadata": {
                     "reasoning": chart.get("reasoning", ""),
                     "explanation": explanation.get("explanation", ""),
-                    "key_insights": explanation.get("key_insights", [])
+                    "key_insights": explanation.get("key_insights", []),
+                    "reading_guide": explanation.get("reading_guide", "")
                 }
             })
         
