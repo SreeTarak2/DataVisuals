@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 import polars as pl
 
@@ -15,6 +15,7 @@ from services.charts.chart_insights_service import chart_insights_service
 from services.ai.ai_service import ai_service
 from services.ai.intelligent_kpi_generator import intelligent_kpi_generator
 from services.analysis.analysis_service import analysis_service
+from services.dashboard_cache_service import dashboard_cache_service
 
 # --- Config ---
 logger = logging.getLogger(__name__)
@@ -24,9 +25,38 @@ router = APIRouter()
 #                 DASHBOARD OVERVIEW
 # ============================================================
 @router.get("/{dataset_id}/overview")
-async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(get_current_user)):
+async def get_dashboard_overview(
+    dataset_id: str, 
+    current_user: dict = Depends(get_current_user),
+    force_refresh: bool = Query(False, description="Force regeneration, ignoring cache")
+):
     try:
-        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        user_id = current_user["id"]
+        
+        # CHECK CACHE FIRST (unless force_refresh)
+        if not force_refresh:
+            cached_kpis = await dashboard_cache_service.get_cached_kpis(dataset_id, user_id)
+            if cached_kpis is not None:
+                # Get basic dataset info (fast, no AI call)
+                dataset = await enhanced_dataset_service.get_dataset(dataset_id, user_id)
+                overview = dataset.get("metadata", {}).get("dataset_overview", {})
+                
+                logger.info(f"✅ Returning cached KPIs for dataset {dataset_id}")
+                return {
+                    "dataset": {
+                        "id": dataset.get("id"),
+                        "name": dataset.get("name"),
+                        "row_count": overview.get("total_rows", 0),
+                        "column_count": overview.get("total_columns", 0),
+                    },
+                    "kpis": cached_kpis,
+                    "cached": True
+                }
+        
+        # CACHE MISS - Generate KPIs
+        logger.info(f"🔄 Generating fresh KPIs for dataset {dataset_id}")
+        
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, user_id)
         metadata = dataset.get("metadata", {})
 
         overview = metadata.get("dataset_overview", {})
@@ -36,7 +66,7 @@ async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(g
             raise HTTPException(status_code=409, detail="Dataset metadata is not available. Please reprocess the dataset.")
 
         # Load actual dataframe for intelligent KPI generation
-        df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
+        df = await enhanced_dataset_service.load_dataset_data(dataset_id, user_id)
         
         # Detect domain from metadata
         domain = metadata.get("domain_intelligence", {}).get("domain") or dataset.get("domain")
@@ -81,6 +111,9 @@ async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(g
                 "aggregation": kpi.get("aggregation", "")
             })
 
+        # CACHE THE RESULT
+        await dashboard_cache_service.cache_kpis(dataset_id, user_id, kpis)
+
         return {
             "dataset": {
                 "id": dataset.get("id"),
@@ -89,6 +122,7 @@ async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(g
                 "column_count": overview.get("total_columns", 0),
             },
             "kpis": kpis,
+            "cached": False
         }
 
     except HTTPException:
@@ -102,9 +136,26 @@ async def get_dashboard_overview(dataset_id: str, current_user: dict = Depends(g
 #                 DASHBOARD INSIGHTS
 # ============================================================
 @router.get("/{dataset_id}/insights")
-async def get_dashboard_insights(dataset_id: str, current_user: dict = Depends(get_current_user)):
+async def get_dashboard_insights(
+    dataset_id: str, 
+    current_user: dict = Depends(get_current_user),
+    force_refresh: bool = Query(False, description="Force regeneration, ignoring cache")
+):
     try:
-        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        user_id = current_user["id"]
+        
+        # CHECK CACHE FIRST (unless force_refresh)
+        if not force_refresh:
+            cached_insights = await dashboard_cache_service.get_cached_insights(dataset_id, user_id)
+            if cached_insights is not None:
+                # Verify user still has access to this dataset
+                await enhanced_dataset_service.get_dataset(dataset_id, user_id)
+                logger.info(f"✅ Returning cached insights for dataset {dataset_id}")
+                return {"insights": cached_insights, "cached": True}
+        
+        logger.info(f"🔄 Generating fresh insights for dataset {dataset_id}")
+        
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, user_id)
         metadata = dataset.get("metadata", {})
         deep_analysis = metadata.get("deep_analysis", {})
 
@@ -246,7 +297,10 @@ async def get_dashboard_insights(dataset_id: str, current_user: dict = Depends(g
                 "confidence": 100,
             })
 
-        return {"insights": insights}
+        # CACHE THE RESULT
+        await dashboard_cache_service.cache_insights(dataset_id, user_id, insights)
+
+        return {"insights": insights, "cached": False}
 
     except Exception as e:
         logger.error(f"Error getting dashboard insights for {dataset_id}: {e}", exc_info=True)
@@ -257,10 +311,27 @@ async def get_dashboard_insights(dataset_id: str, current_user: dict = Depends(g
 #                 DEFAULT DASHBOARD CHARTS
 # ============================================================
 @router.get("/{dataset_id}/charts")
-async def get_dashboard_charts(dataset_id: str, current_user: dict = Depends(get_current_user)):
+async def get_dashboard_charts(
+    dataset_id: str, 
+    current_user: dict = Depends(get_current_user),
+    force_refresh: bool = Query(False, description="Force regeneration, ignoring cache")
+):
     try:
-        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
-        df = await enhanced_dataset_service.load_dataset_data(dataset_id, current_user["id"])
+        user_id = current_user["id"]
+        
+        # CHECK CACHE FIRST (unless force_refresh)
+        if not force_refresh:
+            cached_charts = await dashboard_cache_service.get_cached_charts(dataset_id, user_id)
+            if cached_charts is not None:
+                # Verify user still has access to this dataset
+                await enhanced_dataset_service.get_dataset(dataset_id, user_id)
+                logger.info(f"✅ Returning cached charts for dataset {dataset_id}")
+                return {"charts": cached_charts, "cached": True}
+        
+        logger.info(f"🔄 Generating fresh charts for dataset {dataset_id}")
+        
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, user_id)
+        df = await enhanced_dataset_service.load_dataset_data(dataset_id, user_id)
 
         charts = {}
 
@@ -279,7 +350,10 @@ async def get_dashboard_charts(dataset_id: str, current_user: dict = Depends(get
                 {"chart_type": "pie", "columns": [categorical_cols[0], numeric_cols[0]], "aggregation": "count"}
             )
 
-        return {"charts": charts}
+        # CACHE THE RESULT
+        await dashboard_cache_service.cache_charts(dataset_id, user_id, charts)
+
+        return {"charts": charts, "cached": False}
 
     except Exception as e:
         logger.error(f"Error getting dashboard charts for {dataset_id}: {e}", exc_info=True)
@@ -369,3 +443,35 @@ async def generate_chart_insights(request: Dict[str, Any], current_user: dict = 
 @router.get("/{dataset_id}/cached-charts")
 async def get_cached_charts(dataset_id: str, current_user: dict = Depends(get_current_user)):
     return await chart_insights_service.get_dataset_cached_charts(dataset_id, current_user["id"])
+
+
+# ============================================================
+#                CACHE STATUS & MANAGEMENT
+# ============================================================
+@router.get("/{dataset_id}/cache-status")
+async def get_cache_status(dataset_id: str, current_user: dict = Depends(get_current_user)):
+    """Get dashboard cache status for a dataset."""
+    try:
+        status = await dashboard_cache_service.get_cache_status(dataset_id, current_user["id"])
+        return {"success": True, "cache_status": status}
+    except Exception as e:
+        logger.error(f"Error getting cache status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get cache status.")
+
+
+@router.delete("/{dataset_id}/cache")
+async def invalidate_dashboard_cache(
+    dataset_id: str, 
+    current_user: dict = Depends(get_current_user),
+    cache_keys: str = Query(None, description="Comma-separated keys to invalidate (kpis,charts,insights). If empty, invalidates all.")
+):
+    """Invalidate dashboard cache for a dataset. Use when forcing refresh."""
+    try:
+        keys = [k.strip() for k in cache_keys.split(",") if k.strip()] if cache_keys else None
+        if keys is not None and len(keys) == 0:
+            keys = None
+        success = await dashboard_cache_service.invalidate_cache(dataset_id, current_user["id"], keys)
+        return {"success": success, "invalidated_keys": keys or ["all"]}
+    except Exception as e:
+        logger.error(f"Error invalidating cache: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to invalidate cache.")

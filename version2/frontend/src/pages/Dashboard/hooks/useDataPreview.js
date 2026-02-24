@@ -11,20 +11,21 @@ import { getAuthToken } from '../../../services/api';
 export const useDataPreview = (selectedDataset) => {
     const [dataPreview, setDataPreview] = useState([]);
     const [previewLoading, setPreviewLoading] = useState(false);
+    const selectedDatasetId = selectedDataset?.id || null;
 
     const loadDataPreview = useCallback(async () => {
-        if (!selectedDataset || !selectedDataset.id) {
+        if (!selectedDatasetId) {
             console.warn('loadDataPreview: No dataset ID provided');
             return;
         }
 
         try {
             setPreviewLoading(true);
-            console.log('Loading data preview for dataset:', selectedDataset.id);
+            console.log('Loading data preview for dataset:', selectedDatasetId);
 
             const token = getAuthToken();
             const response = await fetch(
-                `/api/datasets/${selectedDataset.id}/preview?limit=10`,
+                `/api/datasets/${selectedDatasetId}/preview?limit=10`,
                 {
                     headers: {
                         'Authorization': `Bearer ${token}`,
@@ -46,7 +47,7 @@ export const useDataPreview = (selectedDataset) => {
                 console.log('Trying fallback to regular data endpoint...');
                 try {
                     const fallbackResponse = await fetch(
-                        `/api/datasets/${selectedDataset.id}/data?page=1&page_size=10`,
+                        `/api/datasets/${selectedDatasetId}/data?page=1&page_size=10`,
                         {
                             headers: {
                                 'Authorization': `Bearer ${token}`,
@@ -74,14 +75,14 @@ export const useDataPreview = (selectedDataset) => {
         } finally {
             setPreviewLoading(false);
         }
-    }, [selectedDataset]);
+    }, [selectedDatasetId]);
 
     // Auto-load when dataset changes
     useEffect(() => {
-        if (selectedDataset?.id) {
+        if (selectedDatasetId) {
             loadDataPreview();
         }
-    }, [selectedDataset?.id, loadDataPreview]);
+    }, [selectedDatasetId, loadDataPreview]);
 
     return {
         dataPreview,

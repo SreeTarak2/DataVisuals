@@ -1,89 +1,14 @@
 import httpx
 import json
 import logging
-from typing import Any, Dict, Optional
-from datetime import datetime
+from typing import Any, Dict, Optional, List
+from datetime import datetime, timedelta
 from fastapi import HTTPException
 
 from core.config import settings
+from core.prompt_templates import CONVERSATIONAL_SYSTEM_PROMPT, COMPLEXITY_HINTS
 
 logger = logging.getLogger(__name__)
-
-
-# -----------------------------------------------------------
-# CONVERSATIONAL SYSTEM PROMPT (ChatGPT/Grok Parity)
-# -----------------------------------------------------------
-CONVERSATIONAL_SYSTEM_PROMPT = """You are DataSage AI, a world-class data analytics assistant that helps users understand their data through clear, insightful analysis.
-
-## RESPONSE FORMATTING RULES
-
-### For Simple Questions (1-2 sentences):
-- Answer directly in 1-2 clear sentences
-- Bold the key metric or finding using **bold**
-- Example: "The **total revenue is $1.2M**, with Q4 contributing 34%."
-
-### For Analytical Questions (multiple insights):
-Use this structure:
-1. **Key Finding** — Lead with the most important insight (1 sentence)
-2. **Details** — Use bullet points for supporting data
-3. **Context** — Add comparison or trend if relevant
-
-### For Complex/Multi-Part Questions:
-Use headers and organized sections:
-
-## Summary
-[1-2 sentence TL;DR with **bolded key metric**]
-
-## Key Metrics
-- **Metric 1**: Value (context)
-- **Metric 2**: Value (context)
-
-## Analysis
-[Detailed explanation with bullet points]
-
-## Recommendation (if applicable)
-[Actionable next step]
-
-### Formatting Guidelines:
-- **Bold** important numbers, metrics, and key terms using **double asterisks**
-- Use bullet points (- or •) for lists of 3+ items
-- Use numbered lists for sequential steps or rankings
-- Use `backticks` for column names and technical terms
-- Keep paragraphs short (2-3 sentences max)
-- For comparisons, use markdown tables when helpful
-
-### For Chart-Related Responses:
-- Describe what the chart shows before providing it
-- Highlight the most striking visual pattern
-- Example: "Here's a bar chart showing revenue by region. **Northeast leads with 34% of total revenue**, more than double the next region."
-
-### Tone:
-- Professional but approachable
-- Data-driven and precise
-- Avoid jargon unless the user uses it first
-- Be concise — respect the user's time
-
-## IMPORTANT:
-- Always ground your response in the actual data provided in the context
-- If you're uncertain about something, say so explicitly
-- Never invent data points or statistics
-- Use the exact column names from the dataset context provided
-- **If the data does not contain enough information to answer confidently, explicitly state the limitation and suggest what additional data would help**
-  - Example: "The dataset doesn't include customer demographics, so I can't analyze purchasing patterns by age group. Adding age/gender columns would enable this analysis."
-
-## CRITICAL OUTPUT FORMAT:
-- NEVER return JSON or code blocks unless explicitly asked for code
-- ALWAYS respond in plain text/markdown format
-- Do NOT wrap your response in {"response": "..."} or any JSON structure
-- Just write your response directly as readable text
-"""
-
-# Complexity-specific additions to system prompt
-COMPLEXITY_HINTS = {
-    "simple": "\n\nNOTE: This is a simple, direct question. Answer in 1-2 sentences maximum. Be brief and precise.",
-    "moderate": "\n\nNOTE: This is a moderate analytical question. Use the Key Finding → Details → Context structure.",
-    "complex": "\n\nNOTE: This is a complex analytical question. Use full headers (## Summary, ## Key Metrics, ## Analysis) and provide comprehensive structured output."
-}
 
 
 class LLMRouter:
@@ -91,6 +16,7 @@ class LLMRouter:
         self.http = httpx.AsyncClient(timeout=180.0, follow_redirects=True)
         self.model_health_cache = {}
         self.use_openrouter = bool(settings.OPENROUTER_API_KEY)
+        self._auth_error_cooldown_until: Optional[datetime] = None
         
         # Load OpenRouter model configurations
         self.openrouter_models = settings.OPENROUTER_MODELS
@@ -129,6 +55,13 @@ class LLMRouter:
 
         # Use OpenRouter exclusively (Ollama fallback commented out per user request)
         if self.use_openrouter:
+            # Avoid repeated failing calls when OpenRouter auth is invalid.
+            if self._auth_error_cooldown_until and datetime.utcnow() < self._auth_error_cooldown_until:
+                raise HTTPException(
+                    502,
+                    "OpenRouter authentication is currently failing (401/403). "
+                    "Update OPENROUTER_API_KEY in backend/.env and restart the backend."
+                )
             try:
                 return await self._call_openrouter(
                     prompt, 
@@ -142,29 +75,47 @@ class LLMRouter:
                 )
             except Exception as e:
                 error_str = str(e)
-                is_rate_limit = "429" in error_str or "rate" in error_str.lower()
                 logger.error(f"OpenRouter call failed for role '{model_role}': {e}")
-                
-                # Get current model and its fallback from FALLBACK_CHAIN
-                current_model_key = specific_model or self.role_mapping.get(model_role, "mistral_24b")
-                fallback_model_key = settings.FALLBACKS.get(current_model_key)
-                
-                # Try fallback model from chain if available
-                if fallback_model_key and fallback_model_key in self.openrouter_models:
+
+                status_code = None
+                if isinstance(e, httpx.HTTPStatusError):
+                    status_code = e.response.status_code
+                elif isinstance(e, HTTPException):
+                    status_code = e.status_code
+
+                is_auth_error = status_code in (401, 403) or "401" in error_str or "403" in error_str
+                if is_auth_error:
+                    self._auth_error_cooldown_until = datetime.utcnow() + timedelta(minutes=5)
+                    raise HTTPException(
+                        502,
+                        "OpenRouter authentication failed (401/403). "
+                        "Please verify OPENROUTER_API_KEY in backend/.env."
+                    )
+
+                # Do not retry/fallback for non-rate-limit client errors.
+                is_non_rate_client_error = status_code is not None and 400 <= status_code < 500 and status_code != 429
+                if is_non_rate_client_error:
+                    raise HTTPException(502, f"AI provider unavailable: {str(e)}")
+
+                # Try role-based fallback chain for transient errors.
+                fallback_models = self._get_fallback_models(model_role, specific_model)
+                for fallback_model_key in fallback_models:
                     fallback_config = self.openrouter_models[fallback_model_key]
                     logger.warning(f"Trying fallback model: {fallback_config['name']}...")
                     try:
                         return await self._call_openrouter(
-                            prompt, 
+                            prompt,
                             model_role,
                             expect_json,
                             specific_model=fallback_model_key,
                             temperature=temperature,
-                            max_tokens=max_tokens
+                            max_tokens=max_tokens,
+                            is_conversational=is_conversational,
+                            query_complexity=query_complexity
                         )
                     except Exception as fallback_error:
-                        logger.error(f"Fallback model also failed: {fallback_error}")
-                
+                        logger.error(f"Fallback model {fallback_model_key} failed: {fallback_error}")
+
                 raise HTTPException(502, f"AI provider unavailable: {str(e)}")
 
         # OpenRouter only mode
@@ -197,6 +148,22 @@ class LLMRouter:
         logger.info(f"Auto-selected model: {model_config['name']} for role '{model_role}'")
         
         return model_config
+
+    def _get_fallback_models(self, model_role: str, specific_model: Optional[str] = None) -> List[str]:
+        """
+        Resolve fallback candidates for a role in priority order.
+        """
+        current_model_key = specific_model or self.role_mapping.get(model_role, "mistral_24b")
+        role_fallbacks = settings.FALLBACKS.get(model_role, [])
+
+        if isinstance(role_fallbacks, str):
+            role_fallbacks = [role_fallbacks]
+
+        return [
+            model_key
+            for model_key in role_fallbacks
+            if model_key in self.openrouter_models and model_key != current_model_key
+        ]
 
     # -----------------------------------------------------------
     # OPENROUTER CALL

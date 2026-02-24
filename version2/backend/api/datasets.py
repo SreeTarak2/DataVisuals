@@ -8,6 +8,7 @@ from celery.result import AsyncResult
 from db.schemas import DrillDownRequest
 from services.auth_service import get_current_user
 from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+from services.dashboard_cache_service import dashboard_cache_service
 from tasks import celery_app, process_dataset_task
 from core.rate_limiter import limiter, RateLimits
 from core.config import settings
@@ -162,11 +163,16 @@ async def get_dataset_columns(
 async def reprocess_dataset(request: Request, dataset_id: str, current_user: dict = Depends(get_current_user)):
     """
     Triggers a background task to re-process a dataset, regenerating its metadata.
+    Also invalidates the dashboard cache to ensure fresh data on next view.
     
     Rate limited to 5 reprocessing requests per hour per user.
     """
     try:
         dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        
+        # INVALIDATE DASHBOARD CACHE - data will change after reprocessing
+        await dashboard_cache_service.invalidate_cache(dataset_id, current_user["id"])
+        logger.info(f"🗑️ Invalidated dashboard cache for dataset {dataset_id} before reprocessing")
         
         # Dispatch the same processing task used for uploads
         task = process_dataset_task.delay(dataset_id, dataset["file_path"])
@@ -174,7 +180,8 @@ async def reprocess_dataset(request: Request, dataset_id: str, current_user: dic
         return {
             "message": "Dataset reprocessing has been initiated.",
             "task_id": task.id,
-            "dataset_id": dataset_id
+            "dataset_id": dataset_id,
+            "cache_invalidated": True
         }
     except HTTPException:
         raise

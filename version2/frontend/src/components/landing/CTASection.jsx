@@ -19,7 +19,7 @@ const CTASection = () => {
 
                     <div className="relative z-10 flex flex-col sm:flex-row gap-4 justify-center">
                         <Link
-                            to="/auth/register"
+                            to="/register"
                             className="inline-flex items-center justify-center px-8 py-4 text-lg font-bold text-blue-600 bg-white rounded-full hover:bg-blue-50 transition-colors shadow-lg"
                         >
                             Get Started for Free
