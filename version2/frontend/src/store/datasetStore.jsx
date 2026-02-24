@@ -3,22 +3,92 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { datasetAPI } from '../services/api';
 import { toast } from 'react-hot-toast';
 
+const DATASET_STORAGE_KEY = 'dataset-storage';
+
+const getInitialState = () => ({
+  datasets: [],
+  selectedDataset: null,
+  ownerUserId: null,
+  uploadProgress: 0,
+  isUploading: false,
+  loading: false,
+  error: null,
+});
+
+const getDatasetId = (dataset) => dataset?.id || dataset?._id || null;
+const hasSameDatasetSnapshot = (a, b) => {
+  if (!a || !b) return false;
+  return (
+    getDatasetId(a) === getDatasetId(b) &&
+    a?.is_processed === b?.is_processed &&
+    (a?.processing_status || '') === (b?.processing_status || '') &&
+    Number(a?.row_count || 0) === Number(b?.row_count || 0) &&
+    Number(a?.column_count || 0) === Number(b?.column_count || 0) &&
+    (a?.name || '') === (b?.name || '') &&
+    (a?.updated_at || a?.created_at || a?.upload_date || '') ===
+      (b?.updated_at || b?.created_at || b?.upload_date || '')
+  );
+};
+
+const parsePersistedAuth = (storage) => {
+  try {
+    const raw = storage.getItem('datasage-auth');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.state || null;
+  } catch (error) {
+    console.warn('Failed to parse persisted auth state:', error);
+    return null;
+  }
+};
+
+const getCurrentAuthUserId = () => {
+  if (typeof window === 'undefined') return null;
+
+  const sessionState = parsePersistedAuth(window.sessionStorage);
+  const localState = parsePersistedAuth(window.localStorage);
+
+  const activeAuthState = sessionState?.token
+    ? sessionState
+    : localState?.token
+      ? localState
+      : sessionState || localState;
+
+  return activeAuthState?.user?.id || null;
+};
+
 const useDatasetStore = create(
   persist(
     (set, get) => ({
-      datasets: [],
-      selectedDataset: null,
-      uploadProgress: 0,
-      isUploading: false,
-      loading: false,
-      error: null,
+      ...getInitialState(),
 
       // Actions
-      setDatasets: (datasets) => set({ datasets }),
-      setSelectedDataset: (dataset) => set({ selectedDataset: dataset }),
+      setDatasets: (datasets) => {
+        const currentSelected = get().selectedDataset;
+        const selectedId = getDatasetId(currentSelected);
+        const selectedFromList = datasets.find((dataset) => getDatasetId(dataset) === selectedId) || null;
+        const nextSelected = selectedFromList
+          ? (hasSameDatasetSnapshot(currentSelected, selectedFromList) ? currentSelected : selectedFromList)
+          : datasets[0] || null;
+        set({
+          datasets,
+          selectedDataset: nextSelected,
+          ownerUserId: getCurrentAuthUserId(),
+        });
+      },
+      setSelectedDataset: (dataset) => {
+        const datasetId = getDatasetId(dataset);
+        if (!datasetId) {
+          set({ selectedDataset: null });
+          return;
+        }
+        const matched = get().datasets.find((item) => getDatasetId(item) === datasetId);
+        set({ selectedDataset: matched || dataset });
+      },
       setUploadProgress: (progress) => set({ uploadProgress: progress }),
       setIsUploading: (isUploading) => set({ isUploading }),
       setLoading: (loading) => set({ loading }),
+      resetState: () => set(getInitialState()),
       setError: (error) => {
         set({ error });
         if (error) toast.error(error);
@@ -27,17 +97,62 @@ const useDatasetStore = create(
 
       // Enhanced fetch: Auto-call on init if empty
       fetchDatasets: async (force = false) => {
-        const { datasets, loading } = get();
+        const { loading } = get();
+        const currentUserId = getCurrentAuthUserId();
+
+        // No authenticated user means no dataset access
+        if (!currentUserId) {
+          set({
+            datasets: [],
+            selectedDataset: null,
+            ownerUserId: null,
+            loading: false,
+            error: null,
+          });
+          return [];
+        }
 
         // Prevent concurrent fetches (race condition fix)
-        if (loading) return datasets;
+        if (loading) return get().datasets;
 
-        if (!force && datasets.length > 0) return datasets;
+        const { ownerUserId } = get();
+        if (ownerUserId && ownerUserId !== currentUserId) {
+          set({
+            datasets: [],
+            selectedDataset: null,
+            ownerUserId: currentUserId,
+            error: null,
+          });
+        }
+
+        const scopedState = get();
+        if (
+          !force &&
+          scopedState.ownerUserId === currentUserId &&
+          scopedState.datasets.length > 0
+        ) {
+          return scopedState.datasets;
+        }
+
         set({ loading: true, error: null });
         try {
           const response = await datasetAPI.getDatasets();
           const fetched = response.data.datasets || [];
-          set({ datasets: fetched, loading: false });
+          const currentSelected = get().selectedDataset;
+          const selectedDatasetId = getDatasetId(currentSelected);
+          const selectedFromFetched = fetched.find(
+            (dataset) => getDatasetId(dataset) === selectedDatasetId
+          ) || null;
+          const nextSelectedDataset = selectedFromFetched
+            ? (hasSameDatasetSnapshot(currentSelected, selectedFromFetched) ? currentSelected : selectedFromFetched)
+            : fetched[0] || null;
+
+          set({
+            datasets: fetched,
+            selectedDataset: nextSelectedDataset,
+            ownerUserId: currentUserId,
+            loading: false,
+          });
 
           // Only show success toast for manual refreshes, not automatic polling
           if (force) {
@@ -47,10 +162,6 @@ const useDatasetStore = create(
             });
           }
 
-          // Auto-select first if none
-          if (fetched.length > 0 && !get().selectedDataset) {
-            set({ selectedDataset: fetched[0] });
-          }
           return fetched;
         } catch (error) {
           const errMsg = error.response?.data?.detail || 'Failed to fetch datasets';
@@ -108,6 +219,8 @@ const useDatasetStore = create(
 
           set((state) => ({
             datasets: [newDataset, ...state.datasets],
+            selectedDataset: newDataset,
+            ownerUserId: getCurrentAuthUserId(),
             isUploading: false,
             uploadProgress: 100,
           }));
@@ -156,7 +269,11 @@ const useDatasetStore = create(
         try {
           const response = await datasetAPI.getDataset(datasetId);
           const dataset = response.data;
-          set({ selectedDataset: dataset, loading: false });
+          set({
+            selectedDataset: dataset,
+            ownerUserId: getCurrentAuthUserId(),
+            loading: false,
+          });
           toast.success('Dataset loaded');
           return { success: true, dataset };
         } catch (error) {
@@ -168,7 +285,11 @@ const useDatasetStore = create(
       },
 
       addDataset: (dataset) => {
-        set((state) => ({ datasets: [dataset, ...state.datasets] }));
+        set((state) => ({
+          datasets: [dataset, ...state.datasets],
+          selectedDataset: dataset,
+          ownerUserId: getCurrentAuthUserId(),
+        }));
         toast.success('Dataset added');
       },
       removeDataset: (datasetId) => {
@@ -202,13 +323,41 @@ const useDatasetStore = create(
       },
     }),
     {
-      name: 'dataset-storage',
+      name: DATASET_STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ datasets: state.datasets, selectedDataset: state.selectedDataset }),
+      partialize: (state) => ({
+        datasets: state.datasets,
+        selectedDataset: state.selectedDataset,
+        ownerUserId: state.ownerUserId,
+      }),
       onRehydrateStorage: () => (state) => {
-        // Auto-fetch on rehydrate if empty
-        if (!state || state.datasets.length === 0) {
-          get().fetchDatasets(true);
+        if (!state) return;
+
+        const currentUserId = getCurrentAuthUserId();
+        const hasDifferentOwner =
+          !!state.ownerUserId && !!currentUserId && state.ownerUserId !== currentUserId;
+
+        if (!currentUserId || hasDifferentOwner) {
+          state.resetState?.();
+          if (typeof window !== 'undefined') {
+            window.localStorage.removeItem(DATASET_STORAGE_KEY);
+            window.sessionStorage.removeItem(DATASET_STORAGE_KEY);
+          }
+          return;
+        }
+
+        const selectedDatasetId = getDatasetId(state.selectedDataset);
+        const isSelectedValid = state.datasets.some(
+          (dataset) => getDatasetId(dataset) === selectedDatasetId
+        );
+
+        if (state.datasets.length === 0) {
+          state.fetchDatasets?.(true);
+          return;
+        }
+
+        if (!isSelectedValid) {
+          state.setSelectedDataset?.(state.datasets[0] || null);
         }
       },
     }

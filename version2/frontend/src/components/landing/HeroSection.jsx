@@ -64,7 +64,7 @@ const HeroSection = () => {
                         className="flex flex-col sm:flex-row gap-4 w-full justify-center mb-16"
                     >
                         <Link
-                            to="/auth/register"
+                            to="/register"
                             className="group relative inline-flex items-center justify-center px-8 py-4 text-lg font-bold text-white transition-all duration-200 bg-blue-600 rounded-full hover:bg-blue-500 hover:scale-105 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-600 focus:ring-offset-slate-900"
                         >
                             Get Started Free

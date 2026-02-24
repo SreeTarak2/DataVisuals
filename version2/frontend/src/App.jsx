@@ -18,6 +18,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Datasets = lazy(() => import("./pages/Datasets"));
 const Chat = lazy(() => import("./pages/Chat"));
 const ChartsStudio = lazy(() => import("./pages/ChartsStudio"));
+const ChartsStudioNext = lazy(() => import("./pages/charts/ChartsStudioNextPage"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Profile = lazy(() => import("./pages/Profile"));
 
@@ -60,7 +61,9 @@ function App() {
               <Route index element={<Navigate to="/app/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
               <Route path="datasets" element={<Datasets />} />
+              <Route path="chat" element={<Chat />} />
               <Route path="charts" element={<ChartsStudio />} />
+              <Route path="charts-next" element={<ChartsStudioNext />} />
               <Route path="settings" element={<Settings />} />
               <Route path="profile" element={<Profile />} />
             </Route>

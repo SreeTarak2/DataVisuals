@@ -45,11 +45,11 @@ const Navbar = () => {
           </div>
 
           <div className="hidden md:flex items-center gap-4">
-            <Link to="/auth/login" className="text-sm font-medium text-white hover:text-blue-400 transition-colors">
+            <Link to="/login" className="text-sm font-medium text-white hover:text-blue-400 transition-colors">
               Log in
             </Link>
             <Link
-              to="/auth/register"
+              to="/register"
               className="px-5 py-2.5 rounded-full bg-white text-slate-950 text-sm font-bold hover:bg-blue-50 transition-colors shadow-lg shadow-white/10"
             >
               Get Started
@@ -76,8 +76,8 @@ const Navbar = () => {
               </a>
             ))}
             <div className="h-px bg-white/10 my-4"></div>
-            <Link to="/auth/login" className="text-white font-medium">Log in</Link>
-            <Link to="/auth/register" className="text-blue-400 font-bold">Get Started</Link>
+            <Link to="/login" className="text-white font-medium" onClick={() => setIsMobileMenuOpen(false)}>Log in</Link>
+            <Link to="/register" className="text-blue-400 font-bold" onClick={() => setIsMobileMenuOpen(false)}>Get Started</Link>
           </div>
         </motion.div>
       )}

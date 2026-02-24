@@ -21,6 +21,7 @@ httpx
 # ── Task queue ──
 celery
 redis
+watchdog[watchmedo]
 
 # ── Data processing ──
 numpy
@@ -45,6 +46,9 @@ slowapi
 
 # ── File handling ──
 python-magic
+
+# ── Resilience & Retry ──
+tenacity
 
 # ── Misc ──
 requests

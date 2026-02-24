@@ -67,6 +67,11 @@ const useChatHistoryStore = create(
       clearAllChats: () => {
         set({ chatHistory: [] })
       },
+
+      // Reset full history store (used on auth/user switch)
+      resetState: () => {
+        set({ chatHistory: [] })
+      },
       
       // Search chats
       searchChats: (query) => {
@@ -86,4 +91,3 @@ const useChatHistoryStore = create(
 )
 
 export default useChatHistoryStore
-
