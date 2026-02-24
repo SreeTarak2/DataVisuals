@@ -5,13 +5,14 @@
  * Extracted from Dashboard.jsx to separate data fetching concerns.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'react-hot-toast';
 import useDatasetStore from '../../../store/datasetStore';
 import { getAuthToken } from '../../../services/api';
 
 export const useDashboardData = (selectedDataset) => {
     const { fetchDatasets } = useDatasetStore();
+    const selectedDatasetId = selectedDataset?.id || null;
 
     // State
     const [loading, setLoading] = useState(true);
@@ -25,13 +26,28 @@ export const useDashboardData = (selectedDataset) => {
     const [domainInfo, setDomainInfo] = useState(null);
     const [qualityMetrics, setQualityMetrics] = useState(null);
     const [chartIntelligence, setChartIntelligence] = useState({});
+    const selectedDatasetRef = useRef(selectedDataset);
+    const pollIntervalRef = useRef(null);
+
+    useEffect(() => {
+        selectedDatasetRef.current = selectedDataset;
+    }, [selectedDataset]);
+
+    const clearProcessingPoll = useCallback(() => {
+        if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+        }
+    }, []);
 
     const loadDashboardData = useCallback(async () => {
-        if (!selectedDataset || !selectedDataset.id) {
+        if (!selectedDatasetId) {
+            clearProcessingPoll();
             setLoading(false);
             return;
         }
 
+        const currentSelectedDataset = selectedDatasetRef.current;
         setLoading(true);
 
         // Safety timeout to prevent infinite loading (5 seconds max)
@@ -52,7 +68,7 @@ export const useDashboardData = (selectedDataset) => {
 
             // Check if dataset is empty
             const currentDataset = freshDatasets.find(
-                d => d.id === selectedDataset.id || d._id === selectedDataset.id
+                d => d.id === selectedDatasetId || d._id === selectedDatasetId
             );
 
             if (currentDataset && (currentDataset.row_count === 0 || currentDataset.column_count === 0)) {
@@ -65,30 +81,38 @@ export const useDashboardData = (selectedDataset) => {
 
             // Check if still processing
             if (currentDataset && !currentDataset.is_processed && currentDataset.processing_status !== 'failed') {
-                // Set up polling
-                const pollInterval = setInterval(async () => {
-                    try {
-                        const updatedDatasets = await fetchDatasets(true);
-                        const updatedDataset = updatedDatasets.find(
-                            d => d.id === selectedDataset.id || d._id === selectedDataset.id
-                        );
-                        if (updatedDataset && updatedDataset.is_processed) {
-                            clearInterval(pollInterval);
-                            loadDashboardData();
+                // Set up a single polling loop
+                if (!pollIntervalRef.current) {
+                    pollIntervalRef.current = setInterval(async () => {
+                        try {
+                            const updatedDatasets = await fetchDatasets(true);
+                            const updatedDataset = updatedDatasets.find(
+                                d => d.id === selectedDatasetId || d._id === selectedDatasetId
+                            );
+                            if (
+                                updatedDataset &&
+                                (updatedDataset.is_processed || updatedDataset.processing_status === 'failed')
+                            ) {
+                                clearProcessingPoll();
+                                loadDashboardData();
+                            }
+                        } catch (error) {
+                            console.error('Error polling for dataset updates:', error);
                         }
-                    } catch (error) {
-                        console.error('Error polling for dataset updates:', error);
-                    }
-                }, 3000);
+                    }, 3000);
+                }
 
-                return () => clearInterval(pollInterval);
+                clearTimeout(safetyTimeout);
+                setLoading(false);
+                return;
             }
 
+            clearProcessingPoll();
             const token = getAuthToken();
 
             // Load actual dataset data
             const dataResponse = await fetch(
-                `/api/datasets/${selectedDataset.id}/data?page=1&page_size=1000`,
+                `/api/datasets/${selectedDatasetId}/data?page=1&page_size=1000`,
                 { headers: { 'Authorization': `Bearer ${token}` } }
             );
 
@@ -103,12 +127,12 @@ export const useDashboardData = (selectedDataset) => {
 
             // Load dashboard components sequentially
             const overviewRes = await fetch(
-                `/api/dashboard/${selectedDataset.id}/overview`,
+                `/api/dashboard/${selectedDatasetId}/overview`,
                 { headers: { 'Authorization': `Bearer ${token}` } }
             );
 
             const chartsRes = await fetch(
-                `/api/dashboard/${selectedDataset.id}/charts`,
+                `/api/dashboard/${selectedDatasetId}/charts`,
                 { headers: { 'Authorization': `Bearer ${token}` } }
             );
 
@@ -122,7 +146,7 @@ export const useDashboardData = (selectedDataset) => {
             let insightsRes;
             try {
                 insightsRes = await fetch(
-                    `/api/dashboard/${selectedDataset.id}/insights`,
+                    `/api/dashboard/${selectedDatasetId}/insights`,
                     {
                         headers: { 'Authorization': `Bearer ${token}` },
                         signal: insightsController.signal
@@ -149,8 +173,8 @@ export const useDashboardData = (selectedDataset) => {
                 setDatasetInfo(datasetInfo);
 
                 // Extract v4.0 enhanced metadata
-                if (selectedDataset.metadata) {
-                    const metadata = selectedDataset.metadata;
+                if (currentSelectedDataset?.metadata) {
+                    const metadata = currentSelectedDataset.metadata;
 
                     if (metadata.dataset_overview) {
                         setDomainInfo({
@@ -168,9 +192,9 @@ export const useDashboardData = (selectedDataset) => {
                 console.error('Failed to load overview data:', overviewRes.status);
                 setKpiData([]);
                 setDatasetInfo({
-                    name: selectedDataset.name,
-                    row_count: selectedDataset.row_count || 0,
-                    column_count: selectedDataset.column_count || 0
+                    name: currentSelectedDataset?.name,
+                    row_count: currentSelectedDataset?.row_count || 0,
+                    column_count: currentSelectedDataset?.column_count || 0
                 });
                 setDomainInfo(null);
                 setQualityMetrics(null);
@@ -241,20 +265,23 @@ export const useDashboardData = (selectedDataset) => {
             setChartData({});
             setInsights([]);
             setDatasetInfo({
-                name: selectedDataset.name,
-                row_count: selectedDataset.row_count || 0,
-                column_count: selectedDataset.column_count || 0
+                name: currentSelectedDataset?.name,
+                row_count: currentSelectedDataset?.row_count || 0,
+                column_count: currentSelectedDataset?.column_count || 0
             });
             toast.error('Failed to load dashboard data');
         } finally {
             clearTimeout(safetyTimeout);
             setLoading(false);
         }
-    }, [selectedDataset, fetchDatasets]);
+    }, [selectedDatasetId, fetchDatasets, clearProcessingPoll]);
 
     useEffect(() => {
         loadDashboardData();
-    }, [selectedDataset, loadDashboardData]);
+        return () => {
+            clearProcessingPoll();
+        };
+    }, [selectedDatasetId, loadDashboardData, clearProcessingPoll]);
 
     return {
         loading,

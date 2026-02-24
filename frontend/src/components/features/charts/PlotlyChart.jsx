@@ -2,10 +2,43 @@ import React, { useEffect, useRef, memo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 
+const MotionDiv = motion.div;
+
+const buildConicGradient = (items, total) => {
+  let cursor = 0;
+  return items
+    .map((item) => {
+      const start = cursor;
+      cursor += (item.rawValue / Math.max(total, 1)) * 360;
+      return `${item.color} ${start}deg ${cursor}deg`;
+    })
+    .join(', ');
+};
+
+const resolvePointColor = (point) => {
+  if (!point || !point.fullData) return '#8FA6D8';
+
+  const marker = point.fullData.marker;
+  const line = point.fullData.line;
+
+  if (Array.isArray(marker?.colors)) {
+    const pointIndex = typeof point.pointNumber === 'number' ? point.pointNumber : 0;
+    return marker.colors[pointIndex] || marker.colors[0] || '#8FA6D8';
+  }
+
+  if (Array.isArray(marker?.color)) {
+    const pointIndex = typeof point.pointNumber === 'number' ? point.pointNumber : 0;
+    return marker.color[pointIndex] || marker.color[0] || '#8FA6D8';
+  }
+
+  return marker?.color || line?.color || point.color || '#8FA6D8';
+};
+
 const CustomTooltip = ({ visible, x, y, data }) => {
-  if (!visible || !data) return null;
+  if (!visible || !data || !Array.isArray(data.items) || data.items.length === 0) return null;
 
   const { title, items, total } = data;
+  const conicGradient = buildConicGradient(items, total);
 
   // Calculate position to keep tooltip within viewport
   // Default to top-right of cursor, but flip if near edges
@@ -15,18 +48,18 @@ const CustomTooltip = ({ visible, x, y, data }) => {
   };
 
   // Adjust if too close to right edge
-  if (x > window.innerWidth - 300) {
-    tooltipStyle.left = x - 280;
+  if (x > window.innerWidth - 320) {
+    tooltipStyle.left = x - 300;
   }
 
   // Adjust if too close to bottom edge
-  if (y > window.innerHeight - 200) {
-    tooltipStyle.top = y - 150;
+  if (y > window.innerHeight - 220) {
+    tooltipStyle.top = y - 190;
   }
 
   return createPortal(
     <AnimatePresence>
-      <motion.div
+      <MotionDiv
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
@@ -37,39 +70,41 @@ const CustomTooltip = ({ visible, x, y, data }) => {
           zIndex: 9999,
           pointerEvents: 'none', // Allow clicking through
         }}
-        className="w-64 bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden"
+        className="w-[290px] rounded-2xl overflow-hidden border border-[#95ADE14D] bg-[#0C1526EB] backdrop-blur-xl shadow-[0_16px_32px_rgba(9,17,33,0.45)]"
       >
         {/* Header */}
-        <div className="px-4 py-2 bg-white/5 border-b border-white/5">
-          <span className="text-sm font-medium text-slate-200">{title}</span>
+        <div className="px-3 py-2 border-b border-[#99AFDB33] bg-white/5">
+          <span className="text-xs font-semibold text-[#EBF1FF]">{title} breakdown</span>
         </div>
 
         {/* Body */}
-        <div className="p-3 space-y-2">
-          {items.map((item, index) => (
-            <div key={index} className="flex items-center justify-between text-sm">
-              <div className="flex items-center gap-2">
-                <div 
-                  className="w-1 h-3 rounded-full" 
+        <div className="flex gap-3 p-3">
+          <div className="shrink-0">
+            <div
+              className="w-[76px] h-[76px] rounded-full flex items-center justify-center"
+              style={{ background: `conic-gradient(${conicGradient})` }}
+            >
+              <div className="w-[50px] h-[50px] rounded-full bg-[#101A2BF2] flex items-center justify-center text-[11px] font-bold text-[#F1F5FF]">
+                {Number.isFinite(total) ? Math.round(total).toLocaleString() : '--'}
+              </div>
+            </div>
+          </div>
+          <div className="w-full space-y-1">
+            {items.map((item, index) => (
+              <div key={`${item.name}-${index}`} className="flex items-center gap-2 text-xs">
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
                   style={{ backgroundColor: item.color }}
                 />
-                <span className="text-slate-400">{item.name}</span>
+                <span className="text-[#BCC9E7] truncate">{item.name}</span>
+                <span className="ml-auto text-[#F4F8FF] font-semibold tabular-nums">
+                  {item.value}
+                </span>
               </div>
-              <span className="font-mono font-medium text-slate-200">
-                {item.value}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {/* Footer / Total */}
-        {total !== undefined && (
-          <div className="px-4 py-2 bg-white/5 border-t border-white/5 flex items-center justify-between">
-            <span className="text-sm text-slate-400">Total</span>
-            <span className="font-mono font-bold text-white">{total}</span>
+            ))}
           </div>
-        )}
-      </motion.div>
+        </div>
+      </MotionDiv>
     </AnimatePresence>,
     document.body
   );
@@ -383,22 +418,23 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             // Calculate Total
             let total = 0;
             const items = points.map(pt => {
-              const val = pt.y || pt.value || 0; // Handle bar/line (y) and pie (value)
-              total += (typeof val === 'number' ? val : 0);
+              const rawValue = Number(pt.y ?? pt.value ?? 0) || 0; // Handle bar/line (y) and pie (value)
+              total += rawValue;
               
               return {
                 name: pt.data.name || pt.fullData.name || 'Series',
-                value: formatValue(val),
-                color: pt.fullData.marker?.color || pt.fullData.line?.color || '#fff'
+                value: formatValue(rawValue),
+                rawValue,
+                color: resolvePointColor(pt)
               };
             });
 
             // For Pie charts, we might want to show just the hovered slice
             if (chartType === 'pie' || chartType === 'donut') {
-               // Pie charts usually trigger one point at a time
-               // No "Total" needed in tooltip usually, or total of all slices?
-               // Let's just show the slice info
                const pt = points[0];
+               const pieTotal = Array.isArray(pt?.data?.values)
+                 ? pt.data.values.reduce((sum, value) => sum + (Number(value) || 0), 0)
+                 : total;
                setTooltip({
                  visible: true,
                  x: eventData.event.clientX,
@@ -407,21 +443,23 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                    title: pt.label,
                    items: [{
                      name: pt.label,
-                     value: formatValue(pt.value),
-                     color: pt.color || '#fff' // Plotly might not give easy access to slice color here without digging
+                     value: formatValue(Number(pt.value) || 0),
+                     rawValue: Number(pt.value) || 0,
+                     color: resolvePointColor(pt)
                    }],
-                   total: pt.percent // Show percent instead of total for pie
+                   total: pieTotal
                  }
                });
             } else {
+              const filteredItems = items.filter(item => item.rawValue > 0);
               setTooltip({
                 visible: true,
                 x: eventData.event.clientX,
                 y: eventData.event.clientY,
                 data: {
                   title: xVal,
-                  items: items,
-                  total: formatValue(total)
+                  items: filteredItems.length > 0 ? filteredItems : items,
+                  total
                 }
               });
             }
@@ -461,10 +499,11 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
       }
     };
     loadPlotly();
+    const cleanupPlotElement = plotRef.current;
     return () => {
-      if (plotRef.current) {
+      if (cleanupPlotElement) {
         // Plotly.purge(plotRef.current); // Ideally purge, but might need to import Plotly again
-        plotRef.current.innerHTML = '';
+        cleanupPlotElement.innerHTML = '';
       }
     };
   }, [data, layout, config, chartType]);

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { Database, Settings, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-hot-toast';
@@ -41,6 +42,8 @@ const CHART_TYPES = [
     { id: 'waterfall', label: 'Waterfall', image: '/src/assets/waterfall.webp', enabled: true },
     { id: 'gauge', label: 'Gauge', image: '/src/assets/pie.webp', enabled: true }, // Using pie as placeholder
 ];
+
+const MotionDiv = motion.div;
 
 const ChartsStudio = () => {
     const { selectedDataset } = useDatasetStore();
@@ -203,6 +206,12 @@ const ChartsStudio = () => {
                 </div>
 
                 <div className="flex items-center gap-1.5">
+                    <Link
+                        to="/app/charts-next"
+                        className="px-2 py-0.5 rounded text-[10px] font-medium bg-cyan-600/20 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 transition-colors"
+                    >
+                        Studio Next
+                    </Link>
                     <button
                         onClick={() => toast.success('Chart saved!')}
                         disabled={!chartData}
@@ -233,7 +242,7 @@ const ChartsStudio = () => {
                 {/* Data Panel (Left Sidebar) */}
                 <AnimatePresence mode="popLayout">
                     {showDataPanel && (
-                        <motion.div
+                        <MotionDiv
                             initial={{ width: 0, opacity: 0 }}
                             animate={{ width: 240, opacity: 1 }}
                             exit={{ width: 0, opacity: 0 }}
@@ -247,7 +256,7 @@ const ChartsStudio = () => {
                                     onUpdateEncoding={updateEncoding}
                                 />
                             </div>
-                        </motion.div>
+                        </MotionDiv>
                     )}
                 </AnimatePresence>
 
@@ -273,7 +282,7 @@ const ChartsStudio = () => {
                 {/* Format Panel (Right Sidebar) */}
                 <AnimatePresence mode="popLayout">
                     {showFormatPanel && (
-                        <motion.div
+                        <MotionDiv
                             initial={{ width: 0, opacity: 0 }}
                             animate={{ width: 280, opacity: 1 }}
                             exit={{ width: 0, opacity: 0 }}
@@ -289,7 +298,7 @@ const ChartsStudio = () => {
                                     onUpdateChartType={updateChartType}
                                 />
                             </div>
-                        </motion.div>
+                        </MotionDiv>
                     )}
                 </AnimatePresence>
             </div>

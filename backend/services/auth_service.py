@@ -274,11 +274,40 @@ class AuthService:
     async def update_user_profile(self, user_id: str, update_data: dict) -> dict:
         """Update user profile"""
         try:
-            update_data["updated_at"] = datetime.utcnow()
-            
+            if not update_data:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No profile fields provided"
+                )
+
             db = self._get_db()
+            object_id = ObjectId(user_id)
+
+            # Enforce username uniqueness across users.
+            if "username" in update_data:
+                username = str(update_data["username"]).strip()
+                if not username:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Username cannot be empty"
+                    )
+                existing_user = await db.users.find_one(
+                    {
+                        "username": username,
+                        "_id": {"$ne": object_id},
+                    }
+                )
+                if existing_user:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Username already taken"
+                    )
+                update_data["username"] = username
+
+            update_data["updated_at"] = datetime.utcnow()
+
             result = await db.users.update_one(
-                {"_id": ObjectId(user_id)},
+                {"_id": object_id},
                 {"$set": update_data}
             )
             
@@ -348,5 +377,4 @@ auth_service = AuthService()
 # Dependency to get current user
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     return await auth_service.get_current_user(credentials)
-
 

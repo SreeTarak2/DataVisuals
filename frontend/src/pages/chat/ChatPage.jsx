@@ -10,6 +10,7 @@ import DOMPurify from 'dompurify';
 import PlotlyChart from '@/components/features/charts/PlotlyChart';
 import ChatHistoryModal from '@/components/features/observatory/ChatHistoryModal';
 import { markdownComponents, streamingMarkdownComponents } from '@/components/features/chat/MarkdownRenderers';
+import { ChatErrorDisplay, RateLimitBanner, ConnectionStatus, TypingIndicator } from '@/components/features/chat/ChatErrorDisplay';
 import useChatStore from '@/store/chatStore';
 import useDatasetStore from '@/store/datasetStore';
 import useWebSocket from '@/hooks/useWebSocket';
@@ -272,12 +273,20 @@ const Chat = () => {
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editContent, setEditContent] = useState('');
 
+  // Error and rate limit state
+  const [chatError, setChatError] = useState(null);
+  const [rateLimitRemaining, setRateLimitRemaining] = useState(null);
+  const [showRateLimitBanner, setShowRateLimitBanner] = useState(true);
+
   const messages = getCurrentConversationMessages();
   const isAITyping = loading || isStreaming;
 
   // Track message count to prevent unnecessary scrolls
   const messageCountRef = useRef(0);
   const pendingMessageRef = useRef(null);
+
+  // Rate limit total (matches backend MAX_WS_MESSAGES_PER_MINUTE)
+  const RATE_LIMIT_TOTAL = 30;
 
   // WebSocket connection for streaming
   const { isConnected, connect, sendMessage: wsSendMessage } = useWebSocket({
@@ -320,11 +329,22 @@ const Chat = () => {
 
     onError: useCallback((error) => {
       cancelStreaming();
-      toast.error(error.detail || 'Connection error');
+      // Set error state for display
+      setChatError(error);
+      // Don't show toast for rate limit errors - we show the banner instead
+      const detail = String(error?.detail || '').toLowerCase();
+      if (!detail.includes('rate') && !detail.includes('limit')) {
+        toast.error(error?.detail || 'Connection error');
+      }
     }, [cancelStreaming]),
 
-    onStatus: useCallback(() => {
-      // Status updates received
+    onStatus: useCallback((status) => {
+      // Track rate limit remaining from status updates
+      if (status?.rate_limit_remaining !== undefined) {
+        setRateLimitRemaining(status.rate_limit_remaining);
+      }
+      // Clear any previous errors when processing starts
+      setChatError(null);
     }, []),
 
     autoConnect: false
@@ -393,7 +413,8 @@ const Chat = () => {
       setInputMessage('');
     }
 
-    // Ensure we have a conversation
+    // Store message for retry on failure
+    pendingMessageRef.current = message;
     let convId = currentChatId || currentConversationId;
     if (!convId) {
       convId = startNewConversation(selectedDataset.id);
@@ -630,16 +651,7 @@ const Chat = () => {
             <div className="flex items-center gap-2">
               <p className="text-xs text-muted-foreground">Chatting about: {selectedDataset.name}</p>
               {/* WebSocket connection indicator */}
-              <span className={cn(
-                "flex items-center gap-1 text-xs",
-                isConnected ? "text-green-400" : "text-yellow-400"
-              )}>
-                {isConnected ? (
-                  <><Wifi className="w-3 h-3" /> Live</>
-                ) : (
-                  <><WifiOff className="w-3 h-3" /> Connecting...</>
-                )}
-              </span>
+              <ConnectionStatus isConnected={isConnected} />
             </div>
           </div>
         </div>
@@ -647,6 +659,32 @@ const Chat = () => {
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden relative">
         <div className="mx-auto max-w-3xl pt-6 pb-28">
+          {/* Rate Limit Warning Banner */}
+          {rateLimitRemaining !== null && showRateLimitBanner && (
+            <RateLimitBanner 
+              remaining={rateLimitRemaining} 
+              total={RATE_LIMIT_TOTAL}
+              onClose={() => setShowRateLimitBanner(false)}
+            />
+          )}
+          
+          {/* Error Display */}
+          <AnimatePresence>
+            {chatError && (
+              <ChatErrorDisplay
+                error={chatError}
+                onRetry={() => {
+                  const lastMessage = pendingMessageRef.current;
+                  setChatError(null);
+                  if (lastMessage) {
+                    handleSendMessage(null, lastMessage);
+                  }
+                }}
+                onDismiss={() => setChatError(null)}
+              />
+            )}
+          </AnimatePresence>
+
           {/* Starter Suggestions — shown when no messages */}
           {messages.length === 0 && (
             <motion.div
@@ -740,11 +778,7 @@ const Chat = () => {
                       <span className="inline-block w-1.5 h-5 bg-blue-400 rounded-sm animate-pulse ml-0.5 align-text-bottom" />
                     </div>
                   ) : (
-                    <div className="flex gap-1.5 items-center py-1">
-                      <span className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" />
-                      <span className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </div>
+                    <TypingIndicator stage={loading ? 'thinking' : 'generating'} />
                   )}
                 </div>
               </div>

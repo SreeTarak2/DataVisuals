@@ -432,11 +432,75 @@ const useChatStore = create(
           return { success: true, conversationId: finalConvId };
         } catch (error) {
           console.error('Send message error:', error);
+          
+          // Extract error details
+          const rawDetail = error.response?.data?.detail ?? error.message ?? 'Failed to send message';
+          const errorDetail = Array.isArray(rawDetail)
+            ? rawDetail.map(e => (typeof e === 'object' ? JSON.stringify(e) : String(e))).join('; ')
+            : typeof rawDetail === 'object' && rawDetail !== null
+              ? JSON.stringify(rawDetail)
+              : String(rawDetail);
+          const errorStatus = error.response?.status;
+          
+          // Check if this is a fallback response (backend returns fallback on rate limit)
+          const responseData = error.response?.data;
+          if (responseData?.is_fallback) {
+            // Backend returned a fallback response - treat it as success
+            const aiMessage = {
+              id: `msg_${Date.now()}_ai`,
+              role: 'assistant',
+              content: responseData.response || responseData.response_text || '',
+              chart_config: null,
+              timestamp: new Date().toISOString(),
+              is_fallback: true,
+              fallback_reason: responseData.fallback_reason
+            };
+
+            set((state) => ({
+              conversations: {
+                ...state.conversations,
+                [currentConvId]: {
+                  ...state.conversations[currentConvId],
+                  messages: [
+                    ...(state.conversations[currentConvId]?.messages || []),
+                    aiMessage
+                  ]
+                }
+              },
+              loading: false,
+              error: null
+            }));
+
+            return { success: true, conversationId: currentConvId, is_fallback: true };
+          }
+          
+          // Format user-friendly error message
+          let userFriendlyError = errorDetail;
+          
+          if (errorStatus === 429 || errorDetail.toLowerCase().includes('rate') || errorDetail.toLowerCase().includes('limit')) {
+            userFriendlyError = "The AI is experiencing high demand. Your question will be processed when capacity is available. Try checking the Dashboard for pre-computed insights.";
+          } else if (errorStatus === 502 || errorStatus === 503 || errorDetail.toLowerCase().includes('unavailable')) {
+            userFriendlyError = "The AI service is temporarily unavailable. Please try again in a few minutes.";
+          } else if (errorDetail.toLowerCase().includes('timeout')) {
+            userFriendlyError = "The request took too long. Try asking a simpler question.";
+          } else if (errorStatus === 404) {
+            userFriendlyError = "Dataset not found. Please select a valid dataset.";
+          } else if (errorStatus === 409) {
+            userFriendlyError = "Dataset is still processing. Please wait a moment and try again.";
+          }
+          
           set({
-            error: error.response?.data?.detail || 'Failed to send message',
+            error: userFriendlyError,
             loading: false
           });
-          return { success: false, error: error.response?.data?.detail || 'Failed to send message' };
+          
+          return { 
+            success: false, 
+            error: userFriendlyError,
+            errorType: errorStatus === 429 ? 'rate_limit' : 
+                      (errorStatus === 502 || errorStatus === 503) ? 'unavailable' :
+                      errorDetail.toLowerCase().includes('timeout') ? 'timeout' : 'generic'
+          };
         }
       },
 
@@ -494,6 +558,19 @@ const useChatStore = create(
       // Clear all conversations
       clearAllConversations: () => {
         set({ conversations: {}, currentConversationId: null });
+      },
+
+      // Reset full chat store state (used on auth/user switch)
+      resetState: () => {
+        set({
+          conversations: {},
+          currentConversationId: null,
+          loading: false,
+          error: null,
+          streamingMessageId: null,
+          streamingContent: '',
+          isStreaming: false,
+        });
       },
 
       // Get conversation by ID

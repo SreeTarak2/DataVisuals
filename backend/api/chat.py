@@ -20,6 +20,7 @@ from fastapi import (
 from db.schemas import ChatRequest
 from services.auth_service import auth_service, get_current_user
 from services.ai.ai_service import ai_service
+from services.audit_service import audit_service
 from core.rate_limiter import limiter, RateLimits
 
 # --- Configuration ---
@@ -199,6 +200,11 @@ async def process_chat(
     - "quick": Fast responses for simple queries.
     - "deep": Comprehensive analysis for complex queries.
     - "forecast": Predictive analysis mode.
+    
+    Enterprise Features:
+    - GDPR-compliant audit logging
+    - Latency tracking for monitoring
+    - Error tracking for reliability
     """
     valid_modes = ["learning", "quick", "deep", "forecast"]
     if mode not in valid_modes:
@@ -207,6 +213,8 @@ async def process_chat(
             detail=f"Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}"
         )
 
+    start_time = time.time()
+    
     try:
         response = await ai_service.process_chat_message_enhanced(
             query=chat_request.message,
@@ -215,19 +223,61 @@ async def process_chat(
             conversation_id=chat_request.conversation_id,
             mode=mode,
         )
+        
+        # Calculate latency
+        latency_ms = (time.time() - start_time) * 1000
+        
+        # Log successful interaction (async, non-blocking)
+        await audit_service.log_chat_interaction(
+            user_id=current_user["id"],
+            dataset_id=dataset_id,
+            conversation_id=response.get("conversation_id"),
+            query=chat_request.message,
+            response=response.get("response", response.get("response_text", "")),
+            latency_ms=latency_ms,
+            success=True,
+            chart_generated=response.get("chart_config") is not None,
+            analysis_type=mode
+        )
+        
         return response
-    except HTTPException:
+        
+    except HTTPException as e:
+        # Log HTTP errors
+        latency_ms = (time.time() - start_time) * 1000
+        await audit_service.log_chat_interaction(
+            user_id=current_user["id"],
+            dataset_id=dataset_id,
+            conversation_id=chat_request.conversation_id,
+            query=chat_request.message,
+            response=str(e.detail),
+            latency_ms=latency_ms,
+            success=False,
+            analysis_type=mode
+        )
         raise
+        
     except Exception as e:
+        # Log unexpected errors
+        latency_ms = (time.time() - start_time) * 1000
+        await audit_service.log_error(
+            user_id=current_user["id"],
+            error_type="chat_processing",
+            error_message=str(e),
+            context={
+                "dataset_id": dataset_id,
+                "mode": mode,
+                "latency_ms": latency_ms
+            }
+        )
         logger.error(f"Chat processing error: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-# Import BaseModel for the request schema
-from pydantic import BaseModel
-from typing import Optional as OptionalType
-
 # --- Deep Analysis Endpoint (LangGraph QUIS) ---
+# Import BaseModel for the request schema
+
+from pydantic import BaseModel
 
 class DeepAnalysisRequest(BaseModel):
     """Request schema for deep analysis."""
@@ -236,6 +286,114 @@ class DeepAnalysisRequest(BaseModel):
     
     class Config:
         extra = "forbid"
+
+
+class QueryExecutionRequest(BaseModel):
+    """Request schema for direct SQL query execution."""
+    query: str
+    return_raw: bool = False  # If True, return raw data instead of interpretation
+    
+    class Config:
+        extra = "forbid"
+
+
+@router.post("/datasets/{dataset_id}/query")
+@limiter.limit(RateLimits.CHAT_MESSAGE)
+async def execute_natural_language_query(
+    request: Request,
+    dataset_id: str,
+    query_request: QueryExecutionRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Execute a natural language query against a dataset using DuckDB.
+    
+    This endpoint converts natural language to SQL and executes it against
+    the actual data, ensuring NO HALLUCINATIONS in the response.
+    
+    Flow:
+    1. Natural language → SQL generation (LLM)
+    2. SQL validation (safety checks)
+    3. DuckDB execution (against real data)
+    4. Result interpretation (LLM)
+    
+    Returns:
+    - response: Natural language answer
+    - sql: The generated SQL query (for transparency)
+    - data: Query result data (limited to 100 rows)
+    - row_count: Total rows returned
+    - execution_time_ms: Query execution time
+    
+    Example queries:
+    - "What is the total sales by region?"
+    - "Show me the top 10 products by revenue"
+    - "Average order value for customers in California"
+    - "How many orders were placed last month?"
+    """
+    from services.query_executor import query_executor
+    from services.datasets.dataset_loader import load_dataset
+    
+    start_time = time.time()
+    
+    try:
+        # Get dataset
+        db = await ai_service._get_db()
+        dataset_doc = await db.datasets.find_one({
+            "_id": dataset_id, 
+            "user_id": current_user["id"]
+        })
+        
+        if not dataset_doc:
+            raise HTTPException(404, "Dataset not found.")
+        
+        if not dataset_doc.get("metadata"):
+            raise HTTPException(409, "Dataset is still being processed.")
+        
+        file_path = dataset_doc.get("file_path")
+        if not file_path:
+            raise HTTPException(500, "Dataset file path not found.")
+        
+        # Load dataset
+        df = await load_dataset(file_path)
+        
+        # Execute query
+        result = await query_executor.execute_query(
+            query=query_request.query,
+            df=df,
+            dataset_id=dataset_id,
+            return_raw=query_request.return_raw
+        )
+        
+        # Calculate latency
+        latency_ms = (time.time() - start_time) * 1000
+        
+        # Log interaction
+        await audit_service.log_chat_interaction(
+            user_id=current_user["id"],
+            dataset_id=dataset_id,
+            conversation_id=None,
+            query=query_request.query,
+            response=result.get("response", ""),
+            latency_ms=latency_ms,
+            success=result.get("success", False),
+            chart_generated=False,
+            analysis_type="sql_execution"
+        )
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Query execution error: {e}", exc_info=True)
+        await audit_service.log_error(
+            user_id=current_user["id"],
+            error_type="query_execution_error",
+            error_message=str(e),
+            context={"dataset_id": dataset_id, "query": query_request.query}
+        )
+        raise HTTPException(500, f"Query execution failed: {str(e)}")
+
 
 @router.post("/datasets/{dataset_id}/analyze")
 @limiter.limit(RateLimits.AI_INSIGHTS)
@@ -261,6 +419,10 @@ async def trigger_deep_analysis(
     - Automatically generated Plotly visualizations
     - Markdown-formatted summary suitable for chat display
     
+    Enterprise Features:
+    - Deep analysis audit logging
+    - Performance metrics tracking
+    
     Args:
         dataset_id: MongoDB ObjectId of the dataset to analyze
         analysis_request: Optional query to focus analysis, novelty threshold
@@ -272,6 +434,8 @@ async def trigger_deep_analysis(
         - boring_filtered: Count of insights filtered as not novel
         - stats: Execution statistics
     """
+    start_time = time.time()
+    
     try:
         from services.agents.quis_graph import run_quis_analysis
         
@@ -280,6 +444,19 @@ async def trigger_deep_analysis(
             user_id=current_user["id"],
             query=analysis_request.query,
             novelty_threshold=analysis_request.novelty_threshold or 0.35
+        )
+        
+        # Log deep analysis
+        latency_ms = (time.time() - start_time) * 1000
+        await audit_service.log_deep_analysis(
+            user_id=current_user["id"],
+            dataset_id=dataset_id,
+            query=analysis_request.query,
+            insights_generated=len(result.get("insights", [])),
+            charts_generated=len(result.get("charts", [])),
+            latency_ms=latency_ms,
+            success=True,
+            stats=result.get("stats")
         )
         
         return result
@@ -296,6 +473,17 @@ async def trigger_deep_analysis(
             "analysis_type": "error"
         }
     except Exception as e:
+        latency_ms = (time.time() - start_time) * 1000
+        await audit_service.log_deep_analysis(
+            user_id=current_user["id"],
+            dataset_id=dataset_id,
+            query=analysis_request.query,
+            insights_generated=0,
+            charts_generated=0,
+            latency_ms=latency_ms,
+            success=False,
+            stats={"error": str(e)}
+        )
         logger.error(f"Deep analysis error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -312,17 +500,39 @@ async def get_chat_conversations(current_user: dict = Depends(get_current_user))
     """
     return await ai_service.get_user_conversations(current_user["id"])
 
+
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(
-    conversation_id: str, current_user: dict = Depends(get_current_user)
+    conversation_id: str,
+    current_user: dict = Depends(get_current_user),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(50, ge=10, le=200, description="Messages per page"),
+    include_archived: bool = Query(False, description="Include archived messages")
 ):
     """
     Retrieves a specific chat conversation by its ID.
+    
+    Enterprise Features:
+    - Pagination for large conversations
+    - Optional archived message retrieval
+    - Performance-optimized for scale
     """
-    conversation = await ai_service.get_conversation(conversation_id, current_user["id"])
+    from services.conversations.conversation_service import get_conversation_page
+    
+    # Use paginated version for efficiency
+    conversation = await get_conversation_page(
+        conversation_id=conversation_id,
+        user_id=current_user["id"],
+        page=page,
+        page_size=page_size,
+        include_archived=include_archived
+    )
+    
     if not conversation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    
     return conversation
+
 
 @router.delete("/conversations/{conversation_id}")
 async def delete_conversation(
@@ -335,6 +545,77 @@ async def delete_conversation(
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
     return {"message": "Conversation deleted successfully"}
+
+
+# --- Enterprise: User Analytics Endpoints ---
+
+@router.get("/stats/user")
+async def get_user_usage_stats(
+    current_user: dict = Depends(get_current_user),
+    days: int = Query(30, ge=1, le=365, description="Days to include in stats")
+):
+    """
+    Get usage statistics for the current user.
+    
+    Returns:
+    - total_queries: Number of chat queries
+    - successful_queries: Number of successful queries
+    - avg_latency_ms: Average response time
+    - charts_generated: Number of charts created
+    - success_rate: Percentage of successful queries
+    """
+    stats = await audit_service.get_user_stats(
+        user_id=current_user["id"],
+        days=days
+    )
+    return stats
+
+
+@router.get("/stats/system")
+async def get_system_health(
+    current_user: dict = Depends(get_current_user),
+    hours: int = Query(24, ge=1, le=168, description="Hours to include in stats")
+):
+    """
+    Get system health metrics (admin only in production).
+    
+    Returns:
+    - total_requests: Total requests in time window
+    - error_rate: Percentage of failed requests
+    - avg_latency_ms: Average response time
+    - p95_latency_ms: 95th percentile latency
+    - active_users: Unique users in period
+    """
+    if not current_user.get("is_admin") and current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required to view system health metrics."
+        )
+    health = await audit_service.get_system_health(hours=hours)
+    return health
+
+
+@router.post("/data/export")
+@limiter.limit("5/minute")
+async def export_user_data(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    GDPR: Export all user data.
+    
+    Allows users to download all their audit data
+    as required by GDPR right to data portability.
+    """
+    data = await audit_service.export_user_data(
+        user_id=current_user["id"]
+    )
+    return {
+        "user_id": current_user["id"],
+        "export_date": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "record_count": len(data),
+        "data": data
+    }
 
 
 # --- WebSocket Chat Endpoint ---

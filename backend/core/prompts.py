@@ -200,6 +200,37 @@ class PromptFactory:
     def get_context(self, user_message: str = "") -> str:
         return self.rich_context if self._needs_rich_context(user_message) else self.tiny_context
 
+    def _format_conversation_history(self, messages: list, max_recent: int = 10) -> str:
+        """
+        Format recent conversation history for injection into the LLM prompt.
+        
+        Keeps the last `max_recent` messages (excluding the current user message which
+        is the last item). Truncates long messages to keep the prompt compact.
+        
+        Token budget: ~500-1500 tokens for 10 messages (well within limits).
+        """
+        if not messages or len(messages) <= 1:
+            return ""
+        
+        # Take recent messages, exclude the very last one (current user message)
+        recent = messages[-(max_recent + 1):-1] if len(messages) > max_recent + 1 else messages[:-1]
+        
+        if not recent:
+            return ""
+        
+        lines = []
+        for msg in recent:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            # Truncate long messages to keep prompt compact
+            if len(content) > 200:
+                content = content[:200] + "..."
+            
+            label = "User" if role == "user" else "DataSage"
+            lines.append(f"{label}: {content}")
+        
+        return "\n".join(lines)
+
     # ==============================
     # Prompt Builders
     # ==============================
@@ -216,8 +247,16 @@ class PromptFactory:
 
         if prompt_type == PromptType.CONVERSATIONAL:
             # Don't include JSON rules - the LLM router adds the conversational system prompt
-            return f"""{conversational_base}
-USER QUESTION: {user_message}"""
+            # Include recent conversation history so the LLM has memory of the conversation
+            history = kwargs.get("history", [])
+            history_block = self._format_conversation_history(history)
+            
+            prompt_parts = [conversational_base]
+            if history_block:
+                prompt_parts.append(f"CONVERSATION HISTORY (for context, do NOT repeat these):\n{history_block}")
+            prompt_parts.append(f"USER QUESTION: {user_message}")
+            
+            return "\n\n".join(prompt_parts)
 
         if prompt_type == PromptType.DASHBOARD_DESIGNER:
             return f"""{json_base}
@@ -250,61 +289,15 @@ OUTPUT:
         raise ValueError(f"Unknown prompt type: {prompt_type}")
 
     def _kpi_generator_prompt(self, base: str) -> str:
-        # Build domain context section if available
-        domain_section = ""
-        domain_ctx = self.metadata.get("domain_context", {})
-        if domain_ctx:
-            parts = [f"DOMAIN: {domain_ctx.get('domain', 'unknown')}"]
-            if domain_ctx.get("key_metrics"):
-                parts.append(f"KEY METRICS: {', '.join(domain_ctx['key_metrics'][:10])}")
-            if domain_ctx.get("measures"):
-                parts.append(f"MEASURES: {', '.join(domain_ctx['measures'][:10])}")
-            if domain_ctx.get("dimensions"):
-                parts.append(f"DIMENSIONS: {', '.join(domain_ctx['dimensions'][:10])}")
-            if domain_ctx.get("time_columns"):
-                parts.append(f"TIME COLUMNS: {', '.join(domain_ctx['time_columns'][:5])}")
-            domain_section = "\n".join(parts) + "\n"
-
-        # Build profile section
-        profile_section = ""
-        profile = self.metadata.get("data_profile", {})
-        if profile:
-            parts = []
-            if profile.get("id_columns"):
-                parts.append(f"ID COLUMNS (skip these): {', '.join(profile['id_columns'][:5])}")
-            if profile.get("low_cardinality_dims"):
-                parts.append(f"CATEGORICAL DIMS: {', '.join(profile['low_cardinality_dims'][:5])}")
-            if parts:
-                profile_section = "\n".join(parts) + "\n"
-
-        # Build correlation section
-        corr_section = ""
-        top_corr = self.metadata.get("top_correlations", [])
-        if top_corr:
-            corr_lines = [f"  {c['columns'][0]} ↔ {c['columns'][1]} (r={c['r']}, {c['strength']})" for c in top_corr]
-            corr_section = "NOTABLE CORRELATIONS:\n" + "\n".join(corr_lines) + "\n"
-
-        # Build skewed columns section
-        skew_section = ""
-        skewed = self.metadata.get("skewed_columns", [])
-        if skewed:
-            skew_section = f"SKEWED COLUMNS (be careful with mean): {', '.join(skewed)}\n"
-
         return f"""{base}
 
-{domain_section}{profile_section}{corr_section}{skew_section}
 You are a McKinsey partner presenting to a Fortune 10 CEO tomorrow.
 One mistake and you're fired.
 
 TASK: Generate exactly 6–8 perfect executive KPI cards.
 Detect archetype first.
 Never use raw column names in titles.
-Never use ID or index columns as KPIs.
-Pick aggregations that match the column's business meaning:
-- Revenue/sales/cost columns → sum
-- Rate/score/percentage columns → mean
-- Category/type columns → count_unique
-Always add context (% change, concentration, distribution note).
+Always add context (% change, % of total, concentration, benchmark).
 
 OUTPUT:
 {{
