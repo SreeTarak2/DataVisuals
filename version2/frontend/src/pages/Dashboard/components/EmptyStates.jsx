@@ -12,6 +12,7 @@
 import React from 'react';
 import { Database, AlertTriangle, Upload } from 'lucide-react';
 import { Button } from '../../../components/common/Button';
+import { Loader2 } from 'lucide-react';
 
 const EmptyStates = ({ type, selectedDataset, onUpload, onNavigateToDatasets }) => {
     if (type === 'no-dataset') {
@@ -54,6 +55,27 @@ const EmptyStates = ({ type, selectedDataset, onUpload, onNavigateToDatasets }) 
                         <Upload className="w-5 h-5 mr-2" />
                         Upload New Dataset
                     </Button>
+                    <Button
+                        onClick={onNavigateToDatasets}
+                        className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-3"
+                    >
+                        <Database className="w-5 h-5 mr-2" />
+                        View All Datasets
+                    </Button>
+                </div>
+            </div>
+        );
+    }
+
+    if (type === 'processing-dataset') {
+        return (
+            <div className="text-center py-20 bg-blue-900/10 border border-blue-500/30 rounded-xl">
+                <Loader2 className="w-16 h-16 mx-auto text-blue-400 mb-6 animate-spin" />
+                <h3 className="text-2xl font-semibold text-white mb-3">Analyzing Dataset</h3>
+                <p className="text-slate-400 mb-8 max-w-md mx-auto">
+                    We are currently processing your dataset and generating AI insights. This might take a minute depending on the dataset size.
+                </p>
+                <div className="flex gap-4 justify-center">
                     <Button
                         onClick={onNavigateToDatasets}
                         className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-3"

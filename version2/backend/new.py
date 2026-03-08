@@ -3,42 +3,12 @@ import time
 import requests
 from dotenv import load_dotenv
 
-<<<<<<< HEAD
-response = requests.post(
-  url="https://openrouter.ai/api/v1/chat/completions",
-  headers={
-    "Authorization": "Bearer sk",
-    "Content-Type": "application/json",
-  },
-  data=json.dumps({
-    "model": "anthropic/claude-3-opus",
-    "messages": [
-      {
-        "role": "user",
-        "content": [
-          {
-            "type": "text",
-            "text": "What is in this image?"
-          },
-          {
-            "type": "image_url",
-            "image_url": {
-              "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
-            }
-          }
-        ]
-      }
-    ]
-  })
-)
-
-print(response.json())
-=======
 load_dotenv()
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "deepseek/deepseek-r1-0528:free"
-DEFAULT_MODEL = "openai/gpt-oss-120b:free"
+# DEFAULT_MODEL = "deepseek/deepseek-r1-0528:free"
+# DEFAULT_MODEL = "openai/gpt-oss-120b:free"
+DEFAULT_MODEL = "arcee-ai/trinity-large-preview:free"
 DEFAULT_PROMPT = "What is the meaning of life?"
 
 
@@ -79,4 +49,4 @@ def main():
 
 if __name__ == "__main__":
     main()
->>>>>>> 7681d6d9 (prompts are updated and chat backend is corrected)
+

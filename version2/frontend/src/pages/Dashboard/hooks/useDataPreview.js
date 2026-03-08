@@ -2,30 +2,30 @@
  * useDataPreview Hook
  * 
  * Custom hook for loading and managing data preview table.
- * Extracted from Dashboard.jsx to separate data preview concerns.
+ * Now fetches up to 200 rows for client-side search/sort/pagination.
  */
 
 import { useState, useCallback, useEffect } from 'react';
 import { getAuthToken } from '../../../services/api';
 
+const PREVIEW_LIMIT = 200;
+
 export const useDataPreview = (selectedDataset) => {
     const [dataPreview, setDataPreview] = useState([]);
     const [previewLoading, setPreviewLoading] = useState(false);
+    const [totalRows, setTotalRows] = useState(null);
     const selectedDatasetId = selectedDataset?.id || null;
 
     const loadDataPreview = useCallback(async () => {
-        if (!selectedDatasetId) {
-            console.warn('loadDataPreview: No dataset ID provided');
-            return;
-        }
+        if (!selectedDatasetId) return;
 
         try {
             setPreviewLoading(true);
-            console.log('Loading data preview for dataset:', selectedDatasetId);
-
             const token = getAuthToken();
+
+            // Try paginated data endpoint first (returns total_count)
             const response = await fetch(
-                `/api/datasets/${selectedDatasetId}/preview?limit=10`,
+                `/api/datasets/${selectedDatasetId}/data?page=1&page_size=${PREVIEW_LIMIT}`,
                 {
                     headers: {
                         'Authorization': `Bearer ${token}`,
@@ -34,38 +34,26 @@ export const useDataPreview = (selectedDataset) => {
                 }
             );
 
-            console.log('Data preview response status:', response.status);
-
             if (response.ok) {
-                const data = await response.json();
-                console.log('Data preview response:', data);
-                setDataPreview(data.rows || []);
+                const result = await response.json();
+                setDataPreview(result.data || []);
+                setTotalRows(result.total_count ?? result.total ?? null);
             } else {
-                console.warn('Could not load data preview, response status:', response.status);
-
-                // Fallback to regular data endpoint
-                console.log('Trying fallback to regular data endpoint...');
-                try {
-                    const fallbackResponse = await fetch(
-                        `/api/datasets/${selectedDatasetId}/data?page=1&page_size=10`,
-                        {
-                            headers: {
-                                'Authorization': `Bearer ${token}`,
-                                'Content-Type': 'application/json'
-                            }
+                // Fallback to preview endpoint
+                const fallback = await fetch(
+                    `/api/datasets/${selectedDatasetId}/preview?limit=${PREVIEW_LIMIT}`,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
                         }
-                    );
-
-                    if (fallbackResponse.ok) {
-                        const fallbackData = await fallbackResponse.json();
-                        console.log('Fallback data response:', fallbackData);
-                        setDataPreview(fallbackData.data || []);
-                    } else {
-                        console.warn('Fallback also failed, status:', fallbackResponse.status);
-                        setDataPreview([]);
                     }
-                } catch (fallbackErr) {
-                    console.warn('Fallback error:', fallbackErr);
+                );
+
+                if (fallback.ok) {
+                    const data = await fallback.json();
+                    setDataPreview(data.rows || []);
+                } else {
                     setDataPreview([]);
                 }
             }
@@ -87,6 +75,7 @@ export const useDataPreview = (selectedDataset) => {
     return {
         dataPreview,
         previewLoading,
+        totalRows,
         loadDataPreview
     };
 };

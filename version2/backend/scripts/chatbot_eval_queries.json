@@ -1,0 +1,42 @@
+[
+  {
+    "id": "exec_summary",
+    "group": "single_a",
+    "query": "Give an executive summary of this dataset with the top 3 business insights and one risk."
+  },
+  {
+    "id": "advanced_segment",
+    "group": "single_b",
+    "query": "Segment `{num1}` by `{cat1}` and identify where performance differs materially. Include caveats."
+  },
+  {
+    "id": "causal_skeptic",
+    "group": "single_c",
+    "query": "Evaluate whether changes in `{num1}` could be caused by `{num2}`. Distinguish evidence from inference."
+  },
+  {
+    "id": "outlier_rca",
+    "group": "single_d",
+    "query": "Find anomalies in `{num1}` and propose likely root causes grounded in available columns."
+  },
+  {
+    "id": "chart_test",
+    "group": "single_e",
+    "query": "Create the most informative chart for `{num1}` by `{cat1}` and explain what decision it should drive."
+  },
+  {
+    "id": "memory_t1",
+    "group": "memory_chain",
+    "query": "What are the 3 most important findings in this dataset?"
+  },
+  {
+    "id": "memory_t2",
+    "group": "memory_chain",
+    "query": "Take your first finding and break it down by `{cat1}` with supporting evidence."
+  },
+  {
+    "id": "memory_t3",
+    "group": "memory_chain",
+    "query": "Now challenge that conclusion: what alternative explanation should we test next?"
+  }
+]

@@ -3,6 +3,7 @@
 import logging
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
+import polars as pl
 
 # --- Application Modules ---
 from services.auth_service import get_current_user
@@ -66,7 +67,16 @@ async def _hydrate_blueprint(blueprint: Dict[str, Any], dataset_id: str, user_id
                     color=cfg.get("color"),
                 )
                 result = hydrate_kpi(df, kpi_cfg)
-                comp["value"] = result.get("value", 0) if isinstance(result, dict) else result
+                if isinstance(result, dict):
+                    comp["value"] = result.get("value", 0)
+                    # Pass through all enrichment fields
+                    for key in ("sparkline_data", "comparison_value", "comparison_label",
+                                "delta_percent", "format", "min_value", "max_value",
+                                "record_count", "top_values"):
+                        if key in result:
+                            comp[key] = result[key]
+                else:
+                    comp["value"] = result
 
             elif ctype == "chart":
                 columns = cfg.get("columns", [])
@@ -74,11 +84,49 @@ async def _hydrate_blueprint(blueprint: Dict[str, Any], dataset_id: str, user_id
                     columns = [columns]
                 # Filter to columns that actually exist in the dataframe
                 safe_columns = [c for c in columns if c in df.columns]
+                # Fuzzy fallback: if LLM gave a slightly wrong column name, try to match
+                if len(safe_columns) < len(columns):
+                    df_cols_lower = {c.lower().replace(" ", "_"): c for c in df.columns}
+                    for orig_col in columns:
+                        if orig_col in df.columns:
+                            continue
+                        normalized = orig_col.lower().replace(" ", "_")
+                        if normalized in df_cols_lower:
+                            safe_columns.append(df_cols_lower[normalized])
+                            logger.info(f"Fuzzy-matched column '{orig_col}' → '{df_cols_lower[normalized]}'")
+                    safe_columns = list(dict.fromkeys(safe_columns))  # dedupe preserving order
                 if not safe_columns:
                     logger.warning(f"Chart '{comp.get('title')}' has no valid columns. Skipping hydration.")
                     comp["chart_data"] = {"data": [], "layout": {}}
                     hydrated.append(comp)
                     continue
+
+                # Pre-check: some chart types need at least 2 columns
+                chart_type_str = cfg.get("chart_type", "bar")
+                # pie with 1 col = categorical distribution; histogram with 1 col = fine
+                min_2_types = {"bar", "line", "scatter", "grouped_bar", "area", "waterfall", "funnel", "box_plot", "box", "violin", "bubble", "heatmap"}
+                if chart_type_str in min_2_types and len(safe_columns) < 2:
+                    # Try to auto-add a complementary column before giving up
+                    if len(safe_columns) == 1:
+                        existing = safe_columns[0]
+                        is_numeric = df[existing].dtype in pl.NUMERIC_DTYPES
+                        if is_numeric:
+                            # Have numeric → need a categorical for x-axis
+                            cat_cols = [c for c in df.columns if df[c].dtype in {pl.Utf8, pl.Categorical, pl.Boolean} and c != existing and "id" not in c.lower()]
+                            if cat_cols:
+                                safe_columns = [cat_cols[0], existing]
+                                logger.info(f"Auto-added categorical '{cat_cols[0]}' for chart '{comp.get('title')}'")
+                        else:
+                            # Have categorical → need a numeric for y-axis
+                            num_cols = [c for c in df.columns if df[c].dtype in pl.NUMERIC_DTYPES and c != existing and "id" not in c.lower()]
+                            if num_cols:
+                                safe_columns = [existing, num_cols[0]]
+                                logger.info(f"Auto-added numeric '{num_cols[0]}' for chart '{comp.get('title')}'")
+                    if len(safe_columns) < 2:
+                        logger.warning(f"Chart '{comp.get('title')}' needs ≥2 columns for {chart_type_str}, only has {safe_columns}. Skipping.")
+                        comp["chart_data"] = {"data": [], "layout": {}}
+                        hydrated.append(comp)
+                        continue
 
                 chart_cfg = ChartConfig(
                     title=cfg.get("title", comp.get("title", "Chart")),
@@ -124,6 +172,98 @@ async def _hydrate_blueprint(blueprint: Dict[str, Any], dataset_id: str, user_id
 
 
 # --- AI-Powered Dashboard and Story Generation ---
+
+
+# ---------------------------------------------------------
+# Per-chart re-hydration endpoint
+# ---------------------------------------------------------
+@router.post("/{dataset_id}/retry-chart")
+async def retry_single_chart(
+    dataset_id: str,
+    request: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Re-hydrate a single chart component without regenerating the entire dashboard.
+    Accepts the chart's component config and returns fresh chart_data (Plotly traces).
+    """
+    try:
+        user_id = current_user["id"]
+        component = request.get("component", {})
+        cfg = component.get("config", {})
+
+        if not cfg:
+            raise HTTPException(status_code=400, detail="Missing chart config in request body.")
+
+        # Load the dataset
+        db = get_database()
+        try:
+            dataset_oid = ObjectId(dataset_id)
+        except Exception:
+            dataset_oid = dataset_id
+        dataset_doc = await db.datasets.find_one({"_id": dataset_oid, "user_id": user_id})
+        if not dataset_doc or not dataset_doc.get("file_path"):
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+
+        df = await load_dataset(dataset_doc["file_path"])
+
+        # Same hydration logic as _hydrate_blueprint but for a single chart
+        columns = cfg.get("columns", [])
+        if isinstance(columns, str):
+            columns = [columns]
+        safe_columns = [c for c in columns if c in df.columns]
+
+        chart_type_str = cfg.get("chart_type", "bar")
+
+        # Auto-add complementary column if only 1 is provided
+        min_2_types = {"bar", "line", "scatter", "grouped_bar", "area", "waterfall", "funnel", "box_plot", "violin", "bubble"}
+        if chart_type_str in min_2_types and len(safe_columns) < 2:
+            if len(safe_columns) == 1:
+                existing = safe_columns[0]
+                is_numeric = df[existing].dtype in pl.NUMERIC_DTYPES
+                if is_numeric:
+                    cat_cols = [c for c in df.columns if df[c].dtype in {pl.Utf8, pl.Categorical, pl.Boolean} and c != existing and "id" not in c.lower()]
+                    if cat_cols:
+                        safe_columns = [cat_cols[0], existing]
+                else:
+                    num_cols = [c for c in df.columns if df[c].dtype in pl.NUMERIC_DTYPES and c != existing and "id" not in c.lower()]
+                    if num_cols:
+                        safe_columns = [existing, num_cols[0]]
+
+        # Chart types that can work with fewer than 2 columns:
+        # pie/donut: 1 col → value_counts, heatmap: falls back to correlation, histogram: 1 col
+        flexible_types = {"pie", "pie_chart", "donut", "histogram", "heatmap", "treemap"}
+        if chart_type_str not in flexible_types and len(safe_columns) < 2:
+            raise HTTPException(status_code=400, detail=f"Chart type '{chart_type_str}' needs at least 2 valid columns, but only found: {safe_columns}")
+
+        if not safe_columns:
+            raise HTTPException(status_code=400, detail="No valid columns found in the dataset for this chart.")
+
+        chart_cfg = ChartConfig(
+            title=cfg.get("title", component.get("title", "Chart")),
+            span=component.get("span", 2),
+            chart_type=chart_type_str,
+            columns=safe_columns,
+            aggregation=cfg.get("aggregation", "sum"),
+            group_by=cfg.get("group_by"),
+        )
+        traces, rows_used = hydrate_chart(df, chart_cfg)
+
+        return {
+            "success": True,
+            "chart_data": {
+                "data": traces,
+                "layout": {"title": component.get("title", "Chart")},
+                "rows_used": rows_used,
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Retry chart failed for dataset {dataset_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to re-hydrate chart: {str(e)}")
+
 
 @router.post("/{dataset_id}/generate-dashboard")
 async def generate_ai_dashboard(

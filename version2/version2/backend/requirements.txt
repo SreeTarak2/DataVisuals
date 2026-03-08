@@ -1,0 +1,55 @@
+# ── Web framework & server ──
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+
+# ── Auth ──
+bcrypt
+passlib
+python-jose[cryptography]
+email-validator
+
+# ── Database ──
+motor
+pymongo
+
+# ── Async / HTTP ──
+aiofiles
+httpx
+
+# ── Task queue ──
+celery
+redis
+watchdog[watchmedo]
+
+# ── Data processing ──
+numpy
+pandas
+polars
+fastexcel
+scipy
+scikit-learn
+duckdb
+
+# ── AI / Embeddings ──
+# NOTE: Install torch + sentence-transformers separately using transformers_install.txt:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+#   pip install sentence-transformers --no-cache-dir
+langchain-huggingface
+langgraph
+chromadb
+faiss-cpu
+
+# ── Rate limiting ──
+slowapi
+
+# ── File handling ──
+python-magic
+
+# ── Resilience & Retry ──
+tenacity
+
+# ── Misc ──
+requests
+websockets

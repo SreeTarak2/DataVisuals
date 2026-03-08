@@ -2,11 +2,12 @@
  * KPI Calculation Utilities
  * 
  * Functions for calculating, formatting, and enriching KPI values from dataset.
- * Generates sparkline data, comparison deltas, format hints, and icon mappings.
+ * Prefers backend-computed values (from full dataset). Falls back to client-side
+ * computation only when backend values are missing.
  */
 
 /**
- * Calculate aggregation on numeric values
+ * Calculate aggregation on numeric values (client-side fallback only)
  */
 export const calculateAggregation = (values, aggregationType) => {
     const agg = aggregationType.toLowerCase();
@@ -46,7 +47,7 @@ export const formatKpiValue = (value) => {
 };
 
 /**
- * Detect format type from column name heuristics
+ * Detect format type from column name heuristics (fallback)
  */
 const detectFormat = (columnName = '', aggregation = '') => {
     const col = columnName.toLowerCase();
@@ -57,7 +58,7 @@ const detectFormat = (columnName = '', aggregation = '') => {
 };
 
 /**
- * Map column name keywords to lucide icon names
+ * Map column name keywords to lucide icon names (fallback)
  */
 const detectIcon = (columnName = '', aggregation = '') => {
     const col = columnName.toLowerCase();
@@ -76,8 +77,7 @@ const detectIcon = (columnName = '', aggregation = '') => {
 };
 
 /**
- * Generate sparkline data by bucketing dataset values into ~20 bins
- * Creates a mini trend line from the raw column data
+ * Generate sparkline data by bucketing (client-side fallback only)
  */
 const generateSparklineData = (datasetData, columnName) => {
     if (!Array.isArray(datasetData) || datasetData.length < 5 || !columnName) return [];
@@ -88,8 +88,7 @@ const generateSparklineData = (datasetData, columnName) => {
 
     if (values.length < 5) return [];
 
-    // Bucket into ~20 points for a smooth sparkline
-    const bucketCount = Math.min(20, values.length);
+    const bucketCount = Math.min(16, values.length);
     const bucketSize = Math.floor(values.length / bucketCount);
     const sparkline = [];
 
@@ -105,36 +104,9 @@ const generateSparklineData = (datasetData, columnName) => {
 };
 
 /**
- * Calculate a simple comparison value by comparing first-half vs second-half averages
- */
-const generateComparisonValue = (datasetData, columnName, aggregation) => {
-    if (!Array.isArray(datasetData) || datasetData.length < 6 || !columnName) return null;
-
-    const values = datasetData
-        .map(row => Number(row[columnName]))
-        .filter(n => !isNaN(n));
-
-    if (values.length < 6) return null;
-
-    const mid = Math.floor(values.length / 2);
-    const firstHalf = values.slice(0, mid);
-    const secondHalf = values.slice(mid);
-
-    const agg = (aggregation || 'mean').toLowerCase();
-
-    if (agg === 'sum') {
-        return firstHalf.reduce((a, b) => a + b, 0);
-    }
-    if (agg === 'count') {
-        return firstHalf.length;
-    }
-
-    // Default: mean of first half as "previous period"
-    return firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
-};
-
-/**
- * Hydrate a KPI component with real data values, sparkline, and comparison
+ * Hydrate a KPI component.
+ * Prefers backend-computed fields (sparkline_data, comparison_value, format, etc.)
+ * Falls back to client-side computation only when backend didn't provide them.
  */
 export const hydrateKpiComponent = (component, datasetData) => {
     try {
@@ -143,8 +115,6 @@ export const hydrateKpiComponent = (component, datasetData) => {
         }
 
         const config = component.config || {};
-
-        // Find column name
         const column =
             config.column ||
             (config.columns && config.columns[0]) ||
@@ -158,34 +128,49 @@ export const hydrateKpiComponent = (component, datasetData) => {
             'sum'
         ).toString().toLowerCase();
 
-        let value = component.value ?? 'N/A';
-
-        if (column && Array.isArray(datasetData) && datasetData.length > 0) {
+        // --- Value: prefer backend, fallback to client-side ---
+        let value = component.value;
+        if ((value === undefined || value === null || value === 'N/A') &&
+            column && Array.isArray(datasetData) && datasetData.length > 0) {
             const raw = datasetData
                 .map(r => r[column])
                 .filter(v => v !== null && v !== undefined && v !== '');
-
-            if (raw.length > 0) {
-                value = calculateAggregation(raw, aggregation);
-            } else {
-                value = 0;
-            }
+            value = raw.length > 0 ? calculateAggregation(raw, aggregation) : 0;
         }
 
-        // Enrichment: sparkline, comparison, format, icon
-        const sparklineData = generateSparklineData(datasetData, column);
-        const comparisonValue = generateComparisonValue(datasetData, column, aggregation);
-        const format = config.format || detectFormat(column, aggregation);
+        // --- Sparkline: prefer backend, fallback to client-side ---
+        const sparklineData = (component.sparkline_data && component.sparkline_data.length > 0)
+            ? component.sparkline_data
+            : generateSparklineData(datasetData, column);
+
+        // --- Comparison: prefer backend, fallback not computed (it's misleading) ---
+        const comparisonValue = component.comparison_value ?? null;
+        const comparisonLabel = component.comparison_label || null;
+        const deltaPercent = component.delta_percent ?? null;
+
+        // --- Format & Icon: prefer backend, fallback to heuristic ---
+        const format = component.format || config.format || detectFormat(column, aggregation);
         const icon = config.icon || detectIcon(column, aggregation);
+
+        // --- Extra enrichment from backend ---
+        const topValues = component.top_values || null;
+        const recordCount = component.record_count ?? null;
+        const minValue = component.min_value ?? null;
+        const maxValue = component.max_value ?? null;
 
         return {
             ...component,
             value,
             sparklineData,
             comparisonValue,
+            comparisonLabel,
+            deltaPercent,
             format,
             icon,
-            comparisonLabel: 'vs prior half'
+            topValues,
+            recordCount,
+            minValue,
+            maxValue,
         };
     } catch (e) {
         console.warn('hydrateKpiComponent failed', e);

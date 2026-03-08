@@ -16,92 +16,85 @@ import logging
 from typing import Dict, Any, List, Optional, Union
 from enum import Enum
 from pydantic import BaseModel, Field, ValidationError
+from core.prompt_templates import SYSTEM_JSON_RULES, PERSONA, RULES
 
 logger = logging.getLogger(__name__)
 
 
 # ==============================
-# Response Schemas
+# Enums & Models
 # ==============================
 
-class ConversationalResponse(BaseModel):
-    response_text: str = Field(..., min_length=1, max_length=5000)
-    chart_config: Optional[Dict[str, Any]] = None
-    confidence: str = Field("High", pattern="^(High|Medium|Low)$")
+class PromptType(Enum):
+    KPI_GENERATOR = "KPI_GENERATOR"
+    CONVERSATIONAL = "CONVERSATIONAL"
+    DASHBOARD_DESIGNER = "DASHBOARD_DESIGNER"
+    AI_DESIGNER = "AI_DESIGNER"
+    INSIGHT_SUMMARY = "INSIGHT_SUMMARY"
+    FORECASTING = "FORECASTING"
+    ERROR_RECOVERY = "ERROR_RECOVERY"
+    FOLLOW_UP = "FOLLOW_UP"
+    CHART_RECOMMENDATION = "CHART_RECOMMENDATION"
+    QUIS_ANSWER = "QUIS_ANSWER"
 
+class KPIItem(BaseModel):
+    title: str
+    aggregation: str
+    column: str
+    secondary_column: Optional[str] = None
+    format: str
+    importance: str
+    context: str
+
+class KPIGeneratorResponse(BaseModel):
+    archetype: str
+    confidence: str
+    kpis: List[KPIItem]
+
+class ConversationalResponse(BaseModel):
+    response: str
 
 class DashboardDesignerResponse(BaseModel):
     dashboard: Dict[str, Any]
-    reasoning: Optional[str] = Field(default="", max_length=1000)
+    reasoning: str
 
+class InsightItem(BaseModel):
+    title: str
+    explanation: str
+    impact: str
+    action: str
 
 class InsightSummaryResponse(BaseModel):
-    insights: List[Dict[str, Any]] = Field(..., min_items=1, max_items=10)
-    summary: str = Field(..., max_length=2000)
-
+    insights: List[InsightItem]
+    summary: str
 
 class ForecastResponse(BaseModel):
     forecast: Dict[str, Any]
-    assumptions: List[str] = Field(default_factory=list, max_length=5)
-    limitations: List[str] = Field(default_factory=list, max_length=5)
-
+    assumptions: List[str]
+    limitations: List[str]
 
 class ErrorRecoveryResponse(BaseModel):
-    response_text: str = Field(..., min_length=1, max_length=2000)
-    suggestions: List[str] = Field(..., min_items=1, max_items=5)
-    default_action: str = Field(..., max_length=500)
+    response_text: str
+    suggestions: List[str]
+    default_action: str
 
+class FollowUpItem(BaseModel):
+    action: str
+    reason: str
+    priority: str
 
 class FollowUpResponse(BaseModel):
-    next_steps: List[Dict[str, str]] = Field(..., min_items=1, max_items=5)
-
-
-class KPIGeneratorResponse(BaseModel):
-    archetype: str = Field(..., max_length=50)
-    confidence: str = Field(..., pattern="^(High|Medium|Low)$")
-    kpis: List[Dict[str, Any]] = Field(..., min_items=6, max_items=8)
-
-
-# ==============================
-# Prompt Types
-# ==============================
-
-class PromptType(str, Enum):
-    CONVERSATIONAL = "conversational"
-    DASHBOARD_DESIGNER = "dashboard_designer"
-    AI_DESIGNER = "ai_designer"
-    INSIGHT_SUMMARY = "insight_summary"
-    FORECASTING = "forecasting"
-    ERROR_RECOVERY = "error_recovery"
-    FOLLOW_UP = "follow_up"
-    CHART_RECOMMENDATION = "chart_recommendation"
-    QUIS_ANSWER = "quis_answer"
-    KPI_GENERATOR = "kpi_generator"
-
-
-# ==============================
-# Schemas Mapping (Single Source of Truth)
-# ==============================
+    next_steps: List[FollowUpItem]
 
 PROMPT_SCHEMAS = {
-    PromptType.CONVERSATIONAL: ConversationalResponse,
+    PromptType.KPI_GENERATOR: KPIGeneratorResponse,
     PromptType.DASHBOARD_DESIGNER: DashboardDesignerResponse,
     PromptType.AI_DESIGNER: DashboardDesignerResponse,
     PromptType.INSIGHT_SUMMARY: InsightSummaryResponse,
     PromptType.FORECASTING: ForecastResponse,
     PromptType.ERROR_RECOVERY: ErrorRecoveryResponse,
-    PromptType.FOLLOW_UP: FollowUpResponse,
-    PromptType.KPI_GENERATOR: KPIGeneratorResponse,
+    PromptType.FOLLOW_UP: FollowUpResponse
 }
-
-
-# ==============================
-# Constants
-# ==============================
-
-SYSTEM_JSON_RULES = "OUTPUT: Valid JSON only. No code fences. No explanations outside JSON."
-PERSONA = "ROLE: You are a senior data analyst at McKinsey in 2025. Concise, factual, executive-ready."
-RULES = "RULES: Use ONLY exact column names from context. Never invent columns."
 
 
 # ==============================
@@ -189,11 +182,20 @@ class PromptFactory:
         if not message:
             return False
         msg = message.lower()
+        # Long/complex queries always get rich context
+        if len(msg.split()) > 50:
+            return True
         triggers = [
             "total", "sum", "average", "mean", "count", "per", "by ", "group by",
             "revenue", "sales", "profit", "conversion", "rate", "ratio",
             "compare", "vs ", "versus", "growth", "change", "trend",
-            "top ", "bottom ", "highest", "lowest", "kpi", "dashboard"
+            "top ", "bottom ", "highest", "lowest", "kpi", "dashboard",
+            # Analytical / statistical triggers
+            "correlation", "correlat", "relationship", "pattern", "distribution",
+            "outlier", "anomal", "explain", "analyze", "analysis", "insight",
+            "forecast", "predict", "cluster", "segment", "causal", "driven",
+            "regression", "significance", "variance", "deviation", "percentile",
+            "median", "skew", "between",
         ]
         return any(t in msg for t in triggers)
 
@@ -249,9 +251,18 @@ class PromptFactory:
             # Don't include JSON rules - the LLM router adds the conversational system prompt
             # Include recent conversation history so the LLM has memory of the conversation
             history = kwargs.get("history", [])
+            memories = kwargs.get("memories", [])
             history_block = self._format_conversation_history(history)
             
             prompt_parts = [conversational_base]
+            
+            # Inject long-term memories (Mem0-inspired) before conversation history
+            if memories:
+                memories_text = "\n".join(f"• {m}" for m in memories[:5])
+                prompt_parts.append(
+                    f"RELEVANT MEMORIES (key facts from past analysis of this dataset):\n{memories_text}"
+                )
+            
             if history_block:
                 prompt_parts.append(f"CONVERSATION HISTORY (for context, do NOT repeat these):\n{history_block}")
             prompt_parts.append(f"USER QUESTION: {user_message}")

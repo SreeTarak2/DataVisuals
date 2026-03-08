@@ -1,64 +1,86 @@
-import React, { useState } from 'react';
-import { Outlet } from 'react-router-dom';
-import { Bot, X, Sparkles } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
+import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import ChatPanel from '../features/chat/ChatPanel';
 import { cn } from '../../lib/utils';
+import { AiBotIcon } from '../svg/icons';
 
+
+const SHOW_FAB_ROUTES = ['/app/dashboard', '/app/datasets', '/app/charts', '/app/insights'];
 const DashboardLayout = () => {
+  const location = useLocation();
   const [chatOpen, setChatOpen] = useState(false);
+  const [chartContext, setChartContext] = useState(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      setChartContext(e.detail || null);
+      setChatOpen(true);
+    };
+    window.addEventListener('open-chat-with-context', handler);
+    return () => window.removeEventListener('open-chat-with-context', handler);
+  }, []);
+
+  const handleCloseChat = useCallback(() => {
+    setChatOpen(false);
+    setChartContext(null);
+  }, []);
+
+  const handleClearChartContext = useCallback(() => setChartContext(null), []);
+
+  const showFab = SHOW_FAB_ROUTES.some((r) => location.pathname.startsWith(r));
+  const showButton = showFab && !chatOpen;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 dark:from-slate-900 dark:via-blue-900 dark:to-slate-900">
-      {/* Icon Rail Sidebar */}
+    <div className="flex h-screen overflow-hidden bg-[var(--page-bg)]">
+      {/* Sidebar — self-manages width */}
       <Sidebar />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         <Header />
 
         <div className="flex-1 flex overflow-hidden relative">
           <main className="flex-1 overflow-y-auto p-0 relative">
             <Outlet />
           </main>
+
+          {/* ═══ Slide-in Chat Panel ═══ */}
+          <ChatPanel
+            isOpen={chatOpen}
+            onClose={handleCloseChat}
+            chartContext={chartContext}
+            onClearChartContext={handleClearChartContext}
+          />
         </div>
       </div>
 
-      {/* ── AI Chat Panel (fixed overlay) ── */}
-      <ChatPanel
-        isOpen={chatOpen}
-        onClose={() => setChatOpen(false)}
-      />
-
-      {/* ── Floating AI Chat FAB ── */}
+      {/* ═══ Floating AI Chat Button ═══ */}
       <AnimatePresence>
-        {!chatOpen && (
+        {showButton && (
           <motion.button
+            key="chat-fab"
             initial={{ scale: 0, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0, opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-            whileHover={{ scale: 1.08 }}
-            whileTap={{ scale: 0.92 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 25 }}
             onClick={() => setChatOpen(true)}
             className={cn(
-              "fixed bottom-6 right-6 z-[60]",
-              "w-14 h-14 rounded-full",
-              "bg-gradient-to-br from-indigo-500 to-purple-600",
-              "text-white shadow-lg shadow-indigo-500/30",
+              "fixed bottom-6 right-6 z-50",
+              "w-13 h-13 rounded-full",
+              "bg-ocean hover:bg-ocean/90 shadow-lg shadow-ocean/25",
               "flex items-center justify-center",
-              "border border-indigo-400/30",
-              "hover:shadow-xl hover:shadow-indigo-500/40",
-              "transition-shadow duration-200",
-              "cursor-pointer"
+              "text-white cursor-pointer",
+              "transition-colors duration-150",
+              "hover:shadow-xl hover:shadow-ocean/30",
+              "active:scale-95"
             )}
-            title="Open AI Assistant"
+            title="Ask AI"
           >
-            <Sparkles className="w-6 h-6" />
-            {/* Online pulse */}
-            <span className="absolute top-0 right-0 w-3 h-3 bg-green-400 rounded-full border-2 border-[#0f172a] shadow-[0_0_6px_#22c55e]" />
+            <AiBotIcon className="w-15 h-15" />
           </motion.button>
         )}
       </AnimatePresence>

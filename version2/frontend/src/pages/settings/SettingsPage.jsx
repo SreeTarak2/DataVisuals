@@ -1,23 +1,31 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
+  BadgeCheck,
   BellRing,
-  CheckCircle2,
+  BrainCircuit,
+  CalendarClock,
+  Clock,
   Database,
   Download,
   Eye,
   EyeOff,
+  Fingerprint,
+  HardDrive,
   KeyRound,
   Laptop,
   LogOut,
-  Mail,
-  MonitorCog,
+  MailCheck,
   Moon,
-  Palette,
-  RefreshCcw,
+  RotateCcw,
   Save,
+  Shield,
   ShieldCheck,
+  SlidersHorizontal,
   Sun,
+  Trash2,
+  User,
   UserCog,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -28,128 +36,132 @@ import useDatasetStore from "../../store/datasetStore";
 import useChatStore from "../../store/chatStore";
 import useChatHistoryStore from "../../store/chatHistoryStore";
 import { cn } from "../../lib/utils";
+import { agenticAPI } from "../../services/api";
 
+/* ─── Constants ─── */
 const SETTINGS_PREFS_KEY = "datasage-settings-preferences";
-
-const MotionSection = motion.section;
-const MotionDiv = motion.div;
-const MotionButton = motion.button;
 
 const TAB_ITEMS = [
   { id: "account", label: "Account", icon: UserCog },
-  { id: "security", label: "Security", icon: ShieldCheck },
+  { id: "security", label: "Password", icon: ShieldCheck },
   { id: "notifications", label: "Notifications", icon: BellRing },
-  { id: "workspace", label: "Workspace", icon: Palette },
+  { id: "workspace", label: "Appearance", icon: SlidersHorizontal },
   { id: "data", label: "Data & Session", icon: Database },
+  { id: "ai-memory", label: "AI Memory", icon: BrainCircuit },
 ];
 
+/* ─── Motion ─── */
+const fadeSlide = {
+  hidden: { opacity: 0, y: 12 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.25, ease: "easeOut" } },
+  exit: { opacity: 0, y: -8, transition: { duration: 0.14 } },
+};
+
+/* ─── Preference helpers ─── */
 const buildDefaultPreferences = (theme = "dark") => ({
-  notifications: {
-    productAnnouncements: true,
-    aiInsightReady: true,
-    securityAlerts: true,
-  },
-  workspace: {
-    theme,
-    language: "en",
-    autoRefreshDatasets: true,
-    compactDensity: false,
-    reduceAnimations: false,
-  },
+  notifications: { productAnnouncements: true, aiInsightReady: true, securityAlerts: true },
+  workspace: { theme, language: "en", autoRefreshDatasets: true, compactDensity: false, reduceAnimations: false },
 });
 
 const normalizePreferences = (raw, fallbackTheme = "dark") => {
-  const defaults = buildDefaultPreferences(fallbackTheme);
-  if (!raw || typeof raw !== "object") return defaults;
+  const d = buildDefaultPreferences(fallbackTheme);
+  if (!raw || typeof raw !== "object") return d;
   return {
-    notifications: {
-      ...defaults.notifications,
-      ...(raw.notifications || {}),
-    },
-    workspace: {
-      ...defaults.workspace,
-      ...(raw.workspace || {}),
-    },
+    notifications: { ...d.notifications, ...(raw.notifications || {}) },
+    workspace: { ...d.workspace, ...(raw.workspace || {}) },
   };
 };
 
 const readStoredPreferences = (fallbackTheme = "dark") => {
-  if (typeof window === "undefined") {
-    return buildDefaultPreferences(fallbackTheme);
-  }
+  if (typeof window === "undefined") return buildDefaultPreferences(fallbackTheme);
   try {
     const raw = window.localStorage.getItem(SETTINGS_PREFS_KEY);
     if (!raw) return buildDefaultPreferences(fallbackTheme);
     return normalizePreferences(JSON.parse(raw), fallbackTheme);
-  } catch (error) {
-    console.warn("Failed to read settings preferences:", error);
-    return buildDefaultPreferences(fallbackTheme);
-  }
+  } catch { return buildDefaultPreferences(fallbackTheme); }
 };
 
-const persistPreferences = (preferences) => {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(SETTINGS_PREFS_KEY, JSON.stringify(preferences));
+const persistPreferences = (prefs) => {
+  if (typeof window !== "undefined") window.localStorage.setItem(SETTINGS_PREFS_KEY, JSON.stringify(prefs));
 };
 
 const formatDate = (value) => {
-  if (!value) return "Unknown";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unknown";
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  if (!value) return "\u2014";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "\u2014";
+  return d.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 };
 
-const getDisplayName = (user) => user?.username || user?.full_name || "User";
+const getDisplayName = (u) => u?.username || u?.full_name || "User";
 
-const ToggleRow = ({ title, description, checked, onChange }) => (
-  <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-black/25 px-4 py-3">
-    <div className="min-w-0">
-      <p className="text-sm font-medium text-slate-100">{title}</p>
-      <p className="text-xs text-slate-400">{description}</p>
+/* ─── Primitives ─── */
+const inputCls =
+  "h-12 w-full rounded-xl border border-white/[0.08] bg-noir/60 px-4 text-[15px] text-pearl/90 placeholder:text-granite/60 outline-none transition-all focus:border-pearl/25 focus:ring-2 focus:ring-pearl/10";
+
+const Toggle = ({ checked, onChange }) => (
+  <button type="button" role="switch" aria-checked={checked} onClick={onChange}
+    className={cn("relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors duration-200",
+      checked ? "border-pearl/30 bg-pearl/80" : "border-white/[0.1] bg-avocado/80")}>
+    <span className={cn("pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200",
+      checked ? "translate-x-[24px]" : "translate-x-[3px]")} />
+  </button>
+);
+
+/* ─── Horizontal form row (label left, content right) — stacks on mobile ─── */
+const FormRow = ({ label, description, children, noBorder }) => (
+  <div className={cn("flex flex-col sm:flex-row sm:items-start gap-1.5 sm:gap-8 py-5", !noBorder && "border-b border-white/[0.05]")}>
+    <div className="sm:w-[280px] shrink-0">
+      <p className="text-[15px] font-medium text-pearl">{label}</p>
+      {description && <p className="mt-1 text-sm text-granite/90 leading-relaxed">{description}</p>}
     </div>
-    <button
-      type="button"
-      onClick={onChange}
-      className={cn(
-        "relative inline-flex h-6 w-11 items-center rounded-full border transition-colors",
-        checked
-          ? "border-[#cad2fd]/40 bg-[#cad2fd]"
-          : "border-slate-500/30 bg-slate-700/70"
-      )}
-      aria-pressed={checked}
-    >
-      <span
-        className={cn(
-          "inline-block h-5 w-5 transform rounded-full bg-white transition-transform",
-          checked ? "translate-x-5" : "translate-x-0.5"
-        )}
-      />
-    </button>
+    <div className="flex-1 mt-2 sm:mt-0">{children}</div>
   </div>
 );
 
+/* ─── Toggle Row in horizontal layout ─── */
+const ToggleFormRow = ({ label, description, checked, onChange }) => (
+  <FormRow label={label} description={description}>
+    <div className="flex sm:justify-end">
+      <Toggle checked={checked} onChange={onChange} />
+    </div>
+  </FormRow>
+);
+
+/* ─── Action footer bar (Cancel + Save) ─── */
+const ActionFooter = ({ onSave, saving, disabled, saveLabel = "Save changes", saveClassName }) => (
+  <div className="flex items-center justify-end gap-3 pt-5 border-t border-white/[0.05] mt-2">
+    <motion.button whileTap={{ scale: 0.97 }}
+      className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-6 py-2.5 text-[15px] font-medium text-pearl/70 transition-all hover:bg-white/[0.06] hover:text-pearl">
+      Cancel
+    </motion.button>
+    <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.97 }} onClick={onSave} disabled={disabled}
+      className={cn("inline-flex items-center gap-2 rounded-xl bg-pearl px-6 py-2.5 text-[15px] font-semibold text-noir transition-colors hover:bg-pearl/85 disabled:cursor-not-allowed disabled:opacity-50", saveClassName)}>
+      <Save className="h-[18px] w-[18px]" />
+      {saving ? "Saving\u2026" : saveLabel}
+    </motion.button>
+  </div>
+);
+
+/* ═══════════════════════════════════════════════ */
+/*                  MAIN COMPONENT                 */
+/* ═══════════════════════════════════════════════ */
 const SettingsPage = () => {
   const { user, updateProfile, changePassword, logout } = useAuth();
-  const theme = useThemeStore((state) => state.theme);
-  const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
-  const setTheme = useThemeStore((state) => state.setTheme);
+  const theme = useThemeStore((s) => s.theme);
+  const resolvedTheme = useThemeStore((s) => s.resolvedTheme);
+  const setTheme = useThemeStore((s) => s.setTheme);
 
-  const datasets = useDatasetStore((state) => state.datasets);
-  const fetchDatasets = useDatasetStore((state) => state.fetchDatasets);
-  const setDatasets = useDatasetStore((state) => state.setDatasets);
-  const setSelectedDataset = useDatasetStore((state) => state.setSelectedDataset);
+  const datasets = useDatasetStore((s) => s.datasets);
+  const fetchDatasets = useDatasetStore((s) => s.fetchDatasets);
+  const setDatasets = useDatasetStore((s) => s.setDatasets);
+  const setSelectedDataset = useDatasetStore((s) => s.setSelectedDataset);
 
-  const clearAllConversations = useChatStore(
-    (state) => state.clearAllConversations
-  );
-  const clearAllChats = useChatHistoryStore((state) => state.clearAllChats);
+  const clearAllConversations = useChatStore((s) => s.clearAllConversations);
+  const clearAllChats = useChatHistoryStore((s) => s.clearAllChats);
 
+  const tabsRef = useRef(null);
+
+  /* ── State ── */
   const [activeTab, setActiveTab] = useState("account");
   const [savingProfile, setSavingProfile] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
@@ -157,688 +169,542 @@ const SettingsPage = () => {
   const [clearingLocalData, setClearingLocalData] = useState(false);
   const [prefsDirty, setPrefsDirty] = useState(false);
 
-  const [profileForm, setProfileForm] = useState({
-    username: getDisplayName(user),
-    email: user?.email || "",
-  });
+  /* ── Belief Store (AI Memory) state ── */
+  const [beliefs, setBeliefs] = useState([]);
+  const [beliefsCount, setBeliefsCount] = useState(0);
+  const [loadingBeliefs, setLoadingBeliefs] = useState(false);
+  const [clearingBeliefs, setClearingBeliefs] = useState(false);
+  const [deletingBeliefId, setDeletingBeliefId] = useState(null);
 
-  const [passwordForm, setPasswordForm] = useState({
-    currentPassword: "",
-    newPassword: "",
-    confirmPassword: "",
-  });
+  const [profileForm, setProfileForm] = useState({ username: getDisplayName(user), email: user?.email || "" });
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [showPassword, setShowPassword] = useState({ current: false, next: false, confirm: false });
+  const [preferences, setPreferences] = useState(() => readStoredPreferences(theme));
 
-  const [showPassword, setShowPassword] = useState({
-    current: false,
-    next: false,
-    confirm: false,
-  });
+  useEffect(() => { setProfileForm({ username: getDisplayName(user), email: user?.email || "" }); }, [user]);
 
-  const [preferences, setPreferences] = useState(() =>
-    readStoredPreferences(theme)
-  );
-
+  /* ── Fetch beliefs when AI Memory tab is active ── */
   useEffect(() => {
-    setProfileForm({
-      username: getDisplayName(user),
-      email: user?.email || "",
-    });
-  }, [user]);
-
+    if (activeTab !== "ai-memory") return;
+    let cancelled = false;
+    const fetchBeliefs = async () => {
+      setLoadingBeliefs(true);
+      try {
+        const res = await agenticAPI.listBeliefs(100);
+        if (!cancelled) {
+          setBeliefs(res.data?.beliefs || []);
+          setBeliefsCount(res.data?.total_count || 0);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to fetch beliefs:", err);
+          setBeliefs([]);
+          setBeliefsCount(0);
+        }
+      } finally {
+        if (!cancelled) setLoadingBeliefs(false);
+      }
+    };
+    fetchBeliefs();
+    return () => { cancelled = true; };
+  }, [activeTab]);
   useEffect(() => {
-    setPreferences((previous) => {
-      if (previous.workspace.theme === theme) return previous;
-      return {
-        ...previous,
-        workspace: {
-          ...previous.workspace,
-          theme,
-        },
-      };
-    });
+    setPreferences((p) => p.workspace.theme === theme ? p : { ...p, workspace: { ...p.workspace, theme } });
   }, [theme]);
 
   const datasetStats = useMemo(() => {
     const total = datasets.length;
-    const ready = datasets.filter((dataset) => {
-      const status = (dataset?.status || "").toLowerCase();
-      return dataset?.is_processed || status === "completed";
-    }).length;
+    const ready = datasets.filter((d) => d?.is_processed || (d?.status || "").toLowerCase() === "completed").length;
     return { total, ready };
   }, [datasets]);
 
+  /* ── Handlers ── */
   const handleSaveProfile = async () => {
     const username = profileForm.username.trim();
-    if (username.length < 2) {
-      toast.error("Username must be at least 2 characters.");
-      return;
-    }
-
+    if (username.length < 2) { toast.error("Username must be at least 2 characters."); return; }
     setSavingProfile(true);
-    const result = await updateProfile({ username });
+    const r = await updateProfile({ username });
     setSavingProfile(false);
-
-    if (!result.success) {
-      toast.error(result.error || "Unable to update profile.");
-      return;
-    }
+    if (!r.success) { toast.error(r.error || "Unable to update profile."); return; }
     toast.success("Profile updated.");
   };
 
   const handleChangePassword = async () => {
     const { currentPassword, newPassword, confirmPassword } = passwordForm;
-    if (!currentPassword || !newPassword || !confirmPassword) {
-      toast.error("Fill in all password fields.");
-      return;
-    }
-    if (newPassword.length < 6) {
-      toast.error("New password must be at least 6 characters.");
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      toast.error("New password and confirmation do not match.");
-      return;
-    }
-    if (newPassword === currentPassword) {
-      toast.error("New password must be different from current password.");
-      return;
-    }
-
+    if (!currentPassword || !newPassword || !confirmPassword) { toast.error("Fill in all password fields."); return; }
+    if (newPassword.length < 6) { toast.error("New password must be at least 6 characters."); return; }
+    if (newPassword !== confirmPassword) { toast.error("Passwords do not match."); return; }
+    if (newPassword === currentPassword) { toast.error("New password must differ from current."); return; }
     setChangingPassword(true);
-    const result = await changePassword(currentPassword, newPassword);
+    const r = await changePassword(currentPassword, newPassword);
     setChangingPassword(false);
-
-    if (!result.success) {
-      toast.error(result.error || "Failed to change password.");
-      return;
-    }
-
-    setPasswordForm({
-      currentPassword: "",
-      newPassword: "",
-      confirmPassword: "",
-    });
-    toast.success("Password changed successfully.");
+    if (!r.success) { toast.error(r.error || "Failed to change password."); return; }
+    setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    toast.success("Password changed.");
   };
 
-  const updatePreference = (section, key, value) => {
-    setPreferences((previous) => ({
-      ...previous,
-      [section]: {
-        ...previous[section],
-        [key]: value,
-      },
-    }));
+  const updatePref = (section, key, value) => {
+    setPreferences((p) => ({ ...p, [section]: { ...p[section], [key]: value } }));
     setPrefsDirty(true);
   };
 
-  const handleThemeSelection = (nextTheme) => {
-    updatePreference("workspace", "theme", nextTheme);
-    setTheme(nextTheme);
-  };
+  const handleTheme = (next) => { updatePref("workspace", "theme", next); setTheme(next); };
 
-  const handleSavePreferences = async () => {
+  const handleSavePrefs = async () => {
     setSavingPrefs(true);
     persistPreferences(preferences);
-    await new Promise((resolve) => setTimeout(resolve, 220));
+    await new Promise((r) => setTimeout(r, 200));
     setSavingPrefs(false);
     setPrefsDirty(false);
     toast.success("Preferences saved.");
   };
 
-  const handleExportWorkspace = () => {
+  const handleExport = () => {
     const snapshot = {
       exported_at: new Date().toISOString(),
-      account: {
-        id: user?.id,
-        username: getDisplayName(user),
-        email: user?.email,
-        created_at: user?.created_at,
-        last_login: user?.last_login,
-      },
+      account: { id: user?.id, username: getDisplayName(user), email: user?.email, created_at: user?.created_at, last_login: user?.last_login },
       preferences,
-      datasets: datasets.map((dataset) => ({
-        id: dataset?.id || dataset?._id,
-        name: dataset?.name || dataset?.filename || "Untitled Dataset",
-        row_count: dataset?.row_count || 0,
-        column_count: dataset?.column_count || 0,
-        status: dataset?.status || "unknown",
-        created_at: dataset?.created_at || dataset?.uploaded_at || null,
-      })),
+      datasets: datasets.map((d) => ({ id: d?.id || d?._id, name: d?.name || d?.filename || "Untitled", row_count: d?.row_count || 0, column_count: d?.column_count || 0, status: d?.status || "unknown", created_at: d?.created_at || d?.uploaded_at || null })),
     };
-
-    const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
-      type: "application/json",
-    });
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `datasage-workspace-${new Date()
-      .toISOString()
-      .slice(0, 10)}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    const a = Object.assign(document.createElement("a"), { href: url, download: `datasage-workspace-${new Date().toISOString().slice(0, 10)}.json` });
+    document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-
-    toast.success("Workspace snapshot exported.");
+    toast.success("Workspace exported.");
   };
 
-  const handleClearLocalData = async () => {
+  const handleClearLocal = async () => {
     setClearingLocalData(true);
-    clearAllConversations();
-    clearAllChats();
-    setDatasets([]);
-    setSelectedDataset(null);
-
-    localStorage.removeItem("dataset-storage");
-    localStorage.removeItem("datasage-chat-store");
-    localStorage.removeItem("chat-history-storage");
-    localStorage.removeItem(SETTINGS_PREFS_KEY);
-
-    sessionStorage.removeItem("dataset-storage");
-    sessionStorage.removeItem("datasage-chat-store");
-    sessionStorage.removeItem("chat-history-storage");
-
-    const defaults = buildDefaultPreferences(theme);
-    setPreferences(defaults);
-    persistPreferences(defaults);
-    setPrefsDirty(false);
-
+    clearAllConversations(); clearAllChats();
+    setDatasets([]); setSelectedDataset(null);
+    ["dataset-storage", "datasage-chat-store", "chat-history-storage", SETTINGS_PREFS_KEY].forEach((k) => { localStorage.removeItem(k); sessionStorage.removeItem(k); });
+    const d = buildDefaultPreferences(theme);
+    setPreferences(d); persistPreferences(d); setPrefsDirty(false);
     await fetchDatasets(true);
     setClearingLocalData(false);
-    toast.success("Local cache reset and datasets reloaded.");
+    toast.success("Local cache reset.");
   };
 
-  const sectionShell =
-    "rounded-2xl border border-white/10 bg-[#080d15]/88 p-5 shadow-[0_18px_50px_-36px_rgba(0,0,0,0.95)]";
+  /* ═══════════════════ TAB RENDERERS ═══════════════════ */
 
   const renderAccountTab = () => (
-    <div className="space-y-4">
-      <div className={sectionShell}>
-        <h3 className="text-lg font-semibold text-white">Account Profile</h3>
-        <p className="mt-1 text-sm text-slate-400">
-          Keep your account identity up to date.
-        </p>
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <label className="space-y-1.5">
-            <span className="text-xs uppercase tracking-wider text-slate-500">
-              Username
-            </span>
-            <input
-              value={profileForm.username}
-              onChange={(event) =>
-                setProfileForm((previous) => ({
-                  ...previous,
-                  username: event.target.value,
-                }))
-              }
-              className="h-11 w-full rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-slate-100 outline-none focus:border-[#cad2fd]/50 focus:ring-2 focus:ring-[#cad2fd]/20"
-            />
-          </label>
-          <label className="space-y-1.5">
-            <span className="text-xs uppercase tracking-wider text-slate-500">
-              Email
-            </span>
-            <input
-              value={profileForm.email}
-              disabled
-              className="h-11 w-full cursor-not-allowed rounded-xl border border-white/10 bg-black/20 px-3 text-sm text-slate-500"
-            />
-          </label>
-        </div>
-        <div className="mt-5">
-          <MotionButton
-            whileTap={{ scale: 0.98 }}
-            onClick={handleSaveProfile}
-            disabled={savingProfile}
-            className="inline-flex items-center gap-2 rounded-xl bg-[#cad2fd] px-4 py-2.5 text-sm font-semibold text-[#020203] transition hover:bg-[#d6dcff] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Save className="h-4 w-4" />
-            {savingProfile ? "Saving..." : "Save Profile"}
-          </MotionButton>
-        </div>
-      </div>
-
-      <div className={sectionShell}>
-        <h4 className="text-sm font-semibold text-slate-200">Account Metadata</h4>
-        <div className="mt-3 grid gap-3 md:grid-cols-3">
-          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3">
-            <p className="text-[11px] uppercase tracking-wider text-slate-500">
-              Member Since
-            </p>
-            <p className="mt-1 text-sm text-slate-100">{formatDate(user?.created_at)}</p>
-          </div>
-          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3">
-            <p className="text-[11px] uppercase tracking-wider text-slate-500">
-              Last Login
-            </p>
-            <p className="mt-1 text-sm text-slate-100">{formatDate(user?.last_login)}</p>
-          </div>
-          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3">
-            <p className="text-[11px] uppercase tracking-wider text-slate-500">
-              User ID
-            </p>
-            <p className="mt-1 truncate text-sm text-slate-100">{user?.id || "Unknown"}</p>
-          </div>
-        </div>
-      </div>
-    </div>
+    <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
+      <FormRow label="Username" description="This is your display name across DataSage.">
+        <input value={profileForm.username} onChange={(e) => setProfileForm((p) => ({ ...p, username: e.target.value }))}
+          className={cn(inputCls, "max-w-md")} placeholder="Enter your username" />
+      </FormRow>
+      <FormRow label="Email address" description="Your account email. Cannot be changed.">
+        <input value={profileForm.email} disabled className={cn(inputCls, "max-w-md cursor-not-allowed opacity-50")} />
+      </FormRow>
+      <FormRow label="Member since" description="When your account was created.">
+        <p className="text-[15px] text-pearl/80 pt-2.5">{formatDate(user?.created_at)}</p>
+      </FormRow>
+      <FormRow label="Last login" description="Your most recent sign-in." noBorder>
+        <p className="text-[15px] text-pearl/80 pt-2.5">{formatDate(user?.last_login)}</p>
+      </FormRow>
+      <ActionFooter onSave={handleSaveProfile} saving={savingProfile} saveLabel="Save profile" />
+    </motion.div>
   );
 
-  const passwordInputClass =
-    "h-11 w-full rounded-xl border border-white/10 bg-black/30 px-3 pr-10 text-sm text-slate-100 outline-none focus:border-[#cad2fd]/50 focus:ring-2 focus:ring-[#cad2fd]/20";
-
   const renderSecurityTab = () => (
-    <div className={sectionShell}>
-      <h3 className="text-lg font-semibold text-white">Password & Security</h3>
-      <p className="mt-1 text-sm text-slate-400">
-        Protect account access with a strong password.
-      </p>
-
-      <div className="mt-4 grid gap-4 md:grid-cols-2">
-        {[
-          {
-            key: "currentPassword",
-            label: "Current Password",
-            visibleKey: "current",
-            value: passwordForm.currentPassword,
-          },
-          {
-            key: "newPassword",
-            label: "New Password",
-            visibleKey: "next",
-            value: passwordForm.newPassword,
-          },
-          {
-            key: "confirmPassword",
-            label: "Confirm Password",
-            visibleKey: "confirm",
-            value: passwordForm.confirmPassword,
-          },
-        ].map((field) => (
-          <label key={field.key} className="space-y-1.5 md:col-span-2">
-            <span className="text-xs uppercase tracking-wider text-slate-500">
-              {field.label}
-            </span>
+    <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
+      <div className="mb-2">
+        <h3 className="text-lg font-semibold text-pearl">Password</h3>
+        <p className="text-sm text-granite/90 mt-1">Please enter your current password to change your password.</p>
+      </div>
+      {[
+        { key: "currentPassword", label: "Current password", vis: "current", value: passwordForm.currentPassword, hint: null },
+        { key: "newPassword", label: "New password", vis: "next", value: passwordForm.newPassword, hint: "Your new password must be at least 6 characters." },
+        { key: "confirmPassword", label: "Confirm new password", vis: "confirm", value: passwordForm.confirmPassword, hint: null },
+      ].map((f, i, arr) => (
+        <FormRow key={f.key} label={f.label} noBorder={i === arr.length - 1}>
+          <div className="max-w-md">
             <div className="relative">
-              <input
-                type={showPassword[field.visibleKey] ? "text" : "password"}
-                value={field.value}
-                onChange={(event) =>
-                  setPasswordForm((previous) => ({
-                    ...previous,
-                    [field.key]: event.target.value,
-                  }))
-                }
-                className={passwordInputClass}
-              />
-              <button
-                type="button"
-                onClick={() =>
-                  setShowPassword((previous) => ({
-                    ...previous,
-                    [field.visibleKey]: !previous[field.visibleKey],
-                  }))
-                }
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition-colors hover:text-slate-200"
-              >
-                {showPassword[field.visibleKey] ? (
-                  <EyeOff className="h-4 w-4" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
+              <input type={showPassword[f.vis] ? "text" : "password"} value={f.value}
+                onChange={(e) => setPasswordForm((p) => ({ ...p, [f.key]: e.target.value }))}
+                className={cn(inputCls, "pr-11")} placeholder={f.label} />
+              <button type="button" onClick={() => setShowPassword((p) => ({ ...p, [f.vis]: !p[f.vis] }))}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-granite hover:text-pearl/70 transition-colors p-1">
+                {showPassword[f.vis] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
-          </label>
-        ))}
-      </div>
-
-      <div className="mt-5">
-        <MotionButton
-          whileTap={{ scale: 0.98 }}
-          onClick={handleChangePassword}
-          disabled={changingPassword}
-          className="inline-flex items-center gap-2 rounded-xl bg-[#c7bc92] px-4 py-2.5 text-sm font-semibold text-[#020203] transition hover:bg-[#d4c9a2] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <KeyRound className="h-4 w-4" />
-          {changingPassword ? "Updating..." : "Update Password"}
-        </MotionButton>
-      </div>
-    </div>
+            {f.hint && <p className="mt-1.5 text-sm text-granite/90 leading-relaxed">{f.hint}</p>}
+          </div>
+        </FormRow>
+      ))}
+      <ActionFooter onSave={handleChangePassword} saving={changingPassword} saveLabel="Update password"
+        saveClassName="bg-gold hover:bg-gold/85" />
+    </motion.div>
   );
 
   const renderNotificationsTab = () => (
-    <div className="space-y-4">
-      <div className={sectionShell}>
-        <h3 className="text-lg font-semibold text-white">Notification Channels</h3>
-        <p className="mt-1 text-sm text-slate-400">
-          Choose what reaches your inbox and activity stream.
-        </p>
-        <div className="mt-4 space-y-3">
-          <ToggleRow
-            title="Product Announcements"
-            description="Release notes and major platform updates."
-            checked={preferences.notifications.productAnnouncements}
-            onChange={() =>
-              updatePreference(
-                "notifications",
-                "productAnnouncements",
-                !preferences.notifications.productAnnouncements
-              )
-            }
-          />
-          <ToggleRow
-            title="AI Insight Ready"
-            description="Alerts when long-running analyses finish."
-            checked={preferences.notifications.aiInsightReady}
-            onChange={() =>
-              updatePreference(
-                "notifications",
-                "aiInsightReady",
-                !preferences.notifications.aiInsightReady
-              )
-            }
-          />
-          <ToggleRow
-            title="Security Alerts"
-            description="Suspicious activity and authentication alerts."
-            checked={preferences.notifications.securityAlerts}
-            onChange={() =>
-              updatePreference(
-                "notifications",
-                "securityAlerts",
-                !preferences.notifications.securityAlerts
-              )
-            }
-          />
-        </div>
+    <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
+      <div className="mb-2">
+        <h3 className="text-lg font-semibold text-pearl">Notification preferences</h3>
+        <p className="text-sm text-granite/90 mt-1">Choose what reaches your inbox and activity stream.</p>
       </div>
-      <div className={sectionShell}>
-        <button
-          onClick={handleSavePreferences}
-          disabled={!prefsDirty || savingPrefs}
-          className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/8 px-4 py-2.5 text-sm font-medium text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Save className="h-4 w-4" />
-          {savingPrefs ? "Saving..." : "Save Notification Preferences"}
-        </button>
-      </div>
-    </div>
+      <ToggleFormRow label="Product announcements" description="Release notes, feature updates, and major platform changes."
+        checked={preferences.notifications.productAnnouncements}
+        onChange={() => updatePref("notifications", "productAnnouncements", !preferences.notifications.productAnnouncements)} />
+      <ToggleFormRow label="AI insight ready" description="Get notified when long-running analyses and AI pipelines finish."
+        checked={preferences.notifications.aiInsightReady}
+        onChange={() => updatePref("notifications", "aiInsightReady", !preferences.notifications.aiInsightReady)} />
+      <ToggleFormRow label="Security alerts" description="Authentication warnings, suspicious activity, and session alerts."
+        checked={preferences.notifications.securityAlerts}
+        onChange={() => updatePref("notifications", "securityAlerts", !preferences.notifications.securityAlerts)} />
+      <ActionFooter onSave={handleSavePrefs} saving={savingPrefs} disabled={!prefsDirty} saveLabel="Save preferences" />
+    </motion.div>
   );
 
   const renderWorkspaceTab = () => (
-    <div className="space-y-4">
-      <div className={sectionShell}>
-        <h3 className="text-lg font-semibold text-white">Workspace Preferences</h3>
-        <p className="mt-1 text-sm text-slate-400">
-          Configure visual and behavioral defaults.
+    <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
+      <div className="mb-2">
+        <h3 className="text-lg font-semibold text-pearl">Appearance & Behavior</h3>
+        <p className="text-sm text-granite/90 mt-1">Configure how the application looks and behaves.</p>
+      </div>
+      <FormRow label="Color theme" description="Select your preferred color scheme.">
+        <div className="grid grid-cols-3 gap-3 max-w-sm">
+          {[
+            { id: "light", label: "Light", icon: Sun },
+            { id: "dark", label: "Dark", icon: Moon },
+            { id: "system", label: "System", icon: Laptop },
+          ].map((t) => (
+            <button key={t.id} onClick={() => handleTheme(t.id)}
+              className={cn("flex flex-col items-center gap-1.5 rounded-xl border px-3 py-4 transition-all text-center",
+                preferences.workspace.theme === t.id
+                  ? "border-pearl/30 bg-pearl/10 text-pearl ring-1 ring-pearl/20"
+                  : "border-white/[0.06] bg-noir/30 text-granite hover:bg-white/[0.04] hover:text-pearl/70")}>
+              <t.icon className="h-6 w-6" />
+              <span className="text-sm font-medium">{t.label}</span>
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-sm text-granite/90">
+          Active: <span className="text-pearl/70 font-medium">{preferences.workspace.theme}</span> &middot; Rendered as <span className="text-pearl/70 font-medium">{resolvedTheme}</span>
         </p>
-
-        <div className="mt-4">
-          <p className="mb-2 text-xs uppercase tracking-wider text-slate-500">
-            Theme
-          </p>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {[
-              { id: "light", label: "Light", icon: Sun },
-              { id: "dark", label: "Dark", icon: Moon },
-              { id: "system", label: "System", icon: Laptop },
-            ].map((item) => (
-              <button
-                key={item.id}
-                onClick={() => handleThemeSelection(item.id)}
-                className={cn(
-                  "flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm transition",
-                  preferences.workspace.theme === item.id
-                    ? "border-[#cad2fd]/40 bg-[#cad2fd]/20 text-[#eef1ff]"
-                    : "border-white/10 bg-black/20 text-slate-300 hover:bg-black/30"
-                )}
-              >
-                <item.icon className="h-4 w-4" />
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <p className="mt-2 text-xs text-slate-500">
-            Active theme: {preferences.workspace.theme} ({resolvedTheme} rendered)
-          </p>
-        </div>
-
-        <div className="mt-4 space-y-3">
-          <ToggleRow
-            title="Auto Refresh Datasets"
-            description="Refresh dataset metadata after cache resets."
-            checked={preferences.workspace.autoRefreshDatasets}
-            onChange={() =>
-              updatePreference(
-                "workspace",
-                "autoRefreshDatasets",
-                !preferences.workspace.autoRefreshDatasets
-              )
-            }
-          />
-          <ToggleRow
-            title="Compact Density"
-            description="Tighter spacing in data-heavy screens."
-            checked={preferences.workspace.compactDensity}
-            onChange={() =>
-              updatePreference(
-                "workspace",
-                "compactDensity",
-                !preferences.workspace.compactDensity
-              )
-            }
-          />
-          <ToggleRow
-            title="Reduce Animations"
-            description="Simplify motion for less visual noise."
-            checked={preferences.workspace.reduceAnimations}
-            onChange={() =>
-              updatePreference(
-                "workspace",
-                "reduceAnimations",
-                !preferences.workspace.reduceAnimations
-              )
-            }
-          />
-        </div>
-      </div>
-
-      <div className={sectionShell}>
-        <button
-          onClick={handleSavePreferences}
-          disabled={!prefsDirty || savingPrefs}
-          className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/8 px-4 py-2.5 text-sm font-medium text-slate-100 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Save className="h-4 w-4" />
-          {savingPrefs ? "Saving..." : "Save Workspace Preferences"}
-        </button>
-      </div>
-    </div>
+      </FormRow>
+      <ToggleFormRow label="Auto refresh datasets" description="Automatically refresh dataset metadata when cache is cleared or data changes."
+        checked={preferences.workspace.autoRefreshDatasets}
+        onChange={() => updatePref("workspace", "autoRefreshDatasets", !preferences.workspace.autoRefreshDatasets)} />
+      <ToggleFormRow label="Compact density" description="Use tighter spacing and smaller elements on data-heavy screens."
+        checked={preferences.workspace.compactDensity}
+        onChange={() => updatePref("workspace", "compactDensity", !preferences.workspace.compactDensity)} />
+      <ToggleFormRow label="Reduce animations" description="Simplify transitions and reduce motion throughout the interface."
+        checked={preferences.workspace.reduceAnimations}
+        onChange={() => updatePref("workspace", "reduceAnimations", !preferences.workspace.reduceAnimations)} />
+      <ActionFooter onSave={handleSavePrefs} saving={savingPrefs} disabled={!prefsDirty} saveLabel="Save preferences" />
+    </motion.div>
   );
 
   const renderDataTab = () => (
-    <div className="space-y-4">
-      <div className={sectionShell}>
-        <h3 className="text-lg font-semibold text-white">Data Controls</h3>
-        <p className="mt-1 text-sm text-slate-400">
-          Export operational state and manage local cache safely.
-        </p>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <button
-            onClick={handleExportWorkspace}
-            className="flex items-start gap-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-left text-emerald-100 transition hover:bg-emerald-500/15"
-          >
-            <Download className="mt-0.5 h-4 w-4" />
-            <span>
-              <span className="block text-sm font-semibold">Export Workspace Snapshot</span>
-              <span className="block text-xs text-emerald-200/80">
-                JSON export of account, settings, and dataset metadata.
-              </span>
-            </span>
-          </button>
-
-          <button
-            onClick={handleClearLocalData}
-            disabled={clearingLocalData}
-            className="flex items-start gap-3 rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-left text-amber-100 transition hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <RefreshCcw className="mt-0.5 h-4 w-4" />
-            <span>
-              <span className="block text-sm font-semibold">
-                {clearingLocalData ? "Resetting..." : "Reset Local Cache"}
-              </span>
-              <span className="block text-xs text-amber-200/80">
-                Clears persisted dataset/chat caches and reloads datasets.
-              </span>
-            </span>
-          </button>
-        </div>
+    <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
+      <div className="mb-2">
+        <h3 className="text-lg font-semibold text-pearl">Data & Session</h3>
+        <p className="text-sm text-granite/90 mt-1">Export your workspace or manage local browser cache.</p>
       </div>
 
-      <div className={sectionShell}>
-        <h4 className="text-sm font-semibold text-slate-200">Session</h4>
-        <div className="mt-3 space-y-3">
-          <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-            <p className="text-sm text-slate-200">Signed in as {user?.email || "unknown"}</p>
-            <p className="text-xs text-slate-500">
-              Use logout to terminate the current browser session.
-            </p>
+      {/* Export & Reset row */}
+      <FormRow label="Workspace data" description="Export or reset your stored workspace data.">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <motion.button whileTap={{ scale: 0.97 }} onClick={handleExport}
+            className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] px-5 py-2.5 text-[15px] font-medium text-emerald-300 transition-all hover:bg-emerald-500/[0.12] hover:border-emerald-500/40">
+            <Download className="h-[18px] w-[18px]" /> Export snapshot
+          </motion.button>
+          <motion.button whileTap={{ scale: 0.97 }} onClick={handleClearLocal} disabled={clearingLocalData}
+            className="inline-flex items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-5 py-2.5 text-[15px] font-medium text-amber-300 transition-all hover:bg-amber-500/[0.12] hover:border-amber-500/40 disabled:opacity-50 disabled:cursor-not-allowed">
+            <RotateCcw className="h-[18px] w-[18px]" /> {clearingLocalData ? "Resetting\u2026" : "Reset cache"}
+          </motion.button>
+        </div>
+      </FormRow>
+
+      {/* Storage stats */}
+      <FormRow label="Storage overview" description="Current dataset state in your workspace.">
+        <div className="grid grid-cols-3 gap-3 max-w-sm">
+          <div className="rounded-xl border border-white/[0.05] bg-noir/30 px-4 py-3 text-center">
+            <p className="text-2xl font-bold text-pearl/90">{datasetStats.total}</p>
+            <p className="text-sm text-granite mt-0.5">Total</p>
           </div>
-          <button
-            onClick={logout}
-            className="inline-flex items-center gap-2 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-2.5 text-sm font-medium text-rose-100 transition hover:bg-rose-500/20"
-          >
-            <LogOut className="h-4 w-4" />
-            Logout
+          <div className="rounded-xl border border-white/[0.05] bg-noir/30 px-4 py-3 text-center">
+            <p className="text-2xl font-bold text-emerald-400">{datasetStats.ready}</p>
+            <p className="text-sm text-granite mt-0.5">Ready</p>
+          </div>
+          <div className="rounded-xl border border-white/[0.05] bg-noir/30 px-4 py-3 text-center">
+            <p className="text-2xl font-bold text-amber-400">{datasetStats.total - datasetStats.ready}</p>
+            <p className="text-sm text-granite mt-0.5">Pending</p>
+          </div>
+        </div>
+      </FormRow>
+
+      {/* Active session */}
+      <FormRow label="Active session" description="Your current browser session." noBorder>
+        <div className="rounded-xl border border-white/[0.05] bg-noir/30 p-4 max-w-md">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-pearl/10 shrink-0">
+              <Activity className="h-4.5 w-4.5 text-pearl/60" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[15px] font-medium text-pearl/90 truncate">{user?.email || "unknown"}</p>
+              <p className="text-sm text-granite">Active &middot; {getDisplayName(user)}</p>
+            </div>
+            <div className="h-2.5 w-2.5 rounded-full bg-emerald-400 shrink-0" title="Active" />
+          </div>
+        </div>
+        <div className="mt-4">
+          <button onClick={logout}
+            className="inline-flex items-center gap-2 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] px-5 py-2.5 text-[15px] font-medium text-rose-300 transition-all hover:bg-rose-500/[0.12] hover:border-rose-500/40">
+            <LogOut className="h-[18px] w-[18px]" /> Sign out
           </button>
         </div>
-      </div>
-    </div>
+      </FormRow>
+    </motion.div>
   );
 
-  const renderActiveTab = () => {
-    switch (activeTab) {
-      case "account":
-        return renderAccountTab();
-      case "security":
-        return renderSecurityTab();
-      case "notifications":
-        return renderNotificationsTab();
-      case "workspace":
-        return renderWorkspaceTab();
-      case "data":
-        return renderDataTab();
-      default:
-        return renderAccountTab();
+  /* ── Belief Store handlers ── */
+  const handleDeleteBelief = async (beliefId) => {
+    setDeletingBeliefId(beliefId);
+    try {
+      await agenticAPI.deleteBelief(beliefId);
+      setBeliefs((prev) => prev.filter((b) => b.id !== beliefId));
+      setBeliefsCount((c) => Math.max(0, c - 1));
+      toast.success("Belief removed — similar insights will appear again.");
+    } catch {
+      toast.error("Failed to remove belief.");
+    } finally {
+      setDeletingBeliefId(null);
     }
   };
 
-  return (
-    <div className="relative min-h-screen overflow-hidden bg-[#05070d] text-slate-100">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -left-24 -top-24 h-80 w-80 rounded-full bg-[#cad2fd]/10 blur-[120px]" />
-        <div className="absolute bottom-[-120px] right-[-80px] h-96 w-96 rounded-full bg-[#c7bc92]/12 blur-[130px]" />
+  const handleClearAllBeliefs = async () => {
+    setClearingBeliefs(true);
+    try {
+      await agenticAPI.clearBeliefs();
+      setBeliefs([]);
+      setBeliefsCount(0);
+      toast.success("AI Memory cleared. Novelty filtering reset.");
+    } catch {
+      toast.error("Failed to clear AI Memory.");
+    } finally {
+      setClearingBeliefs(false);
+    }
+  };
+
+  const SOURCE_LABELS = {
+    user_confirmed: { label: "Confirmed", color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" },
+    user_accepted: { label: "Useful", color: "text-blue-400 bg-blue-500/10 border-blue-500/20" },
+    user_dismissed: { label: "Already Knew", color: "text-amber-400 bg-amber-500/10 border-amber-500/20" },
+    document_ingested: { label: "Document", color: "text-purple-400 bg-purple-500/10 border-purple-500/20" },
+    auto_generated: { label: "Auto", color: "text-slate-400 bg-slate-500/10 border-slate-500/20" },
+  };
+
+  const renderAiMemoryTab = () => (
+    <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
+      {/* Explainer */}
+      <div className="mb-6 p-5 rounded-xl border border-white/[0.06] bg-white/[0.02]">
+        <div className="flex items-start gap-4">
+          <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center shrink-0">
+            <BrainCircuit className="w-5 h-5 text-purple-400" />
+          </div>
+          <div>
+            <h3 className="text-[15px] font-semibold text-pearl">Belief Store — Your AI Memory</h3>
+            <p className="text-sm text-granite/90 leading-relaxed mt-1">
+              When you mark insights as <span className="text-emerald-400 font-medium">"Useful"</span> or{" "}
+              <span className="text-amber-400 font-medium">"Already Knew"</span>, they are stored here as embeddings.
+              Future analyses use these beliefs to compute <span className="text-pearl font-medium">Semantic Surprisal</span> — 
+              suppressing insights you've already seen. Removing a belief will allow similar insights to surface again.
+            </p>
+          </div>
+        </div>
       </div>
 
-      <div className="relative z-10 mx-auto w-full max-w-[1400px] space-y-6 p-4 md:p-6 lg:p-8">
-        <MotionSection
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="rounded-3xl border border-white/10 bg-[linear-gradient(125deg,rgba(202,210,253,0.24),rgba(5,7,13,0.82)_45%,rgba(199,188,146,0.24))] p-6 shadow-[0_24px_70px_-42px_rgba(0,0,0,0.95)] md:p-8"
-        >
-          <p className="text-xs uppercase tracking-[0.28em] text-slate-300">Control Center</p>
-          <h1 className="mt-3 text-3xl font-semibold text-white md:text-5xl">
-            Settings that operate like production software
-          </h1>
-          <p className="mt-3 max-w-2xl text-sm text-slate-300 md:text-base">
-            Manage account security, workspace preferences, data cache, and session state
-            from one structured surface.
-          </p>
-          <div className="mt-5 flex flex-wrap items-center gap-3 text-xs">
-            <span className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-slate-100">
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" />
-              {datasetStats.ready}/{datasetStats.total} datasets ready
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-slate-100">
-              <Mail className="h-3.5 w-3.5 text-sky-300" />
-              {user?.email || "No email"}
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-slate-100">
-              <MonitorCog className="h-3.5 w-3.5 text-amber-300" />
-              Theme: {theme}
-            </span>
+      {/* Stats Row */}
+      <FormRow label="Stored beliefs" description="Total knowledge entries the system has learned from your feedback.">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl font-mono font-bold text-pearl">{beliefsCount}</span>
+            <span className="text-sm text-granite">entries</span>
           </div>
-        </MotionSection>
+          {beliefsCount > 0 && (
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={handleClearAllBeliefs}
+              disabled={clearingBeliefs}
+              className="inline-flex items-center gap-2 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] px-4 py-2 text-[13px] font-medium text-rose-300 transition-all hover:bg-rose-500/[0.12] hover:border-rose-500/40 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <RotateCcw className={cn("h-3.5 w-3.5", clearingBeliefs && "animate-spin")} />
+              {clearingBeliefs ? "Clearing…" : "Reset All"}
+            </motion.button>
+          )}
+        </div>
+      </FormRow>
 
-        <div className="grid gap-6 xl:grid-cols-[280px_1fr]">
-          <MotionSection
-            initial={{ opacity: 0, x: -8 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="h-fit rounded-2xl border border-white/10 bg-[#070c14]/88 p-3 xl:sticky xl:top-6"
-          >
-            <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-              <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#cad2fd] text-sm font-bold text-[#020203]">
-                  {getDisplayName(user).slice(0, 1).toUpperCase()}
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-white">
-                    {getDisplayName(user)}
-                  </p>
-                  <p className="truncate text-xs text-slate-400">{user?.email}</p>
+      {/* Belief List */}
+      <FormRow label="Knowledge entries" description="Insights stored from your feedback sessions. Click the trash icon to forget an entry." noBorder>
+        <div className="space-y-2 max-h-[420px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent pr-1">
+          {loadingBeliefs ? (
+            // Loading skeleton
+            Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="animate-pulse flex items-start gap-3 p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.04]">
+                <div className="w-6 h-6 rounded-lg bg-white/[0.06] shrink-0 mt-0.5" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3 bg-white/[0.06] rounded w-3/4" />
+                  <div className="h-2.5 bg-white/[0.04] rounded w-1/2" />
                 </div>
               </div>
-            </div>
-
-            <nav className="mt-3 space-y-1">
-              {TAB_ITEMS.map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm transition",
-                    activeTab === tab.id
-                      ? "border border-[#cad2fd]/30 bg-[#cad2fd]/20 text-[#eef1ff]"
-                      : "border border-transparent text-slate-300 hover:border-white/10 hover:bg-white/5 hover:text-white"
-                  )}
-                >
-                  <tab.icon className="h-4 w-4" />
-                  {tab.label}
-                </button>
-              ))}
-            </nav>
-
-            <div className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-              <p className="inline-flex items-center gap-1 font-medium">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                Security best practice
-              </p>
-              <p className="mt-1 text-amber-100/80">
-                Rotate your password regularly and keep security alerts enabled.
+            ))
+          ) : beliefs.length === 0 ? (
+            <div className="text-center py-10">
+              <div className="w-14 h-14 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mx-auto mb-4">
+                <BrainCircuit className="w-6 h-6 text-granite/60" />
+              </div>
+              <p className="text-[14px] text-granite font-medium">No beliefs stored yet</p>
+              <p className="text-[12px] text-granite/60 mt-1 max-w-xs mx-auto">
+                Start by rating insights on your dashboard or analysis pages. Your feedback will appear here.
               </p>
             </div>
-          </MotionSection>
+          ) : (
+            <AnimatePresence>
+              {beliefs.map((belief, idx) => {
+                const src = SOURCE_LABELS[belief.metadata?.source] || SOURCE_LABELS.auto_generated;
+                const confidence = belief.confidence != null ? (belief.confidence * 100).toFixed(0) : null;
+                const isDeleting = deletingBeliefId === belief.id;
 
-          <MotionSection
-            initial={{ opacity: 0, x: 8 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="rounded-2xl border border-white/10 bg-[#070c14]/88 p-4 md:p-6"
-          >
-            <AnimatePresence mode="wait">
-              <MotionDiv
-                key={activeTab}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.16 }}
-              >
-                {renderActiveTab()}
-              </MotionDiv>
+                return (
+                  <motion.div
+                    key={belief.id || idx}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: isDeleting ? 0.4 : 1, y: 0 }}
+                    exit={{ opacity: 0, x: -20, height: 0 }}
+                    transition={{ delay: idx * 0.03 }}
+                    className="flex items-start gap-3 p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.04] hover:border-white/[0.08] transition-colors group"
+                  >
+                    {/* Source badge */}
+                    <div className={cn("mt-0.5 px-2 py-0.5 rounded-md text-[9px] font-semibold uppercase tracking-wider border shrink-0", src.color)}>
+                      {src.label}
+                    </div>
+
+                    {/* Content */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[13px] text-pearl/80 leading-relaxed line-clamp-2">
+                        {belief.document || "—"}
+                      </p>
+                      <div className="flex items-center gap-3 mt-1.5 text-[10px] text-granite/50">
+                        {confidence != null && <span>Confidence: {confidence}%</span>}
+                        {belief.metadata?.created_at && (
+                          <span>{formatDate(belief.metadata.created_at)}</span>
+                        )}
+                        {belief.similarity != null && (
+                          <span>Similarity: {(belief.similarity * 100).toFixed(0)}%</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Delete button */}
+                    <motion.button
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
+                      onClick={() => handleDeleteBelief(belief.id)}
+                      disabled={isDeleting}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg border border-transparent hover:border-rose-500/20 hover:bg-rose-500/10 text-granite/50 hover:text-rose-400 disabled:opacity-30"
+                      title="Remove this belief"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </motion.button>
+                  </motion.div>
+                );
+              })}
             </AnimatePresence>
-          </MotionSection>
+          )}
+        </div>
+      </FormRow>
+    </motion.div>
+  );
+
+  const TAB_RENDERERS = {
+    account: renderAccountTab,
+    security: renderSecurityTab,
+    notifications: renderNotificationsTab,
+    workspace: renderWorkspaceTab,
+    data: renderDataTab,
+    "ai-memory": renderAiMemoryTab,
+  };
+
+  /* ═══════════════════ RENDER ═══════════════════ */
+  return (
+    <div className="h-full flex flex-col overflow-hidden">
+      {/* ───── Gradient Banner ───── */}
+      <div className="relative shrink-0">
+        <div className="h-32 sm:h-40 w-full overflow-hidden"
+          style={{
+            background: "linear-gradient(135deg, #1a1040 0%, #3b1d6e 25%, #7c3aed 45%, #c084fc 60%, #f59e0b 80%, #ec4899 100%)",
+          }}
+        >
+          {/* Subtle noise overlay */}
+          <div className="absolute inset-0 bg-noir/20" />
+        </div>
+
+        {/* Avatar overlapping the banner */}
+        <div className="absolute -bottom-10 left-6 sm:left-10">
+          <div className="relative">
+            <div className="flex h-20 w-20 sm:h-24 sm:w-24 items-center justify-center rounded-full bg-midnight border-4 border-noir text-2xl sm:text-3xl font-bold text-pearl shadow-xl">
+              {getDisplayName(user).charAt(0).toUpperCase()}
+            </div>
+            <div className="absolute -bottom-0.5 -right-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-pearl border-2 border-noir">
+              <BadgeCheck className="h-3.5 w-3.5 text-noir" />
+            </div>
+          </div>
+        </div>
+
+        {/* Right side: name + email on banner */}
+        <div className="absolute bottom-3 right-6 sm:right-10 text-right hidden sm:block">
+          <p className="text-base font-medium text-white/90 drop-shadow-sm">{user?.email}</p>
+        </div>
+      </div>
+
+      {/* ───── Profile Header Row (below banner) ───── */}
+      <div className="shrink-0 px-6 sm:px-10 pt-14 sm:pt-14 pb-0 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-pearl">{getDisplayName(user)}&apos;s Settings</h1>
+          <p className="text-sm sm:text-base text-granite mt-1">{user?.email} &middot; {datasetStats.ready}/{datasetStats.total} datasets ready</p>
+        </div>
+      </div>
+
+      {/* ───── Horizontal Tab Bar ───── */}
+      <div className="shrink-0 px-6 sm:px-10 mt-5">
+        <div ref={tabsRef} className="flex gap-0 overflow-x-auto scrollbar-hide border-b border-white/[0.06]">
+          {TAB_ITEMS.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  "relative flex items-center gap-2.5 whitespace-nowrap px-5 py-3.5 text-[15px] font-medium transition-colors shrink-0",
+                  isActive
+                    ? "text-pearl"
+                    : "text-granite hover:text-pearl/70",
+                )}>
+                <tab.icon className="h-[18px] w-[18px]" />
+                {tab.label}
+                {/* Active underline */}
+                {isActive && (
+                  <motion.div layoutId="settings-tab-underline"
+                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-pearl rounded-full"
+                    transition={{ type: "spring", stiffness: 400, damping: 30 }} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ───── Scrollable Content ───── */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="px-6 sm:px-10 py-6 max-w-4xl">
+          <AnimatePresence mode="wait">
+            <motion.div key={activeTab} variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
+              {TAB_RENDERERS[activeTab]?.()}
+            </motion.div>
+          </AnimatePresence>
         </div>
       </div>
     </div>

@@ -1,0 +1,324 @@
+/**
+ * Enterprise KPI Design System
+ * 
+ * Professional design tokens for B2B analytics dashboards.
+ * Inspired by Power BI, Tableau, and Looker design patterns.
+ */
+
+/* ============================================
+   ENTERPRISE COLOR PALETTE
+   ============================================ */
+
+:root {
+  /* Primary Backgrounds */
+  --kpi-bg-primary: rgb(15, 23, 42);           /* Slate 900 */
+  --kpi-bg-secondary: rgb(30, 41, 59);         /* Slate 800 */
+  --kpi-bg-elevated: rgb(51, 65, 85);          /* Slate 700 */
+  
+  /* Borders */
+  --kpi-border-default: rgb(51, 65, 85);       /* Slate 700 */
+  --kpi-border-hover: rgb(71, 85, 105);        /* Slate 600 */
+  --kpi-border-accent: rgb(100, 116, 139);     /* Slate 500 */
+  
+  /* Text Hierarchy */
+  --kpi-text-primary: rgb(248, 250, 252);      /* Slate 50 */
+  --kpi-text-secondary: rgb(203, 213, 225);    /* Slate 300 */
+  --kpi-text-muted: rgb(148, 163, 184);        /* Slate 400 */
+  --kpi-text-disabled: rgb(100, 116, 139);     /* Slate 500 */
+  
+  /* Status Colors - Power BI Inspired */
+  --status-success: rgb(16, 185, 129);         /* Emerald 500 */
+  --status-success-bg: rgba(16, 185, 129, 0.1);
+  --status-success-border: rgba(16, 185, 129, 0.3);
+  
+  --status-warning: rgb(245, 158, 11);         /* Amber 500 */
+  --status-warning-bg: rgba(245, 158, 11, 0.1);
+  --status-warning-border: rgba(245, 158, 11, 0.3);
+  
+  --status-critical: rgb(239, 68, 68);         /* Red 500 */
+  --status-critical-bg: rgba(239, 68, 68, 0.1);
+  --status-critical-border: rgba(239, 68, 68, 0.3);
+  
+  --status-neutral: rgb(100, 116, 139);        /* Slate 500 */
+  --status-neutral-bg: rgba(100, 116, 139, 0.1);
+  --status-neutral-border: rgba(100, 116, 139, 0.3);
+  
+  /* Information Colors */
+  --info-primary: rgb(59, 130, 246);           /* Blue 500 */
+  --info-bg: rgba(59, 130, 246, 0.1);
+  
+  /* Typography Scale */
+  --kpi-font-display: 2.25rem;                 /* 36px - Hero metrics */
+  --kpi-font-headline: 1.5rem;                 /* 24px - Section titles */
+  --kpi-font-title: 1rem;                      /* 16px - Card titles */
+  --kpi-font-body: 0.875rem;                   /* 14px - Body text */
+  --kpi-font-label: 0.75rem;                   /* 12px - Labels */
+  --kpi-font-caption: 0.6875rem;               /* 11px - Captions */
+  
+  /* Spacing Scale */
+  --kpi-space-xs: 0.25rem;                     /* 4px */
+  --kpi-space-sm: 0.5rem;                      /* 8px */
+  --kpi-space-md: 1rem;                        /* 16px */
+  --kpi-space-lg: 1.5rem;                      /* 24px */
+  --kpi-space-xl: 2rem;                        /* 32px */
+  
+  /* Border Radius */
+  --kpi-radius-sm: 0.375rem;                   /* 6px */
+  --kpi-radius-md: 0.5rem;                     /* 8px */
+  --kpi-radius-lg: 0.75rem;                    /* 12px */
+  --kpi-radius-xl: 1rem;                       /* 16px */
+  
+  /* Shadows - Professional, subtle */
+  --kpi-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --kpi-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  --kpi-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  
+  /* Transitions */
+  --kpi-transition-fast: 150ms ease;
+  --kpi-transition-normal: 250ms ease;
+  --kpi-transition-slow: 350ms ease;
+}
+
+/* ============================================
+   ENTERPRISE KPI CARD BASE STYLES
+   ============================================ */
+
+.enterprise-kpi-card {
+  position: relative;
+  background: var(--kpi-bg-primary);
+  border: 1px solid var(--kpi-border-default);
+  border-radius: var(--kpi-radius-lg);
+  padding: var(--kpi-space-lg);
+  transition: all var(--kpi-transition-normal);
+}
+
+.enterprise-kpi-card:hover {
+  border-color: var(--kpi-border-hover);
+  box-shadow: var(--kpi-shadow-md);
+}
+
+/* Status accent border (left side) */
+.enterprise-kpi-card[data-status="success"] {
+  border-left: 4px solid var(--status-success);
+}
+
+.enterprise-kpi-card[data-status="warning"] {
+  border-left: 4px solid var(--status-warning);
+}
+
+.enterprise-kpi-card[data-status="critical"] {
+  border-left: 4px solid var(--status-critical);
+}
+
+.enterprise-kpi-card[data-status="neutral"] {
+  border-left: 4px solid var(--status-neutral);
+}
+
+/* ============================================
+   TYPOGRAPHY UTILITIES
+   ============================================ */
+
+.kpi-label {
+  font-size: var(--kpi-font-label);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--kpi-text-muted);
+}
+
+.kpi-value {
+  font-size: var(--kpi-font-display);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--kpi-text-primary);
+  line-height: 1.1;
+}
+
+.kpi-delta {
+  font-size: var(--kpi-font-body);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--kpi-space-xs);
+}
+
+.kpi-delta[data-direction="up"] {
+  color: var(--status-success);
+}
+
+.kpi-delta[data-direction="down"] {
+  color: var(--status-critical);
+}
+
+.kpi-delta[data-direction="neutral"] {
+  color: var(--kpi-text-muted);
+}
+
+.kpi-comparison-label {
+  font-size: var(--kpi-font-caption);
+  color: var(--kpi-text-disabled);
+}
+
+/* ============================================
+   GOAL PROGRESS BAR
+   ============================================ */
+
+.kpi-progress-track {
+  height: 6px;
+  background: var(--kpi-bg-secondary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.kpi-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width var(--kpi-transition-slow);
+}
+
+.kpi-progress-fill[data-status="success"] {
+  background: var(--status-success);
+}
+
+.kpi-progress-fill[data-status="warning"] {
+  background: var(--status-warning);
+}
+
+.kpi-progress-fill[data-status="critical"] {
+  background: var(--status-critical);
+}
+
+/* ============================================
+   SPARKLINE CONTAINER
+   ============================================ */
+
+.kpi-sparkline {
+  height: 48px;
+  margin: 0 calc(var(--kpi-space-xs) * -1);
+}
+
+/* ============================================
+   STATUS ICON CONTAINER
+   ============================================ */
+
+.kpi-status-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--kpi-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kpi-status-icon[data-status="success"] {
+  background: var(--status-success-bg);
+  color: var(--status-success);
+}
+
+.kpi-status-icon[data-status="warning"] {
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
+}
+
+.kpi-status-icon[data-status="critical"] {
+  background: var(--status-critical-bg);
+  color: var(--status-critical);
+}
+
+.kpi-status-icon[data-status="neutral"] {
+  background: var(--status-neutral-bg);
+  color: var(--status-neutral);
+}
+
+/* ============================================
+   DASHBOARD HEADER - EXECUTIVE STYLE
+   ============================================ */
+
+.dashboard-header {
+  padding: var(--kpi-space-lg) 0;
+  border-bottom: 1px solid var(--kpi-border-default);
+  margin-bottom: var(--kpi-space-xl);
+}
+
+.dashboard-header__title {
+  font-size: var(--kpi-font-headline);
+  font-weight: 700;
+  color: var(--kpi-text-primary);
+  letter-spacing: -0.025em;
+}
+
+.dashboard-header__subtitle {
+  font-size: var(--kpi-font-body);
+  color: var(--kpi-text-muted);
+  margin-top: var(--kpi-space-xs);
+}
+
+.dashboard-header__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--kpi-space-sm);
+  margin-top: var(--kpi-space-md);
+}
+
+.dashboard-header__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--kpi-space-xs);
+  padding: var(--kpi-space-xs) var(--kpi-space-sm);
+  background: var(--kpi-bg-secondary);
+  border: 1px solid var(--kpi-border-default);
+  border-radius: var(--kpi-radius-sm);
+  font-size: var(--kpi-font-caption);
+  color: var(--kpi-text-secondary);
+}
+
+/* ============================================
+   KPI GRID LAYOUT
+   ============================================ */
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--kpi-space-lg);
+}
+
+@media (max-width: 1280px) {
+  .kpi-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 1024px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================
+   SECTION HEADERS
+   ============================================ */
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--kpi-space-sm);
+  margin-bottom: var(--kpi-space-lg);
+}
+
+.section-header__title {
+  font-size: var(--kpi-font-title);
+  font-weight: 600;
+  color: var(--kpi-text-secondary);
+}
+
+.section-header__line {
+  flex: 1;
+  height: 1px;
+  background: var(--kpi-border-default);
+}

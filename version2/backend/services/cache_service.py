@@ -215,8 +215,8 @@ class CacheService:
             serialized = pickle.dumps(df)
             size_mb = len(serialized) / (1024 * 1024)
             
-            # Skip caching very large DataFrames (>100MB)
-            if size_mb > 100:
+            # Skip caching very large DataFrames (>500MB serialized)
+            if size_mb > 500:
                 logger.warning(f"DataFrame too large to cache: {size_mb:.1f}MB")
                 return False
             

@@ -1,6 +1,3 @@
-// frontend/src/components/features/chat/MarkdownRenderers.jsx
-// Premium Claude-style markdown renderers for chat messages
-
 import React, { useState, useCallback } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -90,7 +87,7 @@ const CodeBlock = ({ language, children }) => {
 // Inline Code
 // ─────────────────────────────────────────────
 const InlineCode = ({ children }) => (
-    <code className="bg-slate-800/80 text-cyan-300 px-1.5 py-0.5 rounded-md text-[13px] font-mono border border-slate-700/40">
+    <code className="bg-slate-700/50 text-emerald-300 px-1.5 py-0.5 rounded-md text-[13px] font-semibold border border-slate-600/30">
         {children}
     </code>
 );
@@ -176,7 +173,7 @@ const H3 = ({ children }) => (
 // Text Elements
 // ─────────────────────────────────────────────
 const Paragraph = ({ children }) => (
-    <p className="mb-3 last:mb-0 leading-[1.75] text-[15px] text-slate-200 break-words">
+    <p className="mb-3 last:mb-0 leading-[1.65] text-[16px] text-slate-100 break-words">
         {children}
     </p>
 );
@@ -239,10 +236,9 @@ const HorizontalRule = () => (
 // Export renderers object for ReactMarkdown
 // ─────────────────────────────────────────────
 export const markdownComponents = {
-    // Code
-    code({ node, inline, className, children, ...props }) {
+    code({ node, className, children, ...props }) {
         const match = /language-(\w+)/.exec(className || '');
-        if (!inline && (match || String(children).includes('\n'))) {
+        if (match || String(children).includes('\n')) {
             return <CodeBlock language={match?.[1]}>{children}</CodeBlock>;
         }
         return <InlineCode {...props}>{children}</InlineCode>;
@@ -283,14 +279,26 @@ export const markdownComponents = {
 
     // Separators
     hr() { return <HorizontalRule />; },
+
+    // Images (chat-pasted images)
+    img({ src, alt }) {
+        return (
+            <img
+                src={src}
+                alt={alt || 'Image'}
+                className="max-w-full max-h-[400px] rounded-xl mt-2 mb-2 border border-slate-700/50 shadow-md"
+                loading="lazy"
+            />
+        );
+    },
 };
 
 // Streaming version (slightly lighter — no line numbers, smaller)
 export const streamingMarkdownComponents = {
     ...markdownComponents,
-    code({ node, inline, className, children, ...props }) {
+    code({ node, className, children, ...props }) {
         const match = /language-(\w+)/.exec(className || '');
-        if (!inline && (match || String(children).includes('\n'))) {
+        if (match || String(children).includes('\n')) {
             return <CodeBlock language={match?.[1]}>{children}</CodeBlock>;
         }
         return <InlineCode {...props}>{children}</InlineCode>;

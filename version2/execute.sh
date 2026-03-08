@@ -62,7 +62,7 @@ echo "Starting Celery Worker..."
 (
     cd "$BACKEND_DIR"
     source .venv/bin/activate
-    watchmedo auto-restart --directory=./ --pattern="*.py" --recursive -- \4
+    watchmedo auto-restart --directory=./ --pattern="*.py" --recursive -- \
         celery -A tasks.celery_app worker --loglevel=info --concurrency=2
 ) &
 CELERY_PID=$!
