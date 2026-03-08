@@ -119,13 +119,6 @@ class TokenData(BaseModel):
 # ---------------------------------------------------
 # PROFILE UPDATE & PASSWORD CHANGE
 # ---------------------------------------------------
-class UserProfileUpdate(BaseModel):
-    username: Optional[str] = Field(None, min_length=2, max_length=50)
-
-    class Config(_Config):
-        pass
-
-
 class PasswordChange(BaseModel):
     old_password: str
     new_password: str = Field(..., min_length=6, max_length=128)
@@ -145,6 +138,5 @@ __all__ = [
     "Token",
     "LoginResponse",
     "TokenData",
-    "UserProfileUpdate",
     "PasswordChange",
 ]

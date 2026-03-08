@@ -42,18 +42,18 @@ const DashboardHeader = ({
         >
             <div className="space-y-2">
                 {/* Personalized Greeting */}
-                <div className="text-2xl font-semibold text-emerald-300 mb-1">
+                <div className="text-3xl font-bold text-emerald-300 mb-1">
                     {getGreeting()}, {userName}!
                 </div>
                 {/* <h1 className="text-4xl font-bold text-white tracking-tight flex items-center gap-3">
                     <Sparkles className="w-10 h-10 text-emerald-400" />
                     DataSage AI
                 </h1> */}
-                <p className="text-slate-400 text-lg">
+                <p className="text-slate-300 text-base font-medium">
                     {selectedDataset?.name ? (
                         <>
                             Intelligent analysis of: <span className="text-slate-200 font-medium">{selectedDataset.name}</span>
-                            <span className="ml-4 text-sm bg-slate-800/50 px-3 py-1 rounded-full border border-slate-700">
+                            <span className="ml-4 text-sm bg-slate-800/50 px-3 py-1 rounded-full border border-slate-700 tabular-nums">
                                 {selectedDataset.row_count || 0} rows • {selectedDataset.column_count || 0} columns
                             </span>
                             {selectedDataset.metadata?.data_quality?.data_cleaning_applied && (
@@ -82,9 +82,9 @@ const DashboardHeader = ({
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
-                <div className="text-right sm:text-left">
-                    <p className="text-sm text-slate-500">Last updated</p>
-                    <p className="text-slate-200 font-medium">
+                <div className="text-right sm:text-left text-sm" aria-live="polite">
+                    <p className="text-slate-500">Last updated</p>
+                    <p className="text-slate-200 font-medium tabular-nums">
                         {new Date().toLocaleTimeString()}
                     </p>
                 </div>
@@ -97,24 +97,30 @@ const DashboardHeader = ({
                             className={`${redesignCount >= MAX_REDESIGNS
                                 ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
                                 : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                                } border border-slate-700 hover:border-slate-600 transition-all duration-200 shadow-lg`}
+                                } border border-slate-700 hover:border-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 transition-[background-color,border-color,color] duration-200 shadow-lg`}
                             title={`Ask AI to redesign this dashboard with fresh analysis (${redesignCount}/${MAX_REDESIGNS} used)`}
+                            aria-busy={layoutLoading}
+                            aria-live="polite"
                         >
                             {layoutLoading ? (
-                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
                             ) : (
-                                <RefreshCw className="w-4 h-4 mr-2" />
+                                <RefreshCw className="w-4 h-4 mr-2" aria-hidden="true" />
                             )}
                             {layoutLoading ? 'Redesigning...' : 'Redesign'}
                         </Button>
 
                         {redesignCount > 0 && (
-                            <div className={`px-3 py-1 rounded-lg text-xs font-medium ${redesignCount >= MAX_REDESIGNS
-                                ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                                : redesignCount >= MAX_REDESIGNS - 1
-                                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                                    : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                                }`}>
+                            <div
+                                className={`px-3 py-1 rounded-lg text-xs font-medium tabular-nums ${redesignCount >= MAX_REDESIGNS
+                                    ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                    : redesignCount >= MAX_REDESIGNS - 1
+                                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                        : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                    }`}
+                                aria-label={`${MAX_REDESIGNS - redesignCount} redesigns remaining out of ${MAX_REDESIGNS}`}
+                                title={`${MAX_REDESIGNS - redesignCount} redesigns remaining`}
+                            >
                                 {redesignCount}/{MAX_REDESIGNS}
                             </div>
                         )}

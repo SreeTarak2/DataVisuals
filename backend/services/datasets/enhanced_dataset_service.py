@@ -1,5 +1,7 @@
 import uuid
 import hashlib
+import tempfile
+import shutil
 from datetime import datetime
 import logging
 from typing import List, Dict, Optional
@@ -86,11 +88,12 @@ class EnhancedDatasetService:
         Security checks:
         1. Validates file extension against whitelist
         2. Enforces file size limit with chunked reading (prevents memory exhaustion)
-        3. Generates content hash for duplicate detection
+        3. Streams file to disk while computing hash (constant memory usage)
         4. Checks if identical dataset already exists
-        5. If new, saves file and creates dataset record
+        5. If new, moves file and creates dataset record
         6. Dispatches background task for processing
         """
+        temp_path = None
         try:
             # --- VALIDATION: File Extension ---
             if not file.filename:
@@ -106,30 +109,42 @@ class EnhancedDatasetService:
                     detail=f"Unsupported file type: .{file_ext}. Allowed types: {', '.join(settings.ALLOWED_FILE_TYPES)}"
                 )
             
-            # --- VALIDATION: File Size (chunked reading to prevent memory exhaustion) ---
+            # --- STREAMING UPLOAD: Write to temp file + compute hash incrementally ---
+            # This uses constant ~1MB memory regardless of file size (vs accumulating entire file)
             max_size = settings.MAX_FILE_SIZE
             chunk_size = 1024 * 1024  # 1MB chunks
-            file_content = b""
+            hasher = hashlib.sha256()
+            total_size = 0
             
-            while True:
-                chunk = await file.read(chunk_size)
-                if not chunk:
-                    break
-                file_content += chunk
-                if len(file_content) > max_size:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"File exceeds maximum size of {max_size // (1024*1024)}MB"
-                    )
+            temp_fd, temp_path = tempfile.mkstemp(suffix=f'.{file_ext}')
+            try:
+                import os as _os
+                with _os.fdopen(temp_fd, 'wb') as tmp_file:
+                    while True:
+                        chunk = await file.read(chunk_size)
+                        if not chunk:
+                            break
+                        total_size += len(chunk)
+                        if total_size > max_size:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"File exceeds maximum size of {max_size // (1024*1024)}MB"
+                            )
+                        hasher.update(chunk)
+                        tmp_file.write(chunk)
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error during file upload: {str(e)}")
             
-            if len(file_content) == 0:
+            if total_size == 0:
                 raise HTTPException(
                     status_code=400,
                     detail="Uploaded file is empty"
                 )
             
             # --- DUPLICATE DETECTION ---
-            content_hash = self._generate_content_hash(file_content)
+            content_hash = hasher.hexdigest()
             existing_dataset = await self._check_duplicate_dataset(content_hash, user_id)
             
             if existing_dataset:
@@ -143,7 +158,10 @@ class EnhancedDatasetService:
                     }
                 )
             
-            file_metadata = await file_storage_service.save_file(file_content, file.filename, user_id)
+            # Move temp file to permanent storage
+            file_metadata = await file_storage_service.save_file_from_path(temp_path, file.filename, user_id)
+            temp_path = None  # File has been moved, don't delete in finally
+            
             dataset_id = str(uuid.uuid4())
             
             dataset_doc = {
@@ -187,6 +205,13 @@ class EnhancedDatasetService:
         except Exception as e:
             logger.error(f"Error in upload_dataset orchestration: {e}")
             raise HTTPException(status_code=500, detail="Failed to initiate dataset upload.")
+        finally:
+            # Clean up temp file on error
+            if temp_path and Path(temp_path).exists():
+                try:
+                    Path(temp_path).unlink()
+                except Exception:
+                    pass
 
     async def get_user_datasets(self, user_id: str, skip: int = 0, limit: int = 100) -> List[Dict]:
         """
@@ -335,24 +360,18 @@ class EnhancedDatasetService:
         """
         Loads the full dataset as a Polars DataFrame for analysis.
         
-        Uses cache service to avoid repeated disk reads for frequently accessed datasets.
-        Cache TTL: 1 hour.
+        Load priority:
+        1. In-memory/Redis cache (fastest, <1ms)
+        2. Parquet file saved by Celery pipeline (fast, <1s for millions of rows)
+        3. Original CSV/Excel file (slowest, fallback)
         
-        Args:
-            dataset_id: Dataset ID to load
-            user_id: User ID for ownership verification
-            
-        Returns:
-            pl.DataFrame: Polars DataFrame containing the dataset
-            
-        Raises:
-            HTTPException: If dataset not found or loading fails
+        Cache TTL: 1 hour.
         """
         import polars as pl
         
         cache_key = f"df:{dataset_id}"
         
-        # Try cache first
+        # 1. Try cache first
         try:
             cached_df = await cache_service.get_dataframe(cache_key)
             if cached_df is not None:
@@ -361,6 +380,7 @@ class EnhancedDatasetService:
         except Exception as e:
             logger.warning(f"Cache read failed for {dataset_id}: {e}")
         
+        file_path = None
         try:
             dataset = await self.get_dataset(dataset_id, user_id)
             file_path = dataset.get("file_path")
@@ -368,19 +388,33 @@ class EnhancedDatasetService:
             if not file_path:
                 raise HTTPException(status_code=404, detail="Dataset file not found.")
             
-            path = Path(file_path)
-            if not path.exists():
-                raise HTTPException(status_code=404, detail="Dataset file not found on disk.")
+            # 2. Try Parquet first (10-50× faster than CSV)
+            parquet_path = dataset.get("parquet_path")
+            df = None
             
-            file_ext = path.suffix.lower()
-            if file_ext == ".csv":
-                df = pl.read_csv(file_path, infer_schema_length=10000)
-            elif file_ext in [".xlsx", ".xls"]:
-                df = pl.read_excel(file_path)
-            elif file_ext == ".json":
-                df = pl.read_json(file_path)
-            else:
-                raise HTTPException(status_code=400, detail=f"Unsupported file format: {file_ext}")
+            if parquet_path and Path(parquet_path).exists():
+                try:
+                    df = pl.read_parquet(parquet_path)
+                    logger.info(f"Loaded Parquet for dataset {dataset_id} ({len(df):,} rows)")
+                except Exception as e:
+                    logger.warning(f"Parquet read failed, falling back to original: {e}")
+                    df = None
+            
+            # 3. Fallback to original file
+            if df is None:
+                path = Path(file_path)
+                if not path.exists():
+                    raise HTTPException(status_code=404, detail="Dataset file not found on disk.")
+                
+                file_ext = path.suffix.lower()
+                if file_ext == ".csv":
+                    df = pl.read_csv(file_path, infer_schema_length=10000)
+                elif file_ext in [".xlsx", ".xls"]:
+                    df = pl.read_excel(file_path)
+                elif file_ext == ".json":
+                    df = pl.read_json(file_path)
+                else:
+                    raise HTTPException(status_code=400, detail=f"Unsupported file format: {file_ext}")
             
             # Cache the DataFrame (async, non-blocking on failure)
             try:

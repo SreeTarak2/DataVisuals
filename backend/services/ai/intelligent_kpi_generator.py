@@ -141,6 +141,9 @@ class IntelligentKPIGenerator:
             result = extract_and_validate(response, KPIGeneratorResponse)
             kpis = result.kpis[:max_kpis]
 
+            # Validate columns exist before any Polars access
+            kpis = self._validate_kpi_columns(df, kpis)
+
             # Compute actual values and real enrichment data
             for kpi in kpis:
                 kpi["value"] = self._calculate_kpi_value(
@@ -162,6 +165,38 @@ class IntelligentKPIGenerator:
     # =========================================================================
     # REAL DATA ENRICHMENT (replaces fake random-based methods)
     # =========================================================================
+
+    def _validate_kpi_columns(
+        self, df: pl.DataFrame, kpis: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Validate that LLM-suggested columns exist in the DataFrame.
+        Skips KPIs with hallucinated columns, clears invalid secondary columns.
+        """
+        valid_columns = set(df.columns)
+        valid_kpis = []
+
+        for kpi in kpis:
+            col = kpi.get("column", "")
+            if col not in valid_columns:
+                logger.warning(
+                    f"LLM hallucinated column: '{col}' — skipping KPI '{kpi.get('title', '?')}'. "
+                    f"Available: {sorted(valid_columns)[:10]}..."
+                )
+                continue
+            sec = kpi.get("secondary_column")
+            if sec and sec not in valid_columns:
+                logger.warning(
+                    f"Secondary column '{sec}' not found for KPI '{kpi.get('title', '?')}' — clearing"
+                )
+                kpi["secondary_column"] = None
+            valid_kpis.append(kpi)
+
+        if len(valid_kpis) < len(kpis):
+            logger.info(
+                f"Column validation: {len(valid_kpis)}/{len(kpis)} KPIs passed validation"
+            )
+        return valid_kpis
 
     def _enrich_with_real_data(
         self, kpi: Dict[str, Any], df: pl.DataFrame, metadata: Dict[str, Any]
@@ -187,17 +222,21 @@ class IntelligentKPIGenerator:
         if comparison is not None:
             kpi["comparison_value"] = comparison["previous"]
             kpi["comparison_label"] = comparison["label"]
+            kpi["delta_percent"] = comparison["delta_percent"]
+            kpi["delta_direction"] = comparison["delta_direction"]
             kpi["context"] = comparison["context"]
         else:
             kpi["comparison_value"] = None
             kpi["comparison_label"] = ""
+            kpi["delta_percent"] = None
+            kpi["delta_direction"] = None
             kpi["context"] = self._calculate_percentile_context(df, column, value, aggregation)
 
         # Percentile position instead of fabricated target
         kpi["target_value"] = None
         kpi["target_label"] = None
 
-        # Real sparkline from actual data
+        # Real sparkline from actual data (prefers time-series binning)
         kpi["sparkline_data"] = self._generate_sparkline_data(df, column, aggregation)
 
     def _calculate_real_comparison(
@@ -205,7 +244,7 @@ class IntelligentKPIGenerator:
     ) -> Optional[Dict[str, Any]]:
         """
         Compare first half vs second half of dataset.
-        Only meaningful if dataset has enough rows and column is numeric.
+        Sorts by datetime column if available for meaningful temporal comparison.
         Returns None if comparison isn't meaningful.
         """
         try:
@@ -216,10 +255,19 @@ class IntelligentKPIGenerator:
             if len(col_data) < 10:
                 return None
 
+            # Sort by datetime column if one exists (critical for temporal accuracy)
+            date_col = None
+            for col_name in df.columns:
+                if df[col_name].dtype in (pl.Date, pl.Datetime):
+                    date_col = col_name
+                    break
+
+            working_df = df.sort(date_col) if date_col else df
+
             # Split into two halves
-            mid = len(df) // 2
-            first_half = df[:mid]
-            second_half = df[mid:]
+            mid = len(working_df) // 2
+            first_half = working_df[:mid]
+            second_half = working_df[mid:]
 
             # Compute aggregation for each half
             val_first = self._compute_agg(first_half, column, aggregation)
@@ -228,13 +276,18 @@ class IntelligentKPIGenerator:
             if val_first is None or val_second is None or val_first == 0:
                 return None
 
-            pct_change = ((val_second - val_first) / abs(val_first)) * 100
-            direction = "↑" if pct_change >= 0 else "↓"
+            delta_pct = round(((val_second - val_first) / abs(val_first)) * 100, 2)
+            direction = "↑" if delta_pct >= 0 else "↓"
+            is_meaningful = date_col is not None
+            label = "vs first half (time-sorted)" if is_meaningful else "vs first half (row order)"
 
             return {
                 "previous": round(val_first, 2),
-                "label": "vs first half",
-                "context": f"{direction}{abs(pct_change):.1f}% vs first half of data",
+                "label": label,
+                "delta_percent": delta_pct,
+                "delta_direction": "up" if delta_pct > 0 else "down" if delta_pct < 0 else "neutral",
+                "is_meaningful": is_meaningful,
+                "context": f"{direction}{abs(delta_pct):.1f}% {label}",
             }
         except Exception as e:
             logger.debug(f"Real comparison failed for {column}: {e}")
@@ -313,15 +366,44 @@ class IntelligentKPIGenerator:
         column: str,
         aggregation: str,
         max_points: int = 12,
-    ) -> List[float]:
+    ) -> Any:
         """
-        Generate sparkline trend data by sampling the column.
-        Uses actual values — no fabrication.
+        Generate sparkline trend data.
+        Prefers time-series binning when a datetime column exists.
+        Falls back to row sampling otherwise.
+        Returns dict with 'data' and 'type' for frontend to label correctly.
         """
         try:
             if column not in df.columns:
                 return []
 
+            # Try time-series binning first (more meaningful sparklines)
+            date_col = None
+            for col_name in df.columns:
+                if df[col_name].dtype in (pl.Date, pl.Datetime):
+                    date_col = col_name
+                    break
+
+            if date_col:
+                try:
+                    binned = (
+                        df.sort(date_col)
+                          .with_columns(pl.col(date_col).cast(pl.Date).alias("_spark_date"))
+                          .group_by_dynamic("_spark_date", every="1mo")
+                          .agg(pl.col(column).mean().alias("_spark_val"))
+                          .sort("_spark_date")
+                          .tail(max_points)
+                    )
+                    values = binned["_spark_val"].drop_nulls().to_list()
+                    if len(values) >= 3:
+                        return {
+                            "data": [round(v, 2) for v in values],
+                            "type": "time_series"
+                        }
+                except Exception:
+                    pass  # fall through to row sampling
+
+            # Fallback: row sampling (existing logic)
             values = df[column].to_list()
             numeric_values = [
                 v for v in values
@@ -332,11 +414,13 @@ class IntelligentKPIGenerator:
             if len(numeric_values) < 3:
                 return []
 
-            # Sample values evenly
             step = max(1, len(numeric_values) // max_points)
             sampled = [numeric_values[i] for i in range(0, len(numeric_values), step)][:max_points]
 
-            return [round(v, 2) if isinstance(v, float) else v for v in sampled]
+            return {
+                "data": [round(v, 2) if isinstance(v, float) else v for v in sampled],
+                "type": "distribution"
+            }
 
         except Exception as e:
             logger.debug(f"Error generating sparkline for {column}: {e}")
@@ -402,8 +486,17 @@ class IntelligentKPIGenerator:
             elif aggregation == "last":
                 return df[column].tail(1)[0]
             elif aggregation == "range":
-                return f"{df[column].min()} – {df[column].max()}"
-            elif aggregation == "pct_change" and secondary:
+                # Return structured data — frontend formats as "min – max"
+                return {
+                    "min": round(float(df[column].min()), 2),
+                    "max": round(float(df[column].max()), 2)
+                }
+            elif aggregation == "pct_change":
+                if not secondary:
+                    logger.warning(
+                        f"pct_change requires secondary_column, none provided for '{column}' — returning None"
+                    )
+                    return None
                 sorted_df = df.sort(secondary)
                 prices = sorted_df[column].to_list()
                 changes = [
@@ -414,12 +507,13 @@ class IntelligentKPIGenerator:
                 return round(sum(changes) / len(changes), 2) if changes else 0
             elif aggregation == "std":
                 return round(float(df[column].std()), 2)
-            elif aggregation == "ratio" and secondary:
+            elif aggregation in ("ratio", "percentage") and secondary:
+                # Unified: always compute as percentage (value * 100)
+                # Eliminates ambiguity — frontend always shows as X%
                 denom = df[secondary].count()
-                return round(df[column].sum() / denom, 2) if denom > 0 else 0
-            elif aggregation == "percentage" and secondary:
-                denom = df[secondary].count()
-                return round((df[column].sum() / denom) * 100, 1) if denom > 0 else 0
+                if denom > 0:
+                    return round((df[column].sum() / denom) * 100, 1)
+                return 0
             else:
                 return df[column].sum()
         except Exception as e:

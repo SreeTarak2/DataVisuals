@@ -16,6 +16,7 @@ Enterprise Features:
 ✓ Smart query routing (QUIS for deep analysis)
 """
 
+import asyncio
 from typing import Any, Dict, Optional, AsyncGenerator, List
 from fastapi import HTTPException
 import logging
@@ -27,6 +28,7 @@ from db.database import get_database
 from services.llm_router import llm_router
 from services.datasets.dataset_loader import load_dataset, create_context_string
 from services.datasets.faiss_vector_service import faiss_vector_service
+from services.memory.memory_service import memory_service
 from services.rag.chunk_service import chunk_service
 from services.rag.reranker_service import reranker_service
 from services.charts.hydrate import hydrate_chart, hydrate_kpi, hydrate_table
@@ -322,6 +324,7 @@ class ContextWindowManager:
         
         # If conversation is short, return all
         if len(messages) <= recent_count + 5:
+            logger.debug(f"ContextWindow: Short conversation ({len(messages)} msgs), keeping all")
             return messages
         
         # Always keep most recent messages
@@ -341,7 +344,12 @@ class ContextWindowManager:
             if len(important) >= max_older:
                 break
         
-        return important + recent
+        optimized = important + recent
+        logger.info(
+            f"ContextWindow: {len(messages)} total msgs → {len(optimized)} optimized "
+            f"({len(important)} important older + {len(recent)} recent)"
+        )
+        return optimized
     
     def _score_message_importance(self, message: Dict) -> int:
         """
@@ -402,11 +410,8 @@ class ContextWindowManager:
         
         summary_text = "\n".join(text_parts)
         
-        prompt = (
-            "Summarize this data analysis conversation in 2 sentences. "
-            "Focus on: what data was explored, key findings, charts created.\n\n"
-            f"{summary_text}"
-        )
+        from core.prompt_templates import get_conversation_summary_prompt
+        prompt = get_conversation_summary_prompt(summary_text)
         
         try:
             # Use fast model for summary (cheap and quick)
@@ -636,10 +641,48 @@ class ResilientChatProcessor:
         }
 
 
-# TODO: use context_manager in process_query_with_execution to manage windowing
-# context_manager = ContextWindowManager()
+# Context window manager for optimized history selection
+context_manager = ContextWindowManager(max_tokens=4000, keep_recent=5)
 # TODO: use resilient_processor in process_chat_message_enhanced for retry/robust processing
 # resilient_processor = ResilientChatProcessor()
+
+
+# -----------------------------------------------------------
+# OFF-TOPIC GUARDRAIL (Word-Boundary Safe)
+# -----------------------------------------------------------
+# Compiled regex patterns for efficient word-boundary matching
+_OFF_TOPIC_PATTERNS = [
+    re.compile(r'\b(hello|hi|hey|howdy)\b'),
+    re.compile(r'\bgood\s+(morning|evening|afternoon|night)\b'),
+    re.compile(r'\bhow\s+are\s+you\b'),
+    re.compile(r'\bthank\s*(you|s)\b'),
+    re.compile(r'\b(bye|goodbye|see\s+you)\b'),
+    re.compile(r'\bwho\s+is\b'),
+    re.compile(r'\bwhat\s+is\s+the\s+capital\b'),
+    re.compile(r'\b(prime\s+minister|president)\b'),
+    re.compile(r'\b(weather|joke|news)\b'),
+    re.compile(r'\btell\s+me\s+a\b'),
+    re.compile(r'\bwhat\s+time\b'),
+    re.compile(r'\bstock\s+(price|market)\b'),
+    re.compile(r'\bwho\s+are\s+you\b'),
+    re.compile(r'\bwhat\s+can\s+you\s+do\b'),
+]
+
+def _is_off_topic(query_lower: str) -> bool:
+    """
+    Check if query is off-topic using word-boundary regex matching.
+    
+    This prevents false positives like:
+    - "help me analyze sales" matching "help me"
+    - "this is great" matching "hi " (substring)
+    - "highest revenue" matching "hi " (substring)
+    
+    Returns True only for clearly off-topic queries.
+    Short queries (<5 chars) are also considered off-topic.
+    """
+    if len(query_lower.strip()) < 5:
+        return True
+    return any(p.search(query_lower) for p in _OFF_TOPIC_PATTERNS)
 
 
 class AIService:
@@ -730,6 +773,39 @@ class AIService:
             logger.warning(f"RAG retrieval failed, using fallback: {e}")
             return create_context_string(metadata)
 
+    @staticmethod
+    def _normalize_response_style(text: str) -> str:
+        """Apply lightweight style guardrails to narrative responses."""
+        if not text:
+            return text
+
+        cleaned = text.strip()
+        cleaned = re.sub(
+            r"(?i)^\s*(based on the (?:data|results|analysis|information)"
+            r"|according to (?:the )?(?:data|results)"
+            r"|the (?:data|results) show(?:s)?"
+            r"|looking at the (?:data|results))[\s,:-]*",
+            "",
+            cleaned,
+        )
+        cleaned = re.sub(r"(?i)^that\s+", "", cleaned)
+
+        rewrites = [
+            (r"(?i)\bwithout (?:a )?doubt\b", "based on available data"),
+            (r"(?i)\bdefinitely\b", "likely"),
+            (r"(?i)\bcertainly\b", "likely"),
+            (r"(?i)\babsolutely\b", "strongly"),
+            (r"(?i)\balways\b", "consistently"),
+            (r"(?i)\bnever fail\b", "rarely fail"),
+            (r"(?i)\bcannot compute\b", "cannot reliably estimate"),
+            (r"(?i)\bcannot determine\b", "cannot reliably infer"),
+            (r"(?i)\bunable to (answer|provide|determine)\b", "not supported well enough to \\1"),
+        ]
+        for pattern, replacement in rewrites:
+            cleaned = re.sub(pattern, replacement, cleaned)
+
+        return cleaned
+
     # -----------------------------------------------------------
     # CHAT PROCESSING PIPELINE
     # -----------------------------------------------------------
@@ -788,13 +864,7 @@ class AIService:
         query_lower = query.lower()
 
         # --- INTENT GUARDRAIL: Reject off-topic queries ---
-        off_topic_triggers = [
-            "hello", "hi ", "hey ", "good morning", "good evening", "how are you",
-            "thank you", "thanks", "who is", "what is the capital", "prime minister",
-            "president", "weather", "joke", "tell me a", "what time", "news", "stock",
-            "who are you", "what can you do", "help me", "how do i", "bye", "goodbye"
-        ]
-        if any(trigger in query_lower for trigger in off_topic_triggers) or len(query_lower) < 5:
+        if _is_off_topic(query_lower) and not is_data_related_query(query):
             guardrail_response = (
                 "I'm a specialized data analytics assistant. I can help with trends, charts, "
                 "forecasts, correlations, or insights from your dataset.\n\n"
@@ -834,6 +904,7 @@ class AIService:
         
         # --- Standard Chat Pipeline ---
         # Load or create conversation
+        conv = await load_or_create_conversation(conversation_id, user_id, dataset_id)
         messages = conv.get("messages", [])
         messages.append({"role": "user", "content": query})
 
@@ -854,7 +925,12 @@ class AIService:
         messages[-1]["content"] = enhanced_query
 
         factory = PromptFactory(dataset_metadata=metadata)
-        prompt = factory.get_prompt(PromptType.CONVERSATIONAL, user_message=enhanced_query, history=messages)
+        optimized_messages = context_manager.optimize_history(messages)
+        
+        # Retrieve relevant memories for context-aware responses
+        memories = await memory_service.retrieve_relevant_memories(query, user_id, dataset_id)
+        
+        prompt = factory.get_prompt(PromptType.CONVERSATIONAL, user_message=enhanced_query, history=optimized_messages, memories=memories)
 
         llm_response = await llm_router.call(prompt, model_role="chart_engine", expect_json=True)
 
@@ -885,7 +961,7 @@ class AIService:
         # Clean up JSON-escaped newlines (literal \n from JSON string values)
         # but PRESERVE real newlines — they are markdown formatting (headers, bullets, etc.)
         ai_text = ai_text.replace("\\n", "\n")
-        ai_text = ai_text.strip()
+        ai_text = self._normalize_response_style(ai_text.strip())
         
         logger.info(f"Extracted ai_text ({len(ai_text)} chars): {ai_text[:200]}...")
         
@@ -962,6 +1038,7 @@ class AIService:
                         self.columns = columns.copy()
                         self.aggregation = aggregation
                         self.group_by = None
+                        self.title = None
                 
                 hydration_config = HydrationConfig(
                     chart_type=chart_type,
@@ -1005,6 +1082,11 @@ class AIService:
         
         messages.append(ai_message)
         await save_conversation(conv["_id"], messages)
+        
+        # Async memory extraction (fire-and-forget, non-blocking)
+        asyncio.create_task(
+            memory_service.extract_and_store(query, ai_text, user_id, dataset_id)
+        )
 
         response_data = {
             "response": ai_text,
@@ -1127,25 +1209,26 @@ class AIService:
                         max_display_rows=10
                     ))
                 
-                # Add SQL for transparency
-                if result.get("sql"):
-                    response_parts.append("\n\n<details><summary>📝 View SQL Query</summary>\n\n```sql\n")
-                    response_parts.append(result["sql"])
-                    response_parts.append("\n```\n</details>")
-                
                 ai_text = "".join(response_parts)
                 
                 # Try to generate appropriate chart if enough data
                 chart_data = None
-                if result.get("data") and len(result["data"]) >= 2:
+                _chart_intent = bool(re.search(
+                    r'(?i)\b(chart|plot|graph|visuali[sz]e?|bar|line|pie|scatter|histogram|heatmap)\b',
+                    query
+                ))
+                _min_rows = 1 if _chart_intent else 2
+                if result.get("data") and len(result["data"]) >= _min_rows:
                     chart_data = await self._generate_chart_for_results(
-                        result["data"], 
+                        result["data"],
                         result.get("columns", []),
                         query
                     )
                 
                 # Save to conversation
                 ai_message = {"role": "ai", "content": ai_text}
+                if result.get("sql"):
+                    ai_message["sql"] = result["sql"]
                 if chart_data:
                     ai_message["chart_config"] = chart_data
                 messages.append(ai_message)
@@ -1176,10 +1259,16 @@ class AIService:
         enhanced_query = await rewrite_query(query, dataset_context)
         
         factory = PromptFactory(dataset_metadata=metadata)
+        optimized_messages = context_manager.optimize_history(messages)
+        
+        # Retrieve relevant memories for context-aware responses
+        memories = await memory_service.retrieve_relevant_memories(query, user_id, dataset_id)
+        
         prompt = factory.get_prompt(
             PromptType.CONVERSATIONAL, 
             user_message=enhanced_query, 
-            history=messages[-10:]  # Last 10 messages for context
+            history=optimized_messages,  # Smart context selection instead of naive slice
+            memories=memories
         )
         
         llm_response = await llm_router.call(
@@ -1191,11 +1280,17 @@ class AIService:
         )
         
         ai_text = llm_response if isinstance(llm_response, str) else str(llm_response)
+        ai_text = self._normalize_response_style(ai_text)
         
         # Save to conversation
         ai_message = {"role": "ai", "content": ai_text}
         messages.append(ai_message)
         await save_conversation(conv["_id"], messages)
+        
+        # Async memory extraction (fire-and-forget, non-blocking)
+        asyncio.create_task(
+            memory_service.extract_and_store(query, ai_text, user_id, dataset_id)
+        )
         
         return {
             "response": ai_text,
@@ -1214,71 +1309,140 @@ class AIService:
     ) -> Optional[Dict]:
         """
         Generate an appropriate chart for query results.
+        Robust to Polars dtype aliases, SQL expression column names, and single-row results.
         """
         try:
-            if not data or len(data) < 2:
+            if not data:
                 return None
-            
+
             df = pl.DataFrame(data)
-            
-            # Determine chart type based on data structure
-            numeric_cols = [name for name, dtype in zip(df.columns, df.dtypes) if dtype in pl.NUMERIC_DTYPES]
-            categorical_cols = [name for name, dtype in zip(df.columns, df.dtypes) if dtype == pl.Utf8]
-            
-            if not numeric_cols:
+            if df.is_empty():
                 return None
-            
-            # Simple heuristics for chart type
-            if len(df) <= 10 and categorical_cols:
-                # Categorical data with few rows → bar chart
-                chart_type = "bar"
-                x_col = categorical_cols[0] if categorical_cols else columns[0]
+
+            # --- Robust dtype detection (handles pl.Utf8 / pl.String aliases) ---
+            def _is_string(dtype) -> bool:
+                try:
+                    return dtype in (pl.Utf8, pl.String, pl.Categorical)
+                except Exception:
+                    return str(dtype).lower() in ("utf8", "string", "categorical")
+
+            def _is_numeric(dtype) -> bool:
+                try:
+                    return dtype in pl.NUMERIC_DTYPES
+                except Exception:
+                    return str(dtype).lower() in ("int32", "int64", "float32", "float64", "uint32", "uint64")
+
+            numeric_cols = [name for name, dtype in zip(df.columns, df.dtypes) if _is_numeric(dtype)]
+            categorical_cols = [name for name, dtype in zip(df.columns, df.dtypes) if _is_string(dtype)]
+
+            if not numeric_cols:
+                logger.warning("_generate_chart_for_results: no numeric columns found, skipping chart")
+                return None
+
+            # --- Chart-type intent from query ---
+            query_lower = query.lower()
+            forced_type = None
+            if re.search(r'\bline\b', query_lower):
+                forced_type = "line"
+            elif re.search(r'\bpie\b', query_lower):
+                forced_type = "pie"
+            elif re.search(r'\bscatter\b', query_lower):
+                forced_type = "scatter"
+            elif re.search(r'\bhistogram\b', query_lower):
+                forced_type = "histogram"
+
+            # --- Column selection ---
+            has_temporal = any(
+                re.search(r'(date|time|year|month|quarter|week)', c.lower())
+                for c in df.columns
+            )
+
+            if forced_type == "pie":
+                chart_type = "pie"
+                x_col = categorical_cols[0] if categorical_cols else df.columns[0]
                 y_col = numeric_cols[0]
-            elif len(df) > 10:
-                # Many rows → line chart (if ordered) or scatter
-                chart_type = "line" if "date" in str(columns).lower() or "time" in str(columns).lower() else "bar"
-                x_col = columns[0]
+            elif len(df) <= 15 and categorical_cols:
+                chart_type = forced_type or "bar"
+                x_col = categorical_cols[0]
+                y_col = numeric_cols[0]
+            elif has_temporal:
+                chart_type = forced_type or "line"
+                temporal_cols = [c for c in df.columns if re.search(r'(date|time|year|month|quarter|week)', c.lower())]
+                x_col = temporal_cols[0] if temporal_cols else df.columns[0]
                 y_col = numeric_cols[0]
             else:
-                chart_type = "bar"
-                x_col = columns[0]
-                y_col = numeric_cols[0] if numeric_cols else columns[1] if len(columns) > 1 else columns[0]
-            
-            # Build Plotly chart data
-            x_data = df[x_col].to_list() if x_col in df.columns else []
-            y_data = df[y_col].to_list() if y_col in df.columns else []
-            
-            if not x_data or not y_data:
-                return None
-            
-            trace = {
-                "x": x_data[:50],  # Limit to 50 points
-                "y": y_data[:50],
-                "type": chart_type,
-                "name": y_col
-            }
-            
-            if chart_type == "bar":
-                trace["marker"] = {"color": "#8b5cf6"}
-            elif chart_type == "line":
-                trace["line"] = {"color": "#8b5cf6", "width": 2}
-            
-            return {
-                "data": [trace],
-                "layout": {
-                    "title": f"Query Results",
-                    "xaxis": {"title": x_col},
-                    "yaxis": {"title": y_col},
-                    "paper_bgcolor": "rgba(0,0,0,0)",
-                    "plot_bgcolor": "rgba(0,0,0,0)",
-                    "font": {"color": "#e2e8f0"},
-                    "height": 400,
-                    "margin": {"t": 50, "b": 50, "l": 60, "r": 20}
+                chart_type = forced_type or ("scatter" if len(numeric_cols) >= 2 else "bar")
+                x_col = categorical_cols[0] if categorical_cols else df.columns[0]
+                y_col = numeric_cols[0]
+
+            # --- Clean display label (strip SQL expressions like avg(...)) ---
+            def _clean_label(col: str) -> str:
+                cleaned = re.sub(r'^(avg|sum|count|min|max|total)\s*[_(]', '', col, flags=re.IGNORECASE)
+                cleaned = re.sub(r'[()\[\]]', '', cleaned).strip().replace('_', ' ').title()
+                return cleaned or col
+
+            # Validate columns exist in df
+            if x_col not in df.columns:
+                x_col = df.columns[0]
+            if y_col not in df.columns:
+                y_col = df.columns[-1]
+
+            # --- Build Plotly trace ---
+            if chart_type == "pie":
+                labels = df[x_col].cast(pl.String).to_list()
+                values = [float(v) if v is not None else 0.0 for v in df[y_col].to_list()]
+                trace = {
+                    "labels": labels[:30],
+                    "values": values[:30],
+                    "type": "pie",
+                    "name": _clean_label(y_col),
+                    "textinfo": "label+percent",
                 }
+            else:
+                x_data = df[x_col].cast(pl.String).to_list() if _is_string(df[x_col].dtype) else df[x_col].to_list()
+                y_data = [float(v) if v is not None else 0.0 for v in df[y_col].to_list()]
+
+                if not x_data or not y_data:
+                    return None
+
+                trace = {
+                    "x": x_data[:50],
+                    "y": y_data[:50],
+                    "type": chart_type,
+                    "name": _clean_label(y_col),
+                }
+                if chart_type == "bar":
+                    trace["marker"] = {"color": "#8b5cf6"}
+                    # Sort by value descending for readability
+                    pairs = sorted(zip(trace["x"], trace["y"]), key=lambda p: p[1] if p[1] is not None else 0, reverse=True)
+                    trace["x"], trace["y"] = [p[0] for p in pairs], [p[1] for p in pairs]
+                elif chart_type == "line":
+                    trace["line"] = {"color": "#8b5cf6", "width": 2}
+                elif chart_type == "scatter":
+                    trace["mode"] = "markers"
+                    trace["marker"] = {"color": "#8b5cf6", "size": 8}
+
+            # --- Derive title from query ---
+            title = re.sub(r'(?i)(create the most informative chart for|create a chart|plot|show me a|visuali[sz]e?)', '', query).strip()
+            title = title[:60].strip().rstrip('.')
+
+            layout = {
+                "title": title or "Query Results",
+                "paper_bgcolor": "rgba(0,0,0,0)",
+                "plot_bgcolor": "rgba(0,0,0,0)",
+                "font": {"color": "#e2e8f0"},
+                "height": 400,
+                "margin": {"t": 50, "b": 80, "l": 60, "r": 20},
             }
-            
+            if chart_type != "pie":
+                layout["xaxis"] = {"title": _clean_label(x_col), "tickangle": -30}
+                layout["yaxis"] = {"title": _clean_label(y_col)}
+
+            logger.info(f"Chart generated: type={chart_type}, x={x_col}, y={y_col}, rows={len(df)}")
+            return {"data": [trace], "layout": layout}
+
         except Exception as e:
-            logger.error(f"Error generating chart for results: {e}")
+            logger.error(f"Error generating chart for results: {e}", exc_info=True)
             return None
 
     async def generate_ai_dashboard(
@@ -1465,23 +1629,31 @@ class AIService:
         """
         from services.response_cache import response_cache, fallback_generator
         
+        # Determine query type early: similar-cache should not be used for SQL analytics queries
+        needs_sql = query_classifier.needs_sql_execution(query)
+
         # Step 1: Check cache for exact or similar match
-        cached_response = response_cache.get(query, dataset_id)
+        cached_response = response_cache.get(query, dataset_id, mode=mode)
         if cached_response:
             logger.info("Returning cached response")
             cached_response["is_cached"] = True
             return cached_response
         
-        # Step 2: Check for similar cached queries
-        similar_response = response_cache.find_similar(query, dataset_id, threshold=0.75)
-        if similar_response:
-            logger.info("Returning similar cached response")
-            similar_response["is_cached"] = True
-            similar_response["is_similar_match"] = True
-            return similar_response
+        # Step 2: Check for similar cached queries (only for non-SQL conversational prompts)
+        if not needs_sql:
+            similar_response = response_cache.find_similar(
+                query,
+                dataset_id,
+                mode=mode,
+                threshold=0.75
+            )
+            if similar_response:
+                logger.info("Returning similar cached response")
+                similar_response["is_cached"] = True
+                similar_response["is_similar_match"] = True
+                return similar_response
         
-        # Step 3: Determine if query needs SQL execution
-        needs_sql = query_classifier.needs_sql_execution(query)
+        # Step 3: Query type already determined above
         
         # Step 4: Process with appropriate method
         try:
@@ -1503,10 +1675,17 @@ class AIService:
                     user_id=user_id,
                     conversation_id=conversation_id
                 )
+
+            # Normalize narrative style consistently across response paths.
+            if isinstance(response, dict):
+                if isinstance(response.get("response"), str):
+                    response["response"] = self._normalize_response_style(response["response"])
+                if isinstance(response.get("response_text"), str):
+                    response["response_text"] = self._normalize_response_style(response["response_text"])
             
             # Cache successful response
             if response and response.get("response"):
-                response_cache.set(query, dataset_id, response)
+                response_cache.set(query, dataset_id, response, mode=mode)
             
             return response
             
@@ -1644,14 +1823,16 @@ class AIService:
         """
         query_lower = query.strip().lower()
 
-        off_topic_triggers = [
-            "hello", "hi ", "hey ", "good morning", "good evening", "how are you",
-            "thank you", "thanks", "who is", "what is the capital", "prime minister",
-            "president", "weather", "joke", "tell me a", "what time", "news", "stock",
-            "who are you", "what can you do", "help me", "how do i", "bye", "goodbye"
-        ]
+        # --- SECURITY: Sanitize user input to prevent prompt injection ---
+        try:
+            query = sanitize_user_input(query)
+            query_lower = query.lower()
+        except ValueError as e:
+            yield {"type": "error", "content": f"Invalid query: {str(e)}"}
+            return
 
-        if any(trigger in query_lower for trigger in off_topic_triggers) or len(query_lower) < 5:
+        # --- INTENT GUARDRAIL: Reject off-topic queries ---
+        if _is_off_topic(query_lower) and not is_data_related_query(query):
             guardrail_response = (
                 "I'm a specialized data analytics assistant. I can help with trends, charts, "
                 "forecasts, correlations, or insights from your dataset.\n\n"
@@ -1676,7 +1857,99 @@ class AIService:
             yield {"type": "error", "content": "Dataset is still being processed"}
             return
 
-        dataset_context = create_context_string(metadata)
+        # --- DEEP ANALYSIS ROUTER: Route complex queries to QUIS ---
+        routing_info = DeepAnalysisRouter.get_routing_info(query)
+        if routing_info["route_to_quis"]:
+            logger.info(f"Streaming: Routing to QUIS for deep analysis: {routing_info['reason']}")
+            try:
+                from services.agents.quis_graph import run_quis_analysis
+                quis_result = await run_quis_analysis(
+                    dataset_id=dataset_id,
+                    user_id=user_id,
+                    query=query,
+                    novelty_threshold=0.35
+                )
+                quis_text = quis_result.get("response", "Analysis complete.")
+                # Stream QUIS response word-by-word for consistent UX
+                words = quis_text.split()
+                for i, word in enumerate(words):
+                    token = word + (" " if i < len(words) - 1 else "")
+                    yield {"type": "token", "content": token}
+                yield {"type": "response_complete", "full_response": quis_text}
+                # Handle QUIS charts
+                quis_charts = quis_result.get("charts", [])
+                if quis_charts:
+                    yield {"type": "chart", "chart_config": quis_charts[0]}
+                # Save to conversation
+                messages.append({"role": "ai", "content": quis_text})
+                await save_conversation(conv["_id"], messages)
+                yield {"type": "done", "conversation_id": str(conv["_id"]), "chart_config": quis_charts[0] if quis_charts else None}
+                return
+            except ImportError as e:
+                logger.warning(f"LangGraph not available, falling back to streaming: {e}")
+            except Exception as e:
+                logger.error(f"QUIS analysis failed, falling back to streaming: {e}", exc_info=True)
+
+        # --- SQL EXECUTION PATH (grounded, actual data) — same as HTTP for data questions ---
+        needs_sql = query_classifier.needs_sql_execution(query)
+        if needs_sql:
+            file_path = dataset_doc.get("file_path")
+            if file_path:
+                try:
+                    df = await load_dataset(file_path)
+                    result = await query_executor.execute_query(
+                        query=query,
+                        df=df,
+                        dataset_id=dataset_id,
+                        return_raw=False
+                    )
+                    if result.get("success") and result.get("response"):
+                        ai_text = result["response"]
+                        if result.get("data") and len(result["data"]) > 1:
+                            ai_text += "\n\n---\n\n**Query Results:**\n"
+                            ai_text += query_executor.format_results(
+                                pl.DataFrame(result["data"]) if result["data"] else pl.DataFrame(),
+                                max_display_rows=10
+                            )
+                        chart_data = None
+                        _chart_intent = bool(re.search(
+                            r'(?i)\b(chart|plot|graph|visuali[sz]e?|bar|line|pie|scatter|histogram|heatmap)\b',
+                            query
+                        ))
+                        _min_rows = 1 if _chart_intent else 2
+                        if result.get("data") and len(result["data"]) >= _min_rows:
+                            chart_data = await self._generate_chart_for_results(
+                                result["data"],
+                                result.get("columns", []),
+                                query
+                            )
+                        # Stream the pre-computed answer token-by-token for consistent UX
+                        words = ai_text.split()
+                        for i, word in enumerate(words):
+                            token = word + (" " if i < len(words) - 1 else "")
+                            yield {"type": "token", "content": token}
+                        yield {"type": "response_complete", "full_response": ai_text}
+                        if chart_data:
+                            yield {"type": "chart", "chart_config": chart_data}
+                        ai_message = {"role": "ai", "content": ai_text}
+                        if result.get("sql"):
+                            ai_message["sql"] = result["sql"]
+                        if chart_data:
+                            ai_message["chart_config"] = chart_data
+                        messages.append(ai_message)
+                        await save_conversation(conv["_id"], messages)
+                        yield {
+                            "type": "done",
+                            "conversation_id": str(conv["_id"]),
+                            "chart_config": chart_data,
+                            "sql": result.get("sql"),
+                        }
+                        return
+                except Exception as e:
+                    logger.warning(f"Streaming SQL execution failed, falling back to LLM: {e}")
+
+        # --- RAG context retrieval ---
+        dataset_context = await self._get_rag_context(query, dataset_id, user_id, metadata)
 
         # Rewrite query internally for better LLM understanding (NOT shown to user)
         enhanced_query = await rewrite_query(query, dataset_context)
@@ -1687,7 +1960,12 @@ class AIService:
         # Only use enhanced_query for the LLM prompt
 
         factory = PromptFactory(dataset_metadata=metadata)
-        prompt = factory.get_prompt(PromptType.CONVERSATIONAL, user_message=enhanced_query, history=messages)
+        optimized_messages = context_manager.optimize_history(messages)
+        
+        # Retrieve relevant memories for context-aware responses
+        memories = await memory_service.retrieve_relevant_memories(query, user_id, dataset_id)
+        
+        prompt = factory.get_prompt(PromptType.CONVERSATIONAL, user_message=enhanced_query, history=optimized_messages, memories=memories)
 
         # Analyze query complexity for adaptive formatting
         query_complexity = QueryComplexityAnalyzer.classify(query)
@@ -1717,11 +1995,11 @@ class AIService:
             error_str = str(e)
             logger.error(f"Streaming error: {e}", exc_info=True)
             
+            from services.response_cache import fallback_generator, response_cache
+            
             # Handle rate limit errors gracefully with fallback
             if "429" in error_str or "rate" in error_str.lower() or "limit" in error_str.lower():
                 logger.warning("Rate limit hit during streaming, providing fallback response")
-                from services.response_cache import fallback_generator, response_cache
-                
                 response_cache.mark_rate_limited("openrouter", retry_after_seconds=1800)
                 
                 fallback = fallback_generator.generate(
@@ -1742,22 +2020,51 @@ class AIService:
                 yield {"type": "done", "conversation_id": conversation_id, "chart_config": None}
                 return
             
-            # For other errors, yield error and return
+            # Handle DNS / network / unavailable errors with contextual fallback
+            if any(signal in error_str.lower() for signal in [
+                "name resolution", "dns", "unavailable", "timeout",
+                "connection", "connect", "unreachable", "503", "502",
+                "network", "refused", "reset"
+            ]):
+                logger.warning(f"Network/availability error during streaming, providing fallback: {error_str[:100]}")
+                
+                fallback = fallback_generator.generate(
+                    query=query,
+                    dataset_metadata=metadata,
+                    error_type="unavailable"
+                )
+                
+                fallback_text = fallback.get("response", "I'm temporarily unable to reach my AI models. Please try again in a moment.")
+                
+                words = fallback_text.split()
+                for i, word in enumerate(words):
+                    token = word + (" " if i < len(words) - 1 else "")
+                    yield {"type": "token", "content": token}
+                
+                yield {"type": "response_complete", "full_response": fallback_text}
+                yield {"type": "done", "conversation_id": conversation_id, "chart_config": None}
+                return
+            
+            # For all other errors, yield a user-friendly error
             yield {"type": "error", "content": self._format_user_friendly_error(error_str, 500)}
             return
 
         chart_data = None
-        chart_keywords = ["chart", "histogram", "bar", "pie", "scatter", "line", "plot", "visualization"]
+        chart_keywords = ["chart", "histogram", "bar", "pie", "scatter", "line", "plot", "visualization",
+                          "distribution", "trend", "breakdown", "comparison", "correlation"]
         should_generate_chart = any(kw in full_response.lower() for kw in chart_keywords)
         
         if should_generate_chart:
             try:
-                chart_prompt = f"""Based on this response: "{full_response[:500]}"
-                
-Generate a chart configuration JSON for the dataset with columns: {metadata.get('column_names', [])[:10]}
+                from core.prompt_templates import get_streaming_chart_prompt
 
-Return ONLY valid JSON with this structure:
-{{"chart_config": {{"type": "bar|line|pie|histogram|scatter", "x": "column_name", "y": "column_name", "title": "Chart Title"}}}}"""
+                # Build rich column metadata for smarter chart config
+                col_metadata = metadata.get("column_metadata", [])
+                chart_prompt = get_streaming_chart_prompt(
+                    full_response,
+                    metadata.get("column_names", []),
+                    column_metadata=col_metadata if col_metadata else None,
+                )
 
                 chart_response = await llm_router.call(
                     chart_prompt, 
@@ -1791,18 +2098,84 @@ Return ONLY valid JSON with this structure:
                             "pie": ChartType.PIE,
                             "scatter": ChartType.SCATTER,
                             "histogram": ChartType.HISTOGRAM,
+                            "heatmap": ChartType.HEATMAP,
+                            "box_plot": ChartType.BOX_PLOT,
+                            "treemap": ChartType.TREEMAP,
+                            "grouped_bar": ChartType.GROUPED_BAR,
+                            "area": ChartType.AREA,
+                        }
+
+                        agg_map = {
+                            "sum": AggregationType.SUM,
+                            "mean": AggregationType.MEAN,
+                            "count": AggregationType.COUNT,
+                            "nunique": AggregationType.NUNIQUE,
                         }
                         
-                        chart_type = chart_type_map.get(
-                            chart_config_raw.get("type", "bar").lower(), 
-                            ChartType.BAR
-                        )
+                        raw_type = chart_config_raw.get("type", "bar").lower()
+                        chart_type = chart_type_map.get(raw_type, ChartType.BAR)
+
+                        # --- Smart aggregation selection ---
+                        raw_agg = chart_config_raw.get("aggregation", "").lower()
+                        aggregation = agg_map.get(raw_agg, None)
+
+                        if aggregation is None:
+                            # Infer from y-column data type / name
+                            y_col = chart_config_raw.get("y", "")
+                            if y_col and y_col in df.columns:
+                                from services.charts.hydrate import NUMERIC_DTYPES
+                                y_lower = y_col.lower()
+                                if df[y_col].dtype not in NUMERIC_DTYPES:
+                                    aggregation = AggregationType.COUNT
+                                elif any(kw in y_lower for kw in ("rate", "avg", "mean", "score", "rating", "percent", "ratio")):
+                                    aggregation = AggregationType.MEAN
+                                else:
+                                    aggregation = AggregationType.SUM
+                            else:
+                                aggregation = AggregationType.COUNT
                         
                         columns = []
-                        if "x" in chart_config_raw:
-                            columns.append(chart_config_raw["x"])
-                        if "y" in chart_config_raw:
-                            columns.append(chart_config_raw["y"])
+                        x_col = chart_config_raw.get("x")
+                        y_col = chart_config_raw.get("y")
+
+                        if x_col and x_col in df.columns:
+                            columns.append(x_col)
+                        if y_col and y_col in df.columns:
+                            columns.append(y_col)
+
+                        # Fallback: if we have < 2 columns, try to pick sensible defaults
+                        if len(columns) < 2 and raw_type != "histogram":
+                            from services.charts.hydrate import NUMERIC_DTYPES, CATEGORICAL_DTYPES
+                            string_types = tuple(
+                                t for t in (
+                                    getattr(pl, "Utf8", None),
+                                    getattr(pl, "String", None),
+                                    getattr(pl, "Categorical", None),
+                                ) if t is not None
+                            )
+                            def _is_categorical_dtype(dtype: Any) -> bool:
+                                return (
+                                    dtype in CATEGORICAL_DTYPES
+                                    or dtype in string_types
+                                    or str(dtype).lower() in ("utf8", "string", "categorical")
+                                )
+                            cat_cols = [c for c in df.columns if _is_categorical_dtype(df[c].dtype)]
+                            num_cols = [c for c in df.columns if df[c].dtype in NUMERIC_DTYPES]
+                            # Don't pick ID-like columns
+                            cat_cols = [c for c in cat_cols if "id" not in c.lower() or len(c) > 5]
+                            if not columns and cat_cols and num_cols:
+                                columns = [cat_cols[0], num_cols[0]]
+                            elif len(columns) == 1 and columns[0] in [c for c in cat_cols] and num_cols:
+                                columns.append(num_cols[0])
+                            elif len(columns) == 1 and columns[0] in [c for c in num_cols] and cat_cols:
+                                columns.insert(0, cat_cols[0])
+
+                        if raw_type == "histogram" and len(columns) < 1:
+                            # Histogram only needs 1 numeric column
+                            from services.charts.hydrate import NUMERIC_DTYPES
+                            num_cols = [c for c in df.columns if df[c].dtype in NUMERIC_DTYPES]
+                            if num_cols:
+                                columns = [num_cols[0]]
                         
                         class HydrationConfig:
                             def __init__(self, chart_type, columns, aggregation):
@@ -1810,31 +2183,45 @@ Return ONLY valid JSON with this structure:
                                 self.columns = columns.copy()
                                 self.aggregation = aggregation
                                 self.group_by = None
+                                self.title = None
                         
                         from services.charts.hydrate import hydrate_chart
                         hydration_config = HydrationConfig(
                             chart_type=chart_type,
                             columns=columns,
-                            aggregation=AggregationType.SUM
+                            aggregation=aggregation
                         )
+
+                        logger.info(f"Streaming chart hydration: type={raw_type}, cols={columns}, agg={aggregation}")
                         
-                        chart_traces = hydrate_chart(df, hydration_config)
-                        
-                        chart_data = {
-                            "data": chart_traces,
-                            "layout": {
-                                "title": chart_config_raw.get("title", ""),
-                                "xaxis": {"title": chart_config_raw.get("x", "X")},
-                                "yaxis": {"title": chart_config_raw.get("y", "Y")},
-                                "paper_bgcolor": "rgba(0,0,0,0)",
-                                "plot_bgcolor": "rgba(0,0,0,0)",
-                                "font": {"color": "#e2e8f0"},
-                                "height": 400,
-                                "margin": {"t": 50, "b": 50, "l": 60, "r": 20}
+                        chart_traces, rows_used = hydrate_chart(df, hydration_config)
+
+                        # Validate traces have actual data before sending
+                        has_data = any(
+                            (t.get("x") and len(t["x"]) > 0) or
+                            (t.get("labels") and len(t["labels"]) > 0) or
+                            (t.get("y") and len(t["y"]) > 0)
+                            for t in chart_traces
+                        ) if chart_traces else False
+
+                        if has_data:
+                            chart_data = {
+                                "data": chart_traces,
+                                "layout": {
+                                    "title": chart_config_raw.get("title", ""),
+                                    "xaxis": {"title": chart_config_raw.get("x", "")},
+                                    "yaxis": {"title": chart_config_raw.get("y", "")},
+                                    "paper_bgcolor": "rgba(0,0,0,0)",
+                                    "plot_bgcolor": "rgba(0,0,0,0)",
+                                    "font": {"color": "#e2e8f0"},
+                                    "height": 400,
+                                    "margin": {"t": 50, "b": 50, "l": 60, "r": 20}
+                                }
                             }
-                        }
-                        
-                        yield {"type": "chart", "chart_config": chart_data}
+                            
+                            yield {"type": "chart", "chart_config": chart_data}
+                        else:
+                            logger.warning(f"Chart hydration produced empty traces, skipping chart. cols={columns}")
                         
             except Exception as e:
                 logger.warning(f"Chart generation failed during streaming: {e}")
@@ -1848,6 +2235,11 @@ Return ONLY valid JSON with this structure:
             
         messages.append(ai_message)
         await save_conversation(conv["_id"], messages)
+        
+        # Async memory extraction (fire-and-forget, non-blocking)
+        asyncio.create_task(
+            memory_service.extract_and_store(query, full_response, user_id, dataset_id)
+        )
 
         yield {
             "type": "done",

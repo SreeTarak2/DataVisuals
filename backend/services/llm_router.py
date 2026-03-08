@@ -1,6 +1,8 @@
+import asyncio
 import httpx
 import json
 import logging
+import time
 from typing import Any, Dict, Optional, List
 from datetime import datetime, timedelta
 from fastapi import HTTPException
@@ -21,6 +23,24 @@ class LLMRouter:
         # Load OpenRouter model configurations
         self.openrouter_models = settings.OPENROUTER_MODELS
         self.role_mapping = settings.OPENROUTER_ROLE_MAPPING
+
+        # ── Concurrency control ──────────────────────────────────
+        # Global semaphore: caps how many LLM HTTP requests can be
+        # in-flight at once.  asyncio.gather() in the multi-agent
+        # orchestrator still works — excess coroutines simply wait
+        # for a semaphore slot instead of all firing at once.
+        self._semaphore = asyncio.Semaphore(
+            settings.LLM_MAX_CONCURRENT_CALLS  # default 2
+        )
+        self._stagger_delay = settings.LLM_REQUEST_STAGGER_SECONDS  # default 1.0s
+        self._last_request_time: float = 0.0  # monotonic timestamp
+        self._stagger_lock = asyncio.Lock()  # serialise stagger bookkeeping
+
+        logger.info(
+            f"LLM Router initialised — max concurrent calls: "
+            f"{settings.LLM_MAX_CONCURRENT_CALLS}, "
+            f"stagger: {self._stagger_delay}s"
+        )
 
     # -----------------------------------------------------------
     # PUBLIC ENTRY POINT
@@ -141,10 +161,12 @@ class LLMRouter:
             return model_config
         
         # Otherwise, use role mapping
-        model_key = self.role_mapping.get(model_role, "default")
-        final_model_key = self.role_mapping.get(model_key, "mistral_24b")  # Resolve 'default'
+        model_key = self.role_mapping.get(model_role)
+        if not model_key or model_key not in self.openrouter_models:
+            # Role not mapped or mapped model unavailable — resolve via "default" role
+            model_key = self.role_mapping.get("default", "mistral_small_32")
         
-        model_config = self.openrouter_models.get(final_model_key, self.openrouter_models["mistral_24b"])
+        model_config = self.openrouter_models.get(model_key, self.openrouter_models["mistral_small_32"])
         logger.info(f"Auto-selected model: {model_config['name']} for role '{model_role}'")
         
         return model_config
@@ -153,7 +175,7 @@ class LLMRouter:
         """
         Resolve fallback candidates for a role in priority order.
         """
-        current_model_key = specific_model or self.role_mapping.get(model_role, "mistral_24b")
+        current_model_key = specific_model or self.role_mapping.get(model_role, "mistral_small_32")
         role_fallbacks = settings.FALLBACKS.get(model_role, [])
 
         if isinstance(role_fallbacks, str):
@@ -164,6 +186,31 @@ class LLMRouter:
             for model_key in role_fallbacks
             if model_key in self.openrouter_models and model_key != current_model_key
         ]
+
+    # -----------------------------------------------------------
+    # CONCURRENCY GATE
+    # -----------------------------------------------------------
+    async def _acquire_slot(self, model_name: str, model_role: str) -> None:
+        """
+        Wait for a semaphore slot **and** honour the stagger delay.
+        Call this before every outbound LLM HTTP request.
+        """
+        await self._semaphore.acquire()
+        # Stagger: ensure at least `_stagger_delay` seconds between requests
+        async with self._stagger_lock:
+            now = time.monotonic()
+            elapsed = now - self._last_request_time
+            if elapsed < self._stagger_delay:
+                wait = self._stagger_delay - elapsed
+                logger.debug(
+                    f"Stagger: waiting {wait:.2f}s before {model_name} ({model_role})"
+                )
+                await asyncio.sleep(wait)
+            self._last_request_time = time.monotonic()
+
+    def _release_slot(self) -> None:
+        """Release a semaphore slot after the HTTP request completes."""
+        self._semaphore.release()
 
     # -----------------------------------------------------------
     # OPENROUTER CALL
@@ -233,10 +280,11 @@ class LLMRouter:
         logger.info(f"Calling OpenRouter with {model_name} (role: {model_role})")
         
         # Retry logic with exponential backoff for rate limiting
-        import asyncio
         last_error = None
         
         for attempt in range(max_retries):
+            # Acquire a concurrency slot before each HTTP request
+            await self._acquire_slot(model_name, model_role)
             try:
                 resp = await self.http.post(settings.OPENROUTER_BASE_URL, headers=headers, json=payload)
                 resp.raise_for_status()
@@ -252,6 +300,8 @@ class LLMRouter:
                         await asyncio.sleep(wait_time)
                         continue
                 raise  # Re-raise if not rate limit or last attempt
+            finally:
+                self._release_slot()
         else:
             # If we exhausted all retries
             if last_error:
@@ -354,6 +404,8 @@ class LLMRouter:
         
         full_response = ""
         
+        # Acquire concurrency slot for the entire stream duration
+        await self._acquire_slot(model_name, model_role)
         try:
             async with self.http.stream(
                 "POST",
@@ -404,6 +456,8 @@ class LLMRouter:
         except Exception as e:
             logger.error(f"Streaming error: {e}", exc_info=True)
             yield {"type": "error", "content": str(e)}
+        finally:
+            self._release_slot()
 
     
 

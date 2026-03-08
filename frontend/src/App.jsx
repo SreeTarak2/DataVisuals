@@ -1,4 +1,4 @@
-import React, { useEffect, Suspense, lazy } from "react";
+import React, { useEffect, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { initAuth } from "./store/authStore";
@@ -7,20 +7,20 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import DashboardLayout from "./components/layout/DashboardLayout";
 import ErrorBoundary from "./components/common/ErrorBoundary";
 import { Loader2 } from "lucide-react";
+import lazyWithRetry from "./utils/lazyWithRetry";
 
 import "./assets/styles/App.css";
 
-// Lazy load pages for code splitting - reduces initial bundle size
-const Landing = lazy(() => import("./pages/Landing"));
-const Login = lazy(() => import("./pages/Login"));
-const Register = lazy(() => import("./pages/Register"));
-const Dashboard = lazy(() => import("./pages/Dashboard"));
-const Datasets = lazy(() => import("./pages/Datasets"));
-const Chat = lazy(() => import("./pages/Chat"));
-const ChartsStudio = lazy(() => import("./pages/ChartsStudio"));
-const ChartsStudioNext = lazy(() => import("./pages/charts/ChartsStudioNextPage"));
-const Settings = lazy(() => import("./pages/Settings"));
-const Profile = lazy(() => import("./pages/Profile"));
+// Lazy load pages with retry to avoid repeated "Failed to fetch dynamically imported module" loops.
+const Landing = lazyWithRetry(() => import("./pages/Landing.jsx"), "landing");
+const Login = lazyWithRetry(() => import("./pages/Login.jsx"), "login");
+const Register = lazyWithRetry(() => import("./pages/Register.jsx"), "register");
+const Dashboard = lazyWithRetry(() => import("./pages/Dashboard/index.js"), "dashboard");
+const Datasets = lazyWithRetry(() => import("./pages/Datasets.jsx"), "datasets");
+const Chat = lazyWithRetry(() => import("./pages/Chat.jsx"), "chat");
+const ChartsStudio = lazyWithRetry(() => import("./pages/ChartsStudio.jsx"), "charts");
+const Settings = lazyWithRetry(() => import("./pages/Settings.jsx"), "settings");
+const Insights = lazyWithRetry(() => import("./pages/insights/index.js"), "insights");
 
 // Loading fallback component
 const PageLoader = () => (
@@ -63,9 +63,8 @@ function App() {
               <Route path="datasets" element={<Datasets />} />
               <Route path="chat" element={<Chat />} />
               <Route path="charts" element={<ChartsStudio />} />
-              <Route path="charts-next" element={<ChartsStudioNext />} />
+              <Route path="insights" element={<Insights />} />
               <Route path="settings" element={<Settings />} />
-              <Route path="profile" element={<Profile />} />
             </Route>
 
             {/* Catch all - redirect to landing */}

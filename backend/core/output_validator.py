@@ -270,14 +270,12 @@ async def validate_with_retry(
                 response = await llm_call_func(initial_prompt)
             else:
                 # Progressive refinement: add error details to prompt
-                refinement_prompt = f"""{initial_prompt}
-
-PREVIOUS ATTEMPT FAILED VALIDATION:
-{chr(10).join(f'- {err}' for err in errors)}
-
-{validator.suggest_fixes(errors)}
-
-Please fix these issues and try again. Return ONLY valid JSON."""
+                from core.prompt_templates import get_refinement_retry_prompt
+                refinement_prompt = get_refinement_retry_prompt(
+                    initial_prompt,
+                    errors,
+                    validator.suggest_fixes(errors)
+                )
                 
                 logger.warning(f"Attempt {attempt + 1}/{max_retries} - Retrying with refinement prompt")
                 response = await llm_call_func(refinement_prompt)

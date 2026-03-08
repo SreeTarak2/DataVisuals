@@ -1,12 +1,14 @@
 # backend/main.py
 
 import logging
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from core.config import settings
-from api import auth, datasets, chat, dashboard, analysis, models, charts, agentic
+from api import auth, datasets, chat, dashboard, analysis, models, charts, agentic, insights
 from core.rate_limiter import limiter, rate_limit_exceeded_handler
 from db.database import connect_to_mongo, close_mongo_connection
 from services.ai.ai_service import ai_service
@@ -72,6 +74,7 @@ app.include_router(chat.router, prefix="/api", tags=["3. AI Chat & Conversations
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["4. Dashboards & Analytics"])
 app.include_router(charts.router, prefix="/api/charts", tags=["4.5 Charts & Visualizations (New)"])
 app.include_router(analysis.router, prefix="/api/ai", tags=["5. Advanced AI & Analysis"])
+app.include_router(insights.router, prefix="/api/insights", tags=["6. Insights"])
 
 app.include_router(analysis.router, prefix="/api/analysis", tags=["5. Advanced AI & Analysis (Legacy)"])
 # Model management and testing
@@ -80,6 +83,10 @@ app.include_router(models.router, tags=["6. Model Management"])
 # Agentic QUIS (LangGraph-based analysis with subjective novelty)
 app.include_router(agentic.router, prefix="/api", tags=["7. Agentic AI"])
 
+# --- Static File Serving (chat image uploads) ---
+_chat_images_dir = Path(__file__).resolve().parent / "uploads" / "chat_images"
+_chat_images_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static/chat-images", StaticFiles(directory=str(_chat_images_dir)), name="chat-images")
 
 
 if __name__ == "__main__":

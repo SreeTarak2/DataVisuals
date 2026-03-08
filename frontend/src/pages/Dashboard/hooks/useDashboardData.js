@@ -243,10 +243,8 @@ export const useDashboardData = (selectedDataset) => {
                     const insightsData = await insightsRes.json();
                     console.log('Dashboard insights data:', insightsData);
 
-                    // Filter out hardcoded insights
+                    // Only keep insights that have both title and description
                     const realInsights = (insightsData.insights || []).filter(insight =>
-                        !insight.title?.toLowerCase().includes('pearson correlation') &&
-                        !insight.title?.toLowerCase().includes('strong correlation') &&
                         insight.title && insight.description
                     );
                     setInsights(realInsights);

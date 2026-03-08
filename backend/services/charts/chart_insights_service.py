@@ -342,12 +342,8 @@ class ChartInsightsService:
                 }
             }
             
-            prompt = f"""Analyze this chart and provide a business insight:
-
-Chart Type: {chart_type}
-Detected Patterns: {', '.join(context['patterns'])}
-
-Provide a concise, actionable business insight (2-3 sentences):"""
+            from core.prompt_templates import get_chart_insight_prompt
+            prompt = get_chart_insight_prompt(chart_type, context['patterns'])
             
             response = await llm_router.call(
                 prompt,

@@ -9,11 +9,12 @@ import {
     AlertCircle,
     TrendingUp,
     ArrowRight,
-    BookOpen
+    BookOpen,
 } from 'lucide-react';
 import GlassPanel from '@/components/ui/GlassPanel';
 import PlotlyChart from '@/components/features/charts/PlotlyChart';
 import ReactMarkdown from 'react-markdown';
+import InsightFeedback from '@/components/features/feedback/InsightFeedback';
 
 // --- Thinking Animation Component ---
 const ThinkingState = ({ onComplete }) => {
@@ -227,6 +228,35 @@ const DeepAnalysisStory = ({ analysisResult, isLoading }) => {
                                     <div className="text-xl font-mono text-gray-400">{analysisResult.boring_filtered || 0}</div>
                                 </div>
                             </div>
+                        )}
+
+                        {/* ── Feedback: Train the Belief Store ── */}
+                        {analysisResult?.response && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 12 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.6 }}
+                                className="mt-10 pt-8 border-t border-white/[0.06]"
+                            >
+                                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 rounded-xl bg-white/[0.02] border border-white/[0.06]">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-9 h-9 rounded-lg bg-ocean/10 border border-ocean/20 flex items-center justify-center">
+                                            <BrainCircuit className="w-4.5 h-4.5 text-ocean" />
+                                        </div>
+                                        <div>
+                                            <p className="text-[13px] font-semibold text-pearl">Was this analysis helpful?</p>
+                                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                                                Your feedback personalizes future insights
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <InsightFeedback
+                                        variant="inline"
+                                        insightText={analysisResult.response.slice(0, 500)}
+                                        datasetId={null}
+                                    />
+                                </div>
+                            </motion.div>
                         )}
 
                     </motion.div>

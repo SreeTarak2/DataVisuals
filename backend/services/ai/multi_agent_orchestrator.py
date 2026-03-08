@@ -46,7 +46,8 @@ class MultiAgentOrchestrator:
         self,
         dataset_context: str,
         metadata: Dict[str, Any],
-        design_preference: Optional[str] = None
+        design_preference: Optional[str] = None,
+        conversation_summary: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generate a complete dashboard design using multiple specialized agents.
@@ -67,11 +68,21 @@ class MultiAgentOrchestrator:
         logger.info("🚀 Starting multi-agent dashboard design pipeline")
         start_time = datetime.now()
         
+        # Enrich dataset context with conversation history if available
+        enriched_context = dataset_context
+        if conversation_summary:
+            enriched_context = (
+                f"CONVERSATION CONTEXT (what the user has been analyzing):\n"
+                f"{conversation_summary}\n\n"
+                f"{dataset_context}"
+            )
+            logger.info("📝 Dashboard agents enriched with conversation context")
+        
         try:
             # Stage 1: Parallel execution for independent tasks
             logger.info("📊 Stage 1: Running Chart Recommendation + KPI Suggestion in parallel")
             chart_recommendations, kpi_suggestions = await self._stage_1_parallel(
-                dataset_context, metadata
+                enriched_context, metadata
             )
 
             has_charts = bool(chart_recommendations.get("charts"))
@@ -85,7 +96,7 @@ class MultiAgentOrchestrator:
                 # Stage 2: Chart Explanation (depends on chart recommendations)
                 logger.info("📝 Stage 2: Generating chart explanations")
                 chart_explanations = await self._stage_2_explanations(
-                    chart_recommendations, dataset_context
+                    chart_recommendations, dataset_context, metadata
                 )
                 
                 # Stage 3: Insight Generation (synthesize everything)
@@ -126,7 +137,8 @@ class MultiAgentOrchestrator:
         self,
         dataset_context: str,
         user_query: str,
-        metadata: Dict[str, Any]
+        metadata: Dict[str, Any],
+        conversation_summary: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generate a single chart with explanation for chat-based requests.
@@ -145,10 +157,18 @@ class MultiAgentOrchestrator:
         """
         logger.info("💬 Chat mode: Generating chart with explanation")
         
+        # Enrich context with conversation history if available
+        enriched_context = dataset_context
+        if conversation_summary:
+            enriched_context = (
+                f"CONVERSATION CONTEXT:\n{conversation_summary}\n\n"
+                f"{dataset_context}"
+            )
+        
         try:
             # Step 1: Get chart recommendation
             chart_config = await self._agent_chart_recommendation(
-                dataset_context, 
+                enriched_context, 
                 user_query=user_query,
                 metadata=metadata
             )
@@ -156,7 +176,8 @@ class MultiAgentOrchestrator:
             # Step 2: Generate explanation
             explanation = await self._agent_chart_explanation(
                 chart_config, 
-                dataset_context
+                enriched_context,
+                metadata
             )
             
             return {
@@ -212,7 +233,8 @@ class MultiAgentOrchestrator:
     async def _stage_2_explanations(
         self,
         chart_recommendations: Dict[str, Any],
-        dataset_context: str
+        dataset_context: str,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """
         Generate explanations for each recommended chart.
@@ -228,7 +250,7 @@ class MultiAgentOrchestrator:
         
         # Generate explanations for all charts (can be done in parallel if needed)
         explanation_tasks = [
-            self._agent_chart_explanation(chart, dataset_context)
+            self._agent_chart_explanation(chart, dataset_context, metadata)
             for chart in charts
         ]
         
@@ -295,7 +317,7 @@ class MultiAgentOrchestrator:
                 model_role="chart_recommendation",
                 expect_json=True,
                 temperature=0.4,
-                max_tokens=900
+                max_tokens=2500
             )
             
             logger.info(f"✓ Chart recommendation generated: {len(response.get('charts', []))} charts")
@@ -338,7 +360,7 @@ class MultiAgentOrchestrator:
                 model_role="kpi_suggestion",
                 expect_json=True,
                 temperature=0.3,  # Lower temperature for structured output
-                max_tokens=700
+                max_tokens=1200
             )
             
             logger.info(f"✓ KPI suggestions generated: {len(response.get('kpis', []))} KPIs")
@@ -351,34 +373,98 @@ class MultiAgentOrchestrator:
     async def _agent_chart_explanation(
         self,
         chart_config: Dict[str, Any],
-        dataset_context: str
+        dataset_context: str,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Chart Explanation Agent (Hermes 3 405B)
+        Chart Explanation Agent
         
-        Generates clear, non-technical explanations for each chart.
-        Tells users what to look for and why this visualization matters.
+        Generates clear, data-specific explanations for each chart.
+        References actual numbers and patterns, not generic chart-reading advice.
         """
-        # Build a compact chart summary instead of dumping raw dict
+        chart_type = chart_config.get("type", "bar")
+        x_col = chart_config.get("x", "N/A")
+        y_col = chart_config.get("y", "N/A")
+        title = chart_config.get("title", "Chart")
+
+        # Build a compact chart summary
         chart_summary = (
-            f"Type: {chart_config.get('type', 'bar')}, "
-            f"X-axis: {chart_config.get('x', 'N/A')}, "
-            f"Y-axis: {chart_config.get('y', 'N/A')}, "
-            f"Title: {chart_config.get('title', 'Chart')}"
+            f"Type: {chart_type}, "
+            f"X-axis: {x_col}, "
+            f"Y-axis: {y_col}, "
+            f"Title: {title}"
         )
 
-        prompt = get_chart_explanation_prompt(chart_summary, dataset_context)
+        # Build data stats from metadata so the LLM can reference real numbers
+        data_stats = ""
+        if metadata:
+            stat_parts = []
+            col_metadata = {c.get("name"): c for c in metadata.get("column_metadata", [])}
+            deep = metadata.get("deep_analysis", {})
+            enhanced = deep.get("enhanced_analysis", {})
+            data_profile = metadata.get("data_profile", {})
+            summary_stats = data_profile.get("summary_statistics", {})
+
+            # Add specific stats for the columns used in this chart
+            for col_name in [x_col, y_col]:
+                if col_name and col_name != "N/A":
+                    col_info = col_metadata.get(col_name, {})
+                    col_stats = summary_stats.get(col_name, {})
+                    if col_stats:
+                        parts = [f"  {col_name}:"]
+                        for k in ("mean", "median", "min", "max", "std"):
+                            if k in col_stats:
+                                v = col_stats[k]
+                                parts.append(f"    {k}={v:.2f}" if isinstance(v, float) else f"    {k}={v}")
+                        stat_parts.append("\n".join(parts))
+                    elif col_info:
+                        sample = col_info.get("sample_value", "")
+                        dtype = col_info.get("type", "")
+                        stat_parts.append(f"  {col_name}: type={dtype}, sample={sample}")
+
+            # Add relevant correlations involving these columns
+            for corr in enhanced.get("correlations", [])[:8]:
+                c1, c2 = corr.get("column1", ""), corr.get("column2", "")
+                if c1 in (x_col, y_col) or c2 in (x_col, y_col):
+                    r = corr.get("correlation", 0)
+                    strength = corr.get("strength", "")
+                    stat_parts.append(f"  Correlation: {c1} ↔ {c2}: r={r:.3f} ({strength})")
+
+            # Add relevant distributions
+            for dist in enhanced.get("distributions", [])[:6]:
+                if dist.get("column") in (x_col, y_col):
+                    skew = dist.get("skewness", 0)
+                    dtype = dist.get("distribution_type", "")
+                    stat_parts.append(f"  Distribution of {dist['column']}: {dtype}, skewness={skew:.2f}")
+
+            # Add cardinality info for categorical columns
+            cardinality = data_profile.get("cardinality", {})
+            for col_name in [x_col, y_col]:
+                if col_name and col_name in cardinality:
+                    card = cardinality[col_name]
+                    unique = card.get("unique_count", "")
+                    top_vals = card.get("top_values", [])
+                    if top_vals:
+                        top_str = ", ".join(f"{v.get('value')}={v.get('count')}" for v in top_vals[:5])
+                        stat_parts.append(f"  {col_name} categories (top): {top_str}")
+                    elif unique:
+                        stat_parts.append(f"  {col_name}: {unique} unique values")
+
+            if stat_parts:
+                data_stats = "\n".join(stat_parts)
+
+        prompt = get_chart_explanation_prompt(chart_summary, dataset_context, data_stats)
         
         try:
             response = await self.llm_router.call(
                 prompt=prompt,
                 model_role="chart_explanation",
                 expect_json=True,
-                temperature=0.5,
-                max_tokens=600
+                temperature=0.4,
+                max_tokens=500
             )
             
-            logger.info(f"✓ Chart explanation generated for: {chart_config.get('title', 'chart')}")
+            logger.info(f"✓ Chart explanation generated for: {title}")
             return response
             
         except Exception as e:
@@ -466,7 +552,7 @@ class MultiAgentOrchestrator:
         components = []
         
         # Add KPIs first
-        for kpi in kpi_suggestions.get("kpis", [])[:6]:  # Max 6 KPIs
+        for kpi in kpi_suggestions.get("kpis", [])[:8]:  # Max 8 KPIs
             components.append({
                 "type": "kpi",
                 "title": kpi.get("title", "KPI"),
@@ -481,7 +567,7 @@ class MultiAgentOrchestrator:
             })
         
         # Add charts
-        for i, chart in enumerate(chart_recommendations.get("charts", [])[:4]):  # Max 4 charts
+        for i, chart in enumerate(chart_recommendations.get("charts", [])[:8]):  # Max 8 charts
             # Find matching explanation
             explanation = next(
                 (exp for exp in chart_explanations if exp.get("chart_id") == chart.get("title")),
@@ -493,7 +579,7 @@ class MultiAgentOrchestrator:
                 "title": chart.get("title", f"Chart {i+1}"),
                 "span": 2,
                 "config": {
-                    "type": chart.get("type", "bar"),
+                    "chart_type": chart.get("type", "bar"),
                     "x": chart.get("x"),
                     "y": chart.get("y"),
                     "columns": [chart.get("x"), chart.get("y")]
@@ -506,6 +592,20 @@ class MultiAgentOrchestrator:
                 }
             })
         
+        # Add a data table component using the first columns from metadata
+        colmeta = metadata.get("column_metadata", [])
+        table_columns = [c.get("name", "") for c in colmeta[:6] if c.get("name")]
+        if table_columns:
+            components.append({
+                "type": "table",
+                "title": "Data Overview",
+                "span": 4,
+                "config": {
+                    "columns": table_columns,
+                    "limit": 200
+                }
+            })
+        
         return {
             "layout_grid": "repeat(4, 1fr)",
             "components": components,
@@ -513,10 +613,10 @@ class MultiAgentOrchestrator:
             "summary": insights.get("summary", ""),
             "generated_by": "multi_agent_pipeline",
             "agents": {
-                "chart_recommendation": "qwen_235b",
-                "kpi_suggestion": "hermes_405b",
-                "chart_explanation": "hermes_405b",
-                "insight_generation": "qwen_235b"
+                "chart_recommendation": "deepseek_v32",
+                "kpi_suggestion": "deepseek_v32",
+                "chart_explanation": "mistral_small_32",
+                "insight_generation": "deepseek_v32"
             }
         }
 

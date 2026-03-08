@@ -9,6 +9,7 @@ from bson import ObjectId
 
 from db.database import get_database
 from services.llm_router import llm_router
+from core.prompt_templates import get_dashboard_designer_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,64 @@ class AIDesignerService:
             return None
 
     # ---------------------------------------------------------
+    # UTILITY: UPDATE COMPONENT CONFIG
+    # ---------------------------------------------------------
+    async def update_dashboard_component(
+        self, 
+        dataset_id: str, 
+        user_id: str, 
+        component_title: str, 
+        updated_config: Dict[str, Any]
+    ) -> bool:
+        """
+        Update a single component's configuration in the existing dashboard.
+        
+        Args:
+            dataset_id: Dataset identifier
+            user_id: User identifier
+            component_title: Title of the component to update
+            updated_config: The new configuration dictionary
+            
+        Returns:
+            bool: Success status
+        """
+        try:
+            dashboard = await self.db.dashboards.find_one({
+                "dataset_id": dataset_id,
+                "user_id": user_id,
+                "is_default": True
+            })
+            
+            if not dashboard or "blueprint" not in dashboard:
+                logger.warning(f"Cannot update component: No dashboard found for dataset {dataset_id}")
+                return False
+                
+            blueprint = dashboard["blueprint"]
+            components = blueprint.get("components", [])
+            
+            updated = False
+            for comp in components:
+                if comp.get("title") == component_title:
+                    comp["config"] = updated_config
+                    updated = True
+                    break
+            
+            if not updated:
+                logger.warning(f"Component '{component_title}' not found in dashboard for dataset {dataset_id}")
+                return False
+                
+            await self.db.dashboards.update_one(
+                {"_id": dashboard["_id"]},
+                {"$set": {"blueprint": blueprint, "updated_at": datetime.utcnow()}}
+            )
+            
+            logger.info(f"Updated component '{component_title}' in dashboard for dataset {dataset_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error updating component '{component_title}': {e}")
+            return False
+
+    # ---------------------------------------------------------
     # MAIN ENTRY: DESIGN DASHBOARD
     # ---------------------------------------------------------
     async def design_intelligent_dashboard(
@@ -174,7 +233,8 @@ class AIDesignerService:
         dataset_id: str,
         user_id: str,
         design_preference: Optional[str] = None,
-        force_regenerate: bool = False
+        force_regenerate: bool = False,
+        conversation_summary: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Design an intelligent dashboard for a dataset.
@@ -184,6 +244,7 @@ class AIDesignerService:
             user_id: User identifier
             design_preference: Optional pattern preference
             force_regenerate: If True, regenerate even if dashboard exists. If False (default), return cached dashboard.
+            conversation_summary: Optional summary of prior conversation for context-aware design
         
         Returns:
             Dashboard blueprint with pattern info
@@ -243,7 +304,8 @@ class AIDesignerService:
                 result = await multi_agent_orchestrator.design_dashboard_multi_agent(
                     dataset_context=dataset_context,
                     metadata=metadata,
-                    design_preference=best_pattern
+                    design_preference=best_pattern,
+                    conversation_summary=conversation_summary
                 )
                 
                 if result.get("success"):
@@ -272,9 +334,9 @@ class AIDesignerService:
                 )
 
                 if is_auth_error:
-                    logger.warning("🔐 OpenRouter auth issue detected; using deterministic pattern fallback")
-                    blueprint = json.loads(json.dumps(pattern["blueprint"]))
-                    ai_reasoning = "Pattern fallback (OpenRouter authentication failure)"
+                    logger.warning("🔐 OpenRouter auth issue detected; using data-aware pattern fallback")
+                    blueprint = self._adapt_pattern_to_data(pattern["blueprint"], metadata)
+                    ai_reasoning = "Pattern fallback (OpenRouter authentication failure) — columns adapted to dataset"
                 else:
                     logger.info("↩️ Falling back to single-model approach")
                 
@@ -360,50 +422,7 @@ class AIDesignerService:
     def _create_designer_prompt(self, metadata: Dict, selected_pattern: Dict) -> str:
         context = self._create_dataset_context_string(metadata)
         example_blueprint = json.dumps(selected_pattern["blueprint"], indent=2)
-
-        return f"""
-You are DataSage Designer, a world-class dashboard layout architect specializing in data storytelling for non-technical users.
-
-DATASET CONTEXT:
-{context}
-
-EXAMPLE BLUEPRINT (use this structure, but adapt columns and chart types based on the dataset):
-{example_blueprint}
-
-DESIGN RULES:
-- Use LOW-CARD columns for pie charts and bar chart x-axes (few unique values = readable charts)
-- NEVER use HIGH-CARD or ID columns for pie charts or bar charts (too many categories)
-- Skip ID columns entirely — they are not useful for visualization
-- Use time columns for line charts (show trends)
-- Use correlated columns together in scatter plots
-- KPI titles must be business-friendly ("Total Revenue" not "sum_revenue_col")
-- Chart titles should describe the INSIGHT, not just the axes ("Revenue Concentration by Region" not "Region vs Revenue")
-
-CRITICAL INSTRUCTIONS:
-1. Return ONLY raw JSON (no markdown, no code blocks, no explanations)
-2. Use the EXACT structure from the example blueprint
-3. Replace column names with ACTUAL columns from the dataset
-4. Start your response with {{ and end with }}
-5. Ensure all JSON is valid (proper quotes, commas, brackets)
-
-REQUIRED JSON FORMAT:
-{{
-  "dashboard": {{
-      "layout_grid": "repeat(4, 1fr)",
-      "components": [
-        {{
-          "type": "kpi",
-          "title": "Total Records",
-          "span": 1,
-          "config": {{"column": "actual_column_name", "aggregation": "sum"}}
-        }}
-      ]
-  }},
-  "reasoning": "Brief explanation of design choices"
-}}
-
-RESPOND NOW WITH ONLY THE JSON:
-"""
+        return get_dashboard_designer_prompt(context, example_blueprint)
 
     # ---------------------------------------------------------
     # Blueprint validation / repair
@@ -449,6 +468,74 @@ RESPOND NOW WITH ONLY THE JSON:
     # ---------------------------------------------------------
     # Context builder (enriched with pre-computed metadata)
     # ---------------------------------------------------------
+    def _adapt_pattern_to_data(self, pattern_blueprint: Dict, metadata: Dict) -> Dict:
+        """
+        Substitute real dataset column names into a canned pattern blueprint.
+        
+        The pattern blueprints use generic column names like 'revenue', 'category',
+        'date' which won't match real datasets. This method replaces them with
+        actual column names from the dataset metadata.
+        """
+        blueprint = json.loads(json.dumps(pattern_blueprint))  # Deep copy
+        
+        colmeta = metadata.get("column_metadata", [])
+        if not colmeta:
+            return blueprint
+        
+        # Classify columns by type
+        numeric_cols = [c["name"] for c in colmeta if c.get("type") in ("numeric", "integer", "float", "int") and "id" not in c.get("name", "").lower()]
+        categorical_cols = [c["name"] for c in colmeta if c.get("type") in ("string", "categorical", "utf8") and "id" not in c.get("name", "").lower()]
+        temporal_cols = [c["name"] for c in colmeta if c.get("type") in ("date", "datetime", "timestamp")]
+        all_cols = [c["name"] for c in colmeta[:6] if c.get("name")]
+        
+        # Use domain intelligence if available for better column choices
+        domain = metadata.get("domain_intelligence", {})
+        measures = domain.get("measures", numeric_cols[:6])
+        dimensions = domain.get("dimensions", categorical_cols[:4])
+        time_cols = domain.get("time_columns", temporal_cols[:2])
+        
+        ni = 0  # numeric index
+        ci = 0  # categorical index
+        
+        for comp in blueprint.get("components", []):
+            cfg = comp.get("config", {})
+            ctype = comp.get("type", "")
+            
+            if ctype == "kpi":
+                # Assign real numeric column for aggregation
+                if ni < len(measures):
+                    cfg["column"] = measures[ni]
+                    ni += 1
+                elif numeric_cols:
+                    cfg["column"] = numeric_cols[0]
+                    
+            elif ctype == "chart":
+                chart_type = cfg.get("chart_type", "bar")
+                
+                if chart_type in ("line", "area") and time_cols:
+                    # Time-series charts → use time column on x-axis
+                    cfg["columns"] = [time_cols[0], measures[min(ni, len(measures)-1)] if measures else numeric_cols[0] if numeric_cols else all_cols[0]]
+                    cfg["group_by"] = [time_cols[0]]
+                    ni = min(ni + 1, len(measures) - 1)
+                elif chart_type in ("pie",) and dimensions:
+                    cfg["columns"] = [dimensions[min(ci, len(dimensions)-1)], measures[0] if measures else all_cols[0]]
+                    cfg["group_by"] = [dimensions[min(ci, len(dimensions)-1)]]
+                    ci = min(ci + 1, len(dimensions) - 1)
+                elif chart_type in ("histogram", "box_plot", "violin") and measures:
+                    cfg["columns"] = [measures[min(ni, len(measures)-1)]]
+                    ni = min(ni + 1, len(measures) - 1)
+                elif dimensions and measures:
+                    # Bar / grouped_bar / scatter
+                    cfg["columns"] = [dimensions[min(ci, len(dimensions)-1)], measures[min(ni, len(measures)-1)]]
+                    cfg["group_by"] = [dimensions[min(ci, len(dimensions)-1)]]
+                    ci = min(ci + 1, len(dimensions) - 1)
+                    ni = min(ni + 1, len(measures) - 1)
+                    
+            elif ctype == "table":
+                cfg["columns"] = all_cols
+        
+        return blueprint
+
     def _create_dataset_context_string(self, metadata: Dict) -> str:
         """
         Build a rich but compact dataset context string for LLM prompts.
@@ -466,6 +553,8 @@ RESPOND NOW WITH ONLY THE JSON:
         data_profile = metadata.get("data_profile", {})
         deep_analysis = metadata.get("deep_analysis", {})
         statistical_findings = metadata.get("statistical_findings", {})
+        if isinstance(statistical_findings, list):
+            statistical_findings = {"findings": statistical_findings}
         cardinality = data_profile.get("cardinality", {})
 
         # --- Section 1: Overview ---
