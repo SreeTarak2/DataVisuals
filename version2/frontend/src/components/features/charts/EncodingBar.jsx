@@ -1,5 +1,5 @@
 import React from 'react';
-import { RefreshCw, ChevronDown } from 'lucide-react';
+import { RefreshCw, ChevronDown, Database, Settings, Save, Download } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const AGGREGATIONS = [
@@ -14,40 +14,57 @@ const EncodingBar = ({
     columns,
     encoding,
     onUpdateEncoding,
-    onRefresh
+    onRefresh,
+    showDataPanel,
+    onToggleDataPanel,
+    showFormatPanel,
+    onToggleFormatPanel,
+    chartData,
+    onSave,
+    onExport,
 }) => {
     const getFieldName = (col) => typeof col === 'string' ? col : col.name;
 
-    const Dropdown = ({ label, value, options, onChange, width = 'w-40' }) => (
+    const Dropdown = ({ label, value, options, onChange, width = 'w-36' }) => (
         <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-granite">
                 {label}
             </span>
             <div className="relative group">
                 <select
                     value={value}
                     onChange={(e) => onChange(e.target.value)}
-                    className={`${width} appearance-none px-3 py-1.5 pr-8 rounded bg-[#0b1117] border border-slate-700 text-xs text-slate-200 cursor-pointer outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 transition-all`}
+                    className={`${width} appearance-none px-2.5 py-1.5 pr-7 rounded-md bg-midnight border border-pearl/[0.06] text-[11px] text-pearl cursor-pointer outline-none focus:border-ocean/30 transition-colors`}
                 >
-                    <option value="">Select...</option>
+                    <option value="" className="bg-midnight text-granite">Select…</option>
                     {options.map((opt, i) => (
-                        <option key={i} value={typeof opt === 'string' ? opt : opt.id || opt.value}>
+                        <option key={i} value={typeof opt === 'string' ? opt : opt.id || opt.value} className="bg-midnight text-pearl">
                             {typeof opt === 'string' ? opt : opt.label || opt.name}
                         </option>
                     ))}
                 </select>
                 <ChevronDown
-                    size={12}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500 group-hover:text-slate-300"
+                    size={11}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-granite"
                 />
             </div>
         </div>
     );
 
     return (
-        <div className="h-12 flex items-center justify-between px-4 border-t border-slate-800 bg-[#0d141f]">
-            {/* Left: Encoding Dropdowns */}
-            <div className="flex items-center gap-4">
+        <div className="h-11 flex items-center justify-between px-3 border-t border-pearl/[0.06] bg-midnight">
+            {/* Left: Panel toggle + Encoding dropdowns */}
+            <div className="flex items-center gap-3">
+                <button
+                    onClick={onToggleDataPanel}
+                    className={`p-1.5 rounded-md transition-colors ${showDataPanel ? 'bg-ocean/15 text-ocean' : 'text-granite hover:text-pearl'}`}
+                    title="Toggle Data Panel"
+                >
+                    <Database size={13} />
+                </button>
+
+                <div className="h-4 w-px bg-pearl/[0.06]" />
+
                 <Dropdown
                     label="X Axis"
                     value={encoding.x.field}
@@ -55,7 +72,6 @@ const EncodingBar = ({
                     onChange={(v) => onUpdateEncoding('x', v)}
                     width="w-32"
                 />
-
                 <Dropdown
                     label="Y Axis"
                     value={encoding.y.field}
@@ -63,7 +79,6 @@ const EncodingBar = ({
                     onChange={(v) => onUpdateEncoding('y', v)}
                     width="w-32"
                 />
-
                 <Dropdown
                     label="Aggr"
                     value={encoding.y.aggregate}
@@ -73,17 +88,47 @@ const EncodingBar = ({
                 />
             </div>
 
-            {/* Right: Refresh Button */}
-            <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={onRefresh}
-                className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white shadow-sm flex items-center gap-1.5 font-medium text-xs transition-colors"
-                title="Refresh Chart"
-            >
-                <RefreshCw size={12} />
-                Refresh
-            </motion.button>
+            {/* Right: Actions + Panel toggle */}
+            <div className="flex items-center gap-1.5">
+                <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={onRefresh}
+                    className="p-1.5 rounded-md text-granite hover:text-pearl hover:bg-pearl/[0.04] transition-colors"
+                    title="Refresh Chart"
+                >
+                    <RefreshCw size={13} />
+                </motion.button>
+
+                <div className="h-4 w-px bg-pearl/[0.06]" />
+
+                <button
+                    onClick={onSave}
+                    disabled={!chartData}
+                    className="p-1.5 rounded-md text-granite hover:text-pearl hover:bg-pearl/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="Save"
+                >
+                    <Save size={13} />
+                </button>
+                <button
+                    onClick={onExport}
+                    disabled={!chartData}
+                    className="p-1.5 rounded-md text-granite hover:text-pearl hover:bg-pearl/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="Export"
+                >
+                    <Download size={13} />
+                </button>
+
+                <div className="h-4 w-px bg-pearl/[0.06]" />
+
+                <button
+                    onClick={onToggleFormatPanel}
+                    className={`p-1.5 rounded-md transition-colors ${showFormatPanel ? 'bg-ocean/15 text-ocean' : 'text-granite hover:text-pearl'}`}
+                    title="Toggle Format Panel"
+                >
+                    <Settings size={13} />
+                </button>
+            </div>
         </div>
     );
 };

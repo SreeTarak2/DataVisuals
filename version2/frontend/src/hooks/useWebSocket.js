@@ -64,6 +64,8 @@ export const useWebSocket = ({
     const [isConnecting, setIsConnecting] = useState(false);
     const wsRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
+    const reconnectAttemptsRef = useRef(0);
+    const maxReconnectAttempts = 5;
     const pendingMessagesRef = useRef(new Map()); // Track pending message callbacks
 
     const cleanup = useCallback(() => {
@@ -101,6 +103,7 @@ export const useWebSocket = ({
         ws.onopen = () => {
             setIsConnected(true);
             setIsConnecting(false);
+            reconnectAttemptsRef.current = 0; // Reset backoff on successful connect
         };
 
         ws.onmessage = (event) => {
@@ -129,10 +132,11 @@ export const useWebSocket = ({
                         break;
 
                     case 'done':
-                        // Entire processing complete
+                        // Entire processing complete (sql set when backend used SQL execution path)
                         onDone?.({
                             conversationId: data.conversationId,
                             chartConfig: data.chartConfig,
+                            sql: data.sql,
                             clientMessageId
                         });
                         pendingMessagesRef.current.delete(clientMessageId);
@@ -147,6 +151,7 @@ export const useWebSocket = ({
                         onDone?.({
                             conversationId: data.conversationId,
                             chartConfig: data.chartConfig,
+                            sql: data.sql,
                             clientMessageId
                         });
                         pendingMessagesRef.current.delete(clientMessageId);
@@ -186,20 +191,38 @@ export const useWebSocket = ({
 
             pendingMessagesRef.current.clear();
 
-            // Auto-reconnect after 3 seconds if not intentionally closed
-            if (event.code !== 1000 && event.code !== 1001) {
-                console.log('Scheduling reconnect...');
+            // Do NOT reconnect for policy violations or connection limits
+            // 1008 = policy violation (auth failure), 4008 = connection limit exceeded
+            if (event.code === 1008 || event.code === 4008) {
+                onError?.({ 
+                    type: 'connection', 
+                    detail: event.reason || 'Connection rejected by server. Try closing other tabs.' 
+                });
+                return; // Stop — do not reconnect
+            }
+
+            // Normal close — no reconnect needed
+            if (event.code === 1000 || event.code === 1001) {
+                return;
+            }
+
+            // Abnormal close — reconnect with exponential backoff
+            if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+                const delay = Math.min(3000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+                reconnectAttemptsRef.current += 1;
+                console.log(`Scheduling reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})...`);
                 reconnectTimeoutRef.current = setTimeout(() => {
                     connect();
-                }, 3000);
-            } else if (event.code === 1008) {
-                // Policy violation (auth failure, rate limit, etc.)
-                onError?.({ type: 'connection', detail: event.reason || 'Connection rejected' });
+                }, delay);
+            } else {
+                console.warn('Max reconnect attempts reached, giving up');
+                onError?.({ type: 'connection', detail: 'Unable to connect. Please refresh the page.' });
             }
         };
     }, [cleanup, onToken, onResponseComplete, onChart, onDone, onError, onStatus]);
 
     const disconnect = useCallback(() => {
+        reconnectAttemptsRef.current = 0;
         cleanup();
         setIsConnected(false);
     }, [cleanup]);

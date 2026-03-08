@@ -176,9 +176,10 @@ Focus on:
 
 Return ONLY valid JSON array."""
 
+            from core.prompt_templates import get_analytical_question_prompt
             response = await llm_router.call(
+                get_analytical_question_prompt(df.shape[0], df.shape[1], numeric_cols, categorical_cols, temporal_cols, max_questions),
                 task="kpi_suggestion",
-                messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 expect_json=True
             )

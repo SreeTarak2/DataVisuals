@@ -1,6 +1,9 @@
 @import "tailwindcss";
 
 @theme {
+  /* Typography */
+  --font-sans: "Nunito", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+
   /* Design System Colors - Midnight Void Theme (User Selection) */
   --color-noir: #020203;
   /* Black Hole */
@@ -63,6 +66,10 @@
 
 /* Base Variables - Re-mapping to new palette where appropriate */
 :root {
+  --font-body: "Nunito", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-heading: "Montserrat", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-ui: "Rubik", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+
   --background: #020203;
   /* Black Hole */
   --foreground: #CAD2FD;
@@ -142,6 +149,29 @@
   background: var(--color-ocean);
 }
 
+/* Chat composer textarea scrollbar (Claude-like, subtle and thin) */
+.chat-textarea {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+}
+
+.chat-textarea::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-textarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-textarea::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+  border-radius: 999px;
+}
+
+.chat-textarea::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.65);
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -149,5 +179,24 @@
 
   body {
     @apply bg-noir text-pearl font-sans antialiased;
+    font-family: var(--font-body);
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.6;
   }
+
+  input,
+  textarea,
+  select {
+    font-family: var(--font-body);
+  }
+}
+
+/* Opt-in typography helpers for intentional usage */
+.font-heading {
+  font-family: var(--font-heading);
+}
+
+.font-ui {
+  font-family: var(--font-ui);
 }

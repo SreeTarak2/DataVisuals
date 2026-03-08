@@ -48,10 +48,10 @@ class ResponseCache:
         normalized = re.sub(r'[?!.,;:]+$', '', normalized)
         return normalized
     
-    def _generate_cache_key(self, query: str, dataset_id: str) -> str:
-        """Generate cache key from normalized query and dataset."""
+    def _generate_cache_key(self, query: str, dataset_id: str, mode: str = "learning") -> str:
+        """Generate cache key from normalized query, dataset, and chat mode."""
         normalized = self._normalize_query(query)
-        content = f"{dataset_id}:{normalized}"
+        content = f"{dataset_id}:{mode}:{normalized}"
         return hashlib.md5(content.encode()).hexdigest()
     
     def _is_expired(self, entry: Dict) -> bool:
@@ -59,14 +59,14 @@ class ResponseCache:
         created_at = entry.get("created_at", 0)
         return time.time() - created_at > self.ttl_seconds
     
-    def get(self, query: str, dataset_id: str) -> Optional[Dict[str, Any]]:
+    def get(self, query: str, dataset_id: str, mode: str = "learning") -> Optional[Dict[str, Any]]:
         """
         Get cached response if available and not expired.
         
         Returns:
             Cached response dict or None
         """
-        key = self._generate_cache_key(query, dataset_id)
+        key = self._generate_cache_key(query, dataset_id, mode)
         
         with self._lock:
             if key in self._cache:
@@ -83,11 +83,11 @@ class ResponseCache:
                 
         return None
     
-    def set(self, query: str, dataset_id: str, response: Dict[str, Any]) -> None:
+    def set(self, query: str, dataset_id: str, response: Dict[str, Any], mode: str = "learning") -> None:
         """
         Cache a successful response.
         """
-        key = self._generate_cache_key(query, dataset_id)
+        key = self._generate_cache_key(query, dataset_id, mode)
         
         with self._lock:
             # Evict oldest if at capacity
@@ -98,12 +98,19 @@ class ResponseCache:
                 "response": response,
                 "query": query,
                 "dataset_id": dataset_id,
+                "mode": mode,
                 "created_at": time.time()
             }
             query_hash = hashlib.sha256(query.encode()).hexdigest()[:16]
             logger.info(f"Cached response for query hash: {query_hash}")
     
-    def find_similar(self, query: str, dataset_id: str, threshold: float = 0.7) -> Optional[Dict[str, Any]]:
+    def find_similar(
+        self,
+        query: str,
+        dataset_id: str,
+        mode: str = "learning",
+        threshold: float = 0.7
+    ) -> Optional[Dict[str, Any]]:
         """
         Find a similar cached query using simple word overlap.
         
@@ -117,7 +124,11 @@ class ResponseCache:
         
         with self._lock:
             for key, entry in self._cache.items():
-                if entry["dataset_id"] != dataset_id or self._is_expired(entry):
+                if (
+                    entry["dataset_id"] != dataset_id
+                    or entry.get("mode", "learning") != mode
+                    or self._is_expired(entry)
+                ):
                     continue
                     
                 cached_words = set(self._normalize_query(entry["query"]).split())
@@ -267,18 +278,19 @@ For **comparing** values:
 *Detailed AI comparison is temporarily unavailable. Use Chart Studio for visual comparisons.*"""
         },
         "correlation": {
-            "patterns": [r"correlat", r"relationship", r"related"],
+            "patterns": [r"correlat", r"relationship", r"related", r"explain", r"causal", r"driven"],
             "response": """## Correlation Analysis
 
-To find **correlations** between variables:
+Analyzing **correlations** between variables in your dataset:
 
-📊 **Numeric columns**: {numeric_columns}
+📊 **Numeric columns available**: {numeric_columns}
 
-**Options:**
-1. **Dashboard** → Check correlation matrix (if available)
-2. **Chart Studio** → Scatter plot between two numeric columns
+**What you can do right now:**
+1. **Dashboard** → Check the correlation matrix in the Insights tab
+2. **Chart Studio** → Create a scatter plot between two numeric columns to visualize the relationship
+3. **Insights Page** → Pre-computed correlation pairs are available there
 
-*Deep statistical analysis requires AI processing. Pre-computed correlations may be available in Dashboard insights.*"""
+*The AI service is temporarily at capacity. Your correlation question has been queued and will process when available. In the meantime, the tools above can give you immediate visual answers.*"""
         },
         "top": {
             "patterns": [r"top \d+", r"highest", r"best", r"most"],
@@ -297,21 +309,21 @@ To find **top values**:
         },
         "default": {
             "patterns": [],
-            "response": """## I'm Here to Help! 
+            "response": """## Temporarily Processing Your Request
 
-I received your question but I'm currently experiencing **high demand** on the AI service.
-
-**While you wait, try these:**
-
-1. 📊 **Dashboard** - View pre-computed KPIs and insights
-2. 📈 **Chart Studio** - Create custom visualizations
-3. 🔄 **Retry** - Try your question again in 1-2 minutes
+I received your question but the AI service is currently experiencing **high demand**.
 
 **Your Dataset**: {dataset_name}
-- {row_count:,} rows × {col_count} columns
-- Columns: {column_preview}
+- **{row_count:,}** rows × **{col_count}** columns
+- Available columns: {column_preview}
 
-*The free AI tier has limited requests. Your question has been noted and will process when capacity is available.*"""
+**While the AI queue clears, try these:**
+1. 📊 **Dashboard** — Pre-computed KPIs and insights are available instantly
+2. 📈 **Chart Studio** — Build custom visualizations with drag-and-drop
+3. 🔍 **Insights Page** — View auto-detected patterns, correlations, and anomalies
+4. 🔄 **Retry** — AI capacity typically recovers within 1-2 minutes
+
+*Your question has been noted. The AI service will be available again shortly.*"""
         }
     }
     

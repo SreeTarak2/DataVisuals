@@ -15,25 +15,10 @@ IMPORTANT:
 import logging
 from typing import Optional
 from services.llm_router import llm_router
+from core.prompt_templates import REWRITE_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-
-REWRITE_SYSTEM_PROMPT = """
-You are a STRICT meaning-preserving query rewriter.
-Your task is:
-
-1. Rewrite the user's query to be clearer, more explicit,
-   and more structured — WITHOUT changing meaning.
-2. Preserve EVERY detail, intent, requirement, and constraint.
-3. Remove filler words, ambiguity, and vague phrasing.
-4. Do NOT:
-   - add new information
-   - remove anything important
-   - reinterpret intent
-   - shorten meaning incorrectly
-5. Output ONLY the rewritten query, NO explanations.
-"""
 
 
 def _post_validate(original: str, rewritten: str) -> str:
@@ -51,6 +36,32 @@ def _post_validate(original: str, rewritten: str) -> str:
 
     # Rewrite must not be identical to original (failed rewrite)
     if rewritten.strip().lower() == original.strip().lower():
+        return original
+
+    # Detect when the LLM ANSWERED the query instead of rewriting it
+    # These phrases are hallmarks of conversational responses, not rewrites
+    answer_indicators = [
+        "i'm here to help", "i am here to help",
+        "i don't have", "i do not have",
+        "i can help", "let me help",
+        "sure!", "of course!", "absolutely!",
+        "here's", "here is",
+        "based on the", "looking at the",
+        "it seems", "it appears",
+        "you might want to", "you may want to",
+        "to get started", "to begin",
+        "unfortunately", "however,",
+        "great question", "good question",
+    ]
+    rewritten_lower = rewritten.strip().lower()
+    for indicator in answer_indicators:
+        if rewritten_lower.startswith(indicator) or f"\n{indicator}" in rewritten_lower:
+            logger.warning(f"Query rewrite looks like an answer ('{indicator}') — reverting to original.")
+            return original
+
+    # If rewrite is much longer than original (>3x), LLM likely elaborated/answered
+    if len(rewritten.split()) > len(original.split()) * 3:
+        logger.warning("Query rewrite suspiciously long — reverting to original.")
         return original
 
     return rewritten

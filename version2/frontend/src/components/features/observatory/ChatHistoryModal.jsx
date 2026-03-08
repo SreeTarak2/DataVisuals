@@ -20,7 +20,7 @@ import useChatStore from '../../../store/chatStore';
 import useDatasetStore from '../../../store/datasetStore';
 import { toast } from 'react-hot-toast';
 
-export default function ChatHistoryModal({ isOpen, onClose }) {
+export default function ChatHistoryModal({ isOpen, onClose, currentConversationId, onSelectConversation }) {
   const [search, setSearch] = React.useState("")
   const [activeId, setActiveId] = React.useState(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false)
@@ -105,9 +105,13 @@ export default function ChatHistoryModal({ isOpen, onClose }) {
   )
 
   const handleOpenChat = (chatId) => {
-    setCurrentConversation(chatId);
-    navigate(`/app/chat?chatId=${chatId}`);
-    onClose();
+    if (onSelectConversation) {
+      onSelectConversation(chatId);
+    } else {
+      setCurrentConversation(chatId);
+      navigate(`/app/chat?chatId=${chatId}`);
+      onClose();
+    }
   };
 
   const handleDelete = (e, chatId, chatTitle) => {
@@ -155,7 +159,9 @@ export default function ChatHistoryModal({ isOpen, onClose }) {
                   className={cn(
                     "group relative flex cursor-pointer items-start gap-3 sm:gap-4 rounded-xl p-3 sm:p-4 transition-all duration-200",
                     "hover:bg-zinc-900/80 active:scale-[0.98]",
-                    activeId === conv.id ? "bg-zinc-900 ring-1 ring-zinc-800" : "bg-transparent"
+                    currentConversationId === conv.id
+                      ? "bg-zinc-900 ring-1 ring-blue-500/40"
+                      : activeId === conv.id ? "bg-zinc-900 ring-1 ring-zinc-800" : "bg-transparent"
                   )}
                   onMouseEnter={() => setActiveId(conv.id)}
                   onMouseLeave={() => setActiveId(null)}

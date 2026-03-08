@@ -214,7 +214,12 @@ OUTPUT (valid JSON only):
         
         try:
             from services.llm_router import llm_router
-            response = await llm_router.call(prompt, model_role="summary_engine", expect_json=True)
+            from core.prompt_templates import get_domain_detection_prompt
+            response = await llm_router.call(
+                get_domain_detection_prompt(columns_str, samples_str),
+                model_role="summary_engine",
+                expect_json=True
+            )
             
             # Validate response
             if isinstance(response, dict) and "domain" in response:

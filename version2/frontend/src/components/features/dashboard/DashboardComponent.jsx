@@ -403,28 +403,28 @@ const DashboardComponent = ({ component, datasetData }) => {
           style={gridSpanStyle}
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="group"
+          className="group h-full"
         >
-          <div className="bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-3xl p-6 hover:border-slate-700 transition-all duration-300 hover:shadow-xl hover:shadow-slate-900/20">
-            <div className="flex items-center justify-between mb-6">
+          <div className="bento-card p-6 h-full flex flex-col">
+            <div className="flex items-start justify-between mb-6">
               <div>
-                <h2 className="text-2xl font-bold text-white mb-2">{component.title}</h2>
-                <p className="text-slate-400 text-sm">
+                <h2 className="text-xl font-bold mb-1">{component.title}</h2>
+                <p className="text-text-secondary text-sm">
                   {component.config?.chart_type === 'line_chart' ? 'Showing trends and patterns' :
                     component.config?.chart_type === 'bar_chart' ? 'Comparing categories and values' :
                       component.config?.chart_type === 'pie_chart' ? 'Distribution breakdown' :
                         'Data visualization'}
                 </p>
               </div>
-              <div className="text-right">
-                <div className="text-sm text-slate-500">Data Points</div>
-                <div className="text-xl font-bold text-white">
+              <div className="text-right shrink-0 ml-4">
+                <div className="text-sm text-text-secondary">Data Points</div>
+                <div className="text-xl font-bold text-metric">
                   {chartData.length > 0 ? chartData.length : 0}
                 </div>
               </div>
             </div>
 
-            <div className="h-[600px] bg-[#0d1117] rounded-xl p-4">
+            <div className="flex-1 min-h-[400px] bg-base-bg/50 rounded-lg p-2 border border-ui-border">
               {chartData.length > 0 ? (
                 <PlotlyChart
                   data={chartData}
@@ -437,10 +437,10 @@ const DashboardComponent = ({ component, datasetData }) => {
               ) : (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-center">
-                    <div className="w-16 h-16 bg-slate-800/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                      <BarChart3 className="w-8 h-8 text-slate-500" />
+                    <div className="w-16 h-16 bg-surface border border-ui-border rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+                      <BarChart3 className="w-8 h-8 text-text-secondary opacity-50" />
                     </div>
-                    <p className="text-slate-500 text-sm">Chart will appear when data is available</p>
+                    <p className="text-text-secondary text-sm">Chart will appear when data is available</p>
                   </div>
                 </div>
               )}
@@ -466,41 +466,39 @@ const DashboardComponent = ({ component, datasetData }) => {
           style={gridSpanStyle}
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="group"
+          className="group h-full"
         >
-          <div className="bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-3xl p-6 hover:border-slate-700 transition-all duration-300 hover:shadow-xl hover:shadow-slate-900/20">
-            <div className="flex items-center justify-between mb-6">
+          <div className="bento-card p-6 h-full flex flex-col">
+            <div className="flex items-start justify-between mb-6">
               <div>
-                <h2 className="text-2xl font-bold text-white mb-2">{component.title}</h2>
-                <p className="text-slate-400 text-sm">Detailed data breakdown</p>
+                <h2 className="text-xl font-bold mb-1">{component.title}</h2>
+                <p className="text-text-secondary text-sm">Detailed data breakdown</p>
               </div>
-              <div className="text-right">
-                <div className="text-sm text-slate-500">Rows</div>
-                <div className="text-xl font-bold text-white">
+              <div className="text-right shrink-0 ml-4">
+                <div className="text-sm text-text-secondary">Rows</div>
+                <div className="text-xl font-bold text-metric">
                   {tableData.length}
                 </div>
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full">
+            <div className="flex-1 overflow-x-auto bg-base-bg/30 rounded-lg border border-ui-border">
+              <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="border-b border-slate-700">
+                  <tr className="border-b border-ui-border bg-surface">
                     {columns.map((column, index) => (
-                      <th key={index} className="text-left py-3 px-4 text-sm font-medium text-slate-300">
+                      <th key={index} className="py-3 px-4 text-xs font-semibold text-text-secondary uppercase tracking-wider">
                         {column}
                       </th>
                     ))}
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-ui-border">
                   {tableData.map((row, rowIndex) => (
-                    <tr key={rowIndex} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                    <tr key={rowIndex} className="hover:bg-base-bg/50 transition-colors">
                       {columns.map((column, colIndex) => (
-                        <td key={colIndex} className="py-3 px-4 text-sm text-slate-400">
-                          <div className="max-w-32 truncate" title={String(row[column])}>
-                            {String(row[column]).length > 20 ? `${String(row[column]).substring(0, 20)}...` : String(row[column])}
-                          </div>
+                        <td key={colIndex} className="py-3 px-4 text-sm text-text-primary whitespace-nowrap">
+                          {String(row[column]).length > 40 ? `${String(row[column]).substring(0, 40)}...` : String(row[column])}
                         </td>
                       ))}
                     </tr>

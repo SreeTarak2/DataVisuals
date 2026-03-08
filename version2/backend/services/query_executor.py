@@ -99,12 +99,22 @@ class SQLValidator:
         if ';' in sql_no_end_semicolon:
             return False, "Multiple SQL statements not allowed"
         
-        # Basic syntax check - must have FROM clause for SELECT
+        # Require FROM clause when the SELECT references identifiers (not just
+        # literal expressions like SELECT 1+1 or SELECT CURRENT_DATE).
         if 'SELECT' in sql_upper and 'FROM' not in sql_upper:
-            # Allow SELECT without FROM only for simple expressions
-            # like SELECT 1+1 or SELECT CURRENT_DATE
-            pass
-        
+            # Allow only if every column expression looks like a literal/function
+            # with no bare word that could be a column reference.
+            # Heuristic: if the SELECT list contains any bare identifier that is
+            # not a known aggregate/scalar function name, reject it.
+            known_no_from = re.compile(
+                r'^SELECT\s+(?:[\d\'\"\.\s,+\-\*\/()]+|'
+                r'(?:CURRENT_DATE|CURRENT_TIMESTAMP|NOW|TRUE|FALSE|NULL)'
+                r')\s*(?:;)?$',
+                re.IGNORECASE
+            )
+            if not known_no_from.match(sql.strip()):
+                return False, "SELECT statement is missing a FROM clause"
+
         return True, ""
     
     @classmethod
@@ -208,7 +218,133 @@ class QueryExecutor:
         """Generate cache key for query results."""
         content = f"{dataset_id}:{query.lower().strip()}"
         return hashlib.md5(content.encode()).hexdigest()
+
+    @staticmethod
+    def _capitalize_first_alpha(text: str) -> str:
+        """Uppercase the first alphabetic character in a string."""
+        for i, ch in enumerate(text):
+            if ch.isalpha():
+                return text[:i] + ch.upper() + text[i + 1:]
+        return text
+
+    @classmethod
+    def _postprocess_interpretation(cls, text: str) -> str:
+        """
+        Enforce response-quality guardrails for interpreted SQL answers.
+
+        Fixes:
+        - removes filler openings ("Based on...", "The data shows...")
+        - softens overconfident absolutes
+        - repairs nested-bold artifacts like **text at **1.28****
+        - wraps bare numeric values in bold for consistency
+        """
+        if not text:
+            return text
+
+        cleaned = text.strip()
+
+        # Remove filler intros at response start.
+        cleaned = re.sub(
+            r"(?i)^\s*(based on the (?:data|results|analysis|information)"
+            r"|according to (?:the )?(?:data|results)"
+            r"|the (?:data|results) show(?:s)?"
+            r"|looking at the (?:data|results))[\s,:-]*",
+            "",
+            cleaned,
+        )
+        cleaned = re.sub(r"(?i)^that\s+", "", cleaned)
+        cleaned = cls._capitalize_first_alpha(cleaned)
+
+        # Reduce overconfident wording.
+        confidence_rewrites = [
+            (r"(?i)\bwithout (?:a )?doubt\b", "based on available data"),
+            (r"(?i)\bdefinitely\b", "likely"),
+            (r"(?i)\bcertainly\b", "likely"),
+            (r"(?i)\babsolutely\b", "strongly"),
+            (r"(?i)\balways true\b", "consistently supported by the observed data"),
+            (r"(?i)\balways\b", "consistently"),
+            (r"(?i)\bnever fail\b", "rarely fail in this dataset"),
+            (r"(?i)\bimpossible to evaluate\b", "not identifiable from the available variation"),
+        ]
+        for pattern, replacement in confidence_rewrites:
+            cleaned = re.sub(pattern, replacement, cleaned)
+
+        # Repair nested bold around numeric tokens.
+        prev = None
+        while prev != cleaned:
+            prev = cleaned
+            cleaned = re.sub(
+                r"\*\*([^*]*?)\s+\*\*([0-9][^*]*?)\*\*\*\*",
+                r"\1 **\2**",
+                cleaned,
+            )
+
+        # Bold any remaining bare numeric values (counts, rates, percentages).
+        cleaned = re.sub(
+            r"(?<![\w*`])(\d[\d,]*(?:\.\d+)?%?)(?![\w*`])",
+            r"**\1**",
+            cleaned,
+        )
+
+        return cleaned
     
+    @staticmethod
+    def _sanitize_sql(sql: str) -> str:
+        """
+        Post-process LLM-generated SQL to fix common model mistakes before
+        handing it to DuckDB.
+
+        Fixes applied
+        -------------
+        1. Trailing ``?`` on identifiers  (e.g. ``awards_won?``)
+        2. ``AGG(col) OVER ()`` window-inside-aggregate → scalar subquery
+        3. ``json_object_agg(...)`` → ``json_group_object(...)`` (DuckDB alias)
+        4. Multi-row scalar subquery guard: ``(SELECT col FROM data WHERE ...)``
+           that would return >1 row is capped with LIMIT 1.
+        """
+        # --- fix 1: strip stray '?' appended to identifiers -----------------
+        sql = re.sub(r'(?<=[A-Za-z0-9_])\?', '', sql)
+
+        # --- fix 2: window-function-inside-aggregate rewrite ----------------
+        sql = re.sub(
+            r'AVG\(([^()]+)\)\s+OVER\s*\(\s*\)',
+            lambda m: f'(SELECT AVG({m.group(1)}) FROM data)',
+            sql,
+            flags=re.IGNORECASE
+        )
+        for agg_fn in ('SUM', 'COUNT', 'MIN', 'MAX'):
+            sql = re.sub(
+                rf'{agg_fn}\(([^()]+)\)\s+OVER\s*\(\s*\)',
+                lambda m, fn=agg_fn: f'(SELECT {fn}({m.group(1)}) FROM data)',
+                sql,
+                flags=re.IGNORECASE
+            )
+
+        # --- fix 3: PostgreSQL json_object_agg → DuckDB json_group_object ----
+        sql = re.sub(r'\bjson_object_agg\b', 'json_group_object', sql, flags=re.IGNORECASE)
+
+        # --- fix 4: scalar subquery returning multiple rows ------------------
+        # Pattern: a subquery in a scalar position (inside an expression but NOT
+        # in FROM/JOIN) that selects a single column with no top-level LIMIT.
+        # Append LIMIT 1 so DuckDB doesn't raise "more than one row" error.
+        # Only target the simple case: (SELECT <col|expr> FROM data <optional WHERE>)
+        def _add_limit1(m: re.Match) -> str:
+            inner = m.group(1)
+            if re.search(r'\bLIMIT\b', inner, re.IGNORECASE):
+                return m.group(0)  # already has LIMIT
+            if re.search(r'\bGROUP\s+BY\b', inner, re.IGNORECASE):
+                return m.group(0)  # aggregate — let DuckDB handle it
+            return f'(SELECT {inner} LIMIT 1)'
+
+        sql = re.sub(
+            r'\(SELECT\s+((?:(?!\bFROM\b).)+FROM\s+data(?:\s+WHERE\s+[^)]+)?)\)',
+            _add_limit1,
+            sql,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+
+        return sql
+
     async def generate_sql(self, query: str, df: pl.DataFrame) -> Tuple[str, str]:
         """
         Generate SQL from natural language query.
@@ -243,6 +379,10 @@ class QueryExecutor:
                 sql = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
             
             sql = sql.strip().rstrip(';') + ';'
+
+            # Apply model-output sanitisation (strips '?', rewrites bad window
+            # patterns, etc.) before the validator sees the SQL.
+            sql = self._sanitize_sql(sql)
             
             # Validate SQL
             is_valid, error = SQLValidator.validate(sql)
@@ -273,15 +413,34 @@ class QueryExecutor:
             conn = duckdb.connect(":memory:")
             
             try:
-                # Register the Polars dataframe as a table
-                # Convert to pandas for DuckDB compatibility
-                pandas_df = df.to_pandas()
+                # Register the Polars dataframe as a table.
+                # Avoid hard dependency on pyarrow by falling back to
+                # dict-based conversion when to_pandas() is unavailable.
+                try:
+                    pandas_df = df.to_pandas()
+                except ModuleNotFoundError as exc:
+                    if exc.name != "pyarrow":
+                        raise
+                    logger.warning(
+                        "pyarrow is not installed; falling back to slower "
+                        "dict-based Polars->Pandas conversion for SQL execution."
+                    )
+                    pandas_df = pd.DataFrame(df.to_dicts())
                 conn.register("data", pandas_df)
                 
                 # Execute with timeout and row limit
                 result_sql = f"SELECT * FROM ({sql.rstrip(';')}) AS subquery LIMIT {self._max_result_rows}"
-                
-                result = conn.execute(result_sql).pl()  # Get result as Polars
+
+                # Avoid pyarrow dependency: use fetchall() + build Polars from dicts.
+                # .pl() and .df() both rely on Arrow (pyarrow), but fetchall()
+                # returns plain Python tuples which need no extra C-extension.
+                cursor = conn.execute(result_sql)
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                records = [dict(zip(columns, row)) for row in rows]
+                result = pl.from_dicts(records) if records else pl.DataFrame(
+                    {col: pl.Series(col, [], dtype=pl.Utf8) for col in columns}
+                )
             finally:
                 conn.close()
             
@@ -387,8 +546,8 @@ class QueryExecutor:
                 max_tokens=500,
                 is_conversational=True
             )
-            
-            return interpretation.strip()
+
+            return self._postprocess_interpretation(str(interpretation).strip())
             
         except Exception as e:
             logger.error(f"Error interpreting results: {e}")

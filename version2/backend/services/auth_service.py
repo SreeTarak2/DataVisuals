@@ -271,65 +271,7 @@ class AuthService:
         
         return user
     
-    async def update_user_profile(self, user_id: str, update_data: dict) -> dict:
-        """Update user profile"""
-        try:
-            if not update_data:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No profile fields provided"
-                )
 
-            db = self._get_db()
-            object_id = ObjectId(user_id)
-
-            # Enforce username uniqueness across users.
-            if "username" in update_data:
-                username = str(update_data["username"]).strip()
-                if not username:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Username cannot be empty"
-                    )
-                existing_user = await db.users.find_one(
-                    {
-                        "username": username,
-                        "_id": {"$ne": object_id},
-                    }
-                )
-                if existing_user:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Username already taken"
-                    )
-                update_data["username"] = username
-
-            update_data["updated_at"] = datetime.utcnow()
-
-            result = await db.users.update_one(
-                {"_id": object_id},
-                {"$set": update_data}
-            )
-            
-            if result.matched_count == 0:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found"
-                )
-            
-            # Return updated user
-            updated_user = await self.get_user_by_id(user_id)
-            updated_user.pop("hashed_password", None)
-            return updated_user
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error updating user profile: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update profile"
-            )
     
     async def change_password(self, user_id: str, old_password: str, new_password: str) -> bool:
         """Change user password"""

@@ -62,6 +62,7 @@ class AgentState(TypedDict):
     hybrid_novelty_score: float
     novelty_threshold: float
     is_novel: bool
+    alpha: float  # Adaptive weight for hybrid score (Paper Eq. 8)
     approved_insights: List[InsightState]
     rejected_insights: List[InsightState]
     boring_insights: List[InsightState]
@@ -127,6 +128,7 @@ def create_initial_state(
         hybrid_novelty_score=0.0,
         novelty_threshold=novelty_threshold,
         is_novel=True,
+        alpha=0.6,  # Default per paper §III.C
         approved_insights=[],
         rejected_insights=[],
         boring_insights=[],

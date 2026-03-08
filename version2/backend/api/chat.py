@@ -4,17 +4,27 @@ import logging
 import json
 import os
 import time
+from pathlib import Path
+from uuid import uuid4
 from typing import Dict, Optional
 from fastapi import (
     APIRouter,
     Depends,
+    File,
     HTTPException,
     Query,
     Request,
+    UploadFile,
     WebSocket,
     WebSocketDisconnect,
     status,
 )
+
+# --- Chat Image Upload Configuration ---
+CHAT_UPLOAD_DIR = Path(__file__).resolve().parent.parent / "uploads" / "chat_images"
+CHAT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+MAX_CHAT_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB
+ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 # --- Application Modules ---
 from db.schemas import ChatRequest
@@ -633,6 +643,7 @@ async def chat_socket(websocket: WebSocket):
     - Redis-backed tracking for multi-worker deployments
     """
     user_id = None  # Track for cleanup in finally block
+    connection_tracked = False  # Only decrement if we actually incremented
     
     # Accept the WebSocket connection first so the browser gets proper close frames
     await websocket.accept()
@@ -664,14 +675,16 @@ async def chat_socket(websocket: WebSocket):
     # --- Connection Limit Check (Redis-backed) ---
     if not WebSocketRateLimiter.check_connection_limit(user_id):
         logger.warning(f"User {user_id} exceeded max WebSocket connections ({MAX_WS_CONNECTIONS_PER_USER})")
+        # Use 4008 custom close code so the client knows NOT to auto-reconnect
         await websocket.close(
-            code=status.WS_1008_POLICY_VIOLATION, 
-            reason=f"Too many connections. Maximum {MAX_WS_CONNECTIONS_PER_USER} allowed."
+            code=4008, 
+            reason=f"Too many connections. Maximum {MAX_WS_CONNECTIONS_PER_USER} allowed. Retry after closing other tabs."
         )
         return
     
-    # Track connection (Redis-backed)
+    # Track connection (Redis-backed) — only after limit check passes
     connection_count = WebSocketRateLimiter.increment_connection(user_id)
+    connection_tracked = True
     logger.info(f"WebSocket connection established for user {user_id} (active: {connection_count})")
 
     try:
@@ -748,12 +761,13 @@ async def chat_socket(websocket: WebSocket):
                             })
                             
                         elif chunk["type"] == "done":
-                            # Final message with conversation ID
+                            # Final message with conversation ID (and optional sql when from SQL execution path)
                             await websocket.send_json({
                                 "type": "done",
                                 "clientMessageId": client_message_id,
                                 "conversationId": chunk["conversation_id"],
-                                "chartConfig": chunk.get("chart_config")
+                                "chartConfig": chunk.get("chart_config"),
+                                "sql": chunk.get("sql"),
                             })
                 else:
                     # --- NON-STREAMING MODE (fallback) ---
@@ -794,7 +808,42 @@ async def chat_socket(websocket: WebSocket):
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="Internal server error")
     
     finally:
-        # Clean up connection tracking (Redis-backed)
-        if user_id:
+        # Clean up connection tracking (Redis-backed) — only if we incremented
+        if user_id and connection_tracked:
             remaining_count = WebSocketRateLimiter.decrement_connection(user_id)
             logger.info(f"WebSocket connection closed for user {user_id} (remaining: {remaining_count})")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat Image Upload
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/attachments")
+async def upload_chat_image(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Upload an image for display inside chat messages.
+    Returns the public URL that the frontend embeds as markdown `![](url)`.
+    """
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only image uploads are allowed. Got: {file.content_type}",
+        )
+
+    contents = await file.read()
+    if len(contents) > MAX_CHAT_IMAGE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image too large. Maximum size is {MAX_CHAT_IMAGE_SIZE // (1024*1024)} MB.",
+        )
+
+    ext = Path(file.filename).suffix if file.filename else ".png"
+    filename = f"{uuid4().hex}{ext}"
+    dest = CHAT_UPLOAD_DIR / filename
+    dest.write_bytes(contents)
+
+    url = f"/static/chat-images/{filename}"
+    logger.info(f"Chat image uploaded by user {current_user.get('id')}: {filename}")
+    return {"url": url}

@@ -1,24 +1,17 @@
 /**
  * ChartCard Component
- * 
- * Enterprise-grade chart wrapper for B2B analytics dashboard.
- * Provides consistent styling, action toolbar, and export capabilities.
- * 
- * Features:
- * - Title bar with chart type indicator
- * - Action toolbar (fullscreen, export, filter)
- * - Consistent border/shadow styling  
- * - Loading skeleton matching chart dimensions
+ *
+ * Enterprise chart wrapper with title bar, fullscreen, and export.
  */
 
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    Maximize2, Minimize2, Download, MoreVertical,
+    Maximize2, Minimize2, MoreVertical,
     BarChart3, LineChart, PieChart, ScatterChart,
-    Image, FileSpreadsheet, X
+    Image, FileSpreadsheet,
 } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn } from '../../lib/utils';
 
 const CHART_ICONS = {
     bar_chart: BarChart3,
@@ -67,23 +60,23 @@ const ChartCard = ({
         onExportCsv?.();
     };
 
-    // Loading skeleton
+    /* ── Loading skeleton ── */
     if (loading) {
         return (
             <div className={cn(
-                "bg-slate-900/60 border border-slate-800/80 rounded-xl overflow-hidden",
+                "bg-midnight border border-pearl/[0.06] rounded-xl overflow-hidden",
                 className
             )}>
-                <div className="p-4 border-b border-slate-800/50">
+                <div className="p-4 border-b border-pearl/[0.04]">
                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-slate-800 rounded-lg animate-pulse" />
+                        <div className="w-8 h-8 bg-pearl/[0.04] rounded-lg animate-pulse" />
                         <div className="space-y-2">
-                            <div className="h-4 w-32 bg-slate-800 rounded animate-pulse" />
-                            <div className="h-3 w-24 bg-slate-800/60 rounded animate-pulse" />
+                            <div className="h-4 w-32 bg-pearl/[0.04] rounded animate-pulse" />
+                            <div className="h-3 w-24 bg-pearl/[0.03] rounded animate-pulse" />
                         </div>
                     </div>
                 </div>
-                <div className="h-[400px] bg-slate-800/20 animate-pulse" />
+                <div className="h-[400px] bg-pearl/[0.02] animate-pulse" />
             </div>
         );
     }
@@ -95,78 +88,67 @@ const ChartCard = ({
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 className={cn(
-                    "bg-slate-900/60 border border-slate-800/80 rounded-xl overflow-hidden",
-                    "hover:border-slate-700/80 transition-all duration-300",
-                    "shadow-lg shadow-black/10",
+                    "bg-midnight border border-pearl/[0.06] rounded-xl overflow-hidden",
+                    "hover:border-pearl/[0.12] transition-all duration-300",
                     isFullscreen && "fixed inset-4 z-50 rounded-2xl",
-                    className
+                    className,
                 )}
             >
                 {/* Header */}
-                <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800/50 bg-slate-900/40">
-                    {/* Title Area */}
+                <div className="flex items-center justify-between px-5 py-3.5 border-b border-pearl/[0.04]">
                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-slate-800/80 flex items-center justify-center">
-                            <ChartIcon className="w-4 h-4 text-cyan-400" />
+                        <div className="w-8 h-8 rounded-lg bg-ocean/10 flex items-center justify-center">
+                            <ChartIcon className="w-4 h-4 text-ocean" />
                         </div>
                         <div>
-                            <h3 className="text-sm font-semibold text-white">{title}</h3>
+                            <h3 className="text-[13px] font-semibold text-pearl">{title}</h3>
                             {subtitle && (
-                                <p className="text-xs text-slate-500">{subtitle}</p>
+                                <p className="text-[11px] text-granite">{subtitle}</p>
                             )}
                         </div>
                     </div>
 
                     {/* Actions */}
-                    <div className="flex items-center gap-1">
-                        {/* Fullscreen Toggle */}
+                    <div className="flex items-center gap-0.5">
                         <button
                             onClick={handleFullscreen}
-                            className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                            className="p-2 rounded-md text-granite hover:text-pearl hover:bg-pearl/[0.04] transition-colors"
                             title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
                         >
-                            {isFullscreen ? (
-                                <Minimize2 className="w-4 h-4" />
-                            ) : (
-                                <Maximize2 className="w-4 h-4" />
-                            )}
+                            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
                         </button>
 
-                        {/* Export Menu */}
                         <div className="relative">
                             <button
                                 onClick={() => setShowMenu(!showMenu)}
-                                className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                                className="p-2 rounded-md text-granite hover:text-pearl hover:bg-pearl/[0.04] transition-colors"
                                 title="Export options"
                             >
-                                <MoreVertical className="w-4 h-4" />
+                                <MoreVertical className="w-3.5 h-3.5" />
                             </button>
 
                             <AnimatePresence>
                                 {showMenu && (
                                     <>
-                                        <div
-                                            className="fixed inset-0 z-10"
-                                            onClick={() => setShowMenu(false)}
-                                        />
+                                        <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
                                         <motion.div
                                             initial={{ opacity: 0, scale: 0.95, y: -4 }}
                                             animate={{ opacity: 1, scale: 1, y: 0 }}
                                             exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                                            className="absolute right-0 top-full mt-1 z-20 w-44 bg-slate-800 border border-slate-700 rounded-lg shadow-xl py-1"
+                                            className="absolute right-0 top-full mt-1 z-20 w-44 bg-midnight border border-pearl/[0.06] rounded-lg shadow-xl py-1"
                                         >
                                             <button
                                                 onClick={handleExportImage}
-                                                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700 transition-colors"
+                                                className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-granite hover:text-pearl hover:bg-pearl/[0.04] transition-colors"
                                             >
-                                                <Image className="w-4 h-4" />
+                                                <Image className="w-3.5 h-3.5" />
                                                 Export as PNG
                                             </button>
                                             <button
                                                 onClick={handleExportCsv}
-                                                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700 transition-colors"
+                                                className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-granite hover:text-pearl hover:bg-pearl/[0.04] transition-colors"
                                             >
-                                                <FileSpreadsheet className="w-4 h-4" />
+                                                <FileSpreadsheet className="w-3.5 h-3.5" />
                                                 Export as CSV
                                             </button>
                                         </motion.div>
@@ -179,8 +161,8 @@ const ChartCard = ({
 
                 {/* Chart Content */}
                 <div className={cn(
-                    "p-4 bg-[#0d1117]",
-                    isFullscreen ? "h-[calc(100%-60px)]" : "h-[400px]"
+                    "p-4 bg-noir",
+                    isFullscreen ? "h-[calc(100%-56px)]" : "h-[400px]",
                 )}>
                     {children}
                 </div>
@@ -188,10 +170,7 @@ const ChartCard = ({
 
             {/* Fullscreen backdrop */}
             {isFullscreen && (
-                <div
-                    className="fixed inset-0 bg-black/80 z-40"
-                    onClick={handleFullscreen}
-                />
+                <div className="fixed inset-0 bg-black/80 z-40" onClick={handleFullscreen} />
             )}
         </>
     );
