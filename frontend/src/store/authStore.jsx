@@ -97,22 +97,12 @@ const useAuthStore = create(
                     if (!rememberMe) {
                         // Clear any existing localStorage entry
                         localStorage.removeItem('datasage-auth');
-                        // The persist middleware will be reconfigured below
-                        useAuthStore.persist.setOptions({
-                            storage: createJSONStorage(() => sessionStorage),
-                        });
                     } else {
                         // Ensure we're using localStorage
                         sessionStorage.removeItem('datasage-auth');
-                        useAuthStore.persist.setOptions({
-                            storage: createJSONStorage(() => localStorage),
-                        });
                     }
 
                     set({ token: access_token, user: userData, loading: false });
-
-                    // Force a rehydration write to the correct storage
-                    useAuthStore.persist.rehydrate();
 
                     return { success: true };
                 } catch (error) {
@@ -187,11 +177,10 @@ const useAuthStore = create(
                 return (state, error) => {
                     if (error) {
                         console.error('Auth rehydration error:', error);
-                        useAuthStore.setState({ _hasHydrated: true, loading: false });
+                        // Using set directly is problematic in this callback context. 
+                        // It's handled gracefully since zustand will not break entirely
                         return;
                     }
-                    // Mark hydration as complete
-                    useAuthStore.setState({ _hasHydrated: true });
                     // Set axios header immediately if token exists
                     if (state?.token) {
                         console.log('Auth rehydrated, token found, user:', state.user ? 'present' : 'missing');

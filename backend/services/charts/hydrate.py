@@ -42,10 +42,25 @@ def validate_config(df: pl.DataFrame, config: ChartConfig) -> None:
     if len(safe_cols) < len(config.columns):
         config.columns = safe_cols
 
-    if not config.columns:
+    # Chart types whose handlers have built-in fallback logic for fewer columns:
+    #   pie       → 1 col: value_counts distribution
+    #   heatmap   → <3 cols: correlation heatmap fallback
+    #   histogram → 1 col: standard histogram
+    #   treemap   → 1 col: group-by count
+    HANDLER_MIN_COLUMNS = {
+        "pie": 1,
+        "pie_chart": 1,
+        "donut": 1,
+        "heatmap": 0,
+        "histogram": 1,
+        "treemap": 1,
+    }
+    effective_min = HANDLER_MIN_COLUMNS.get(chart_type_str, rules.get("min_columns", 1))
+
+    if not config.columns and effective_min > 0:
         raise HydrationError("No valid columns after safety check.")
 
-    if len(config.columns) < rules.get("min_columns", 1):
+    if len(config.columns) < effective_min:
         raise HydrationError("Insufficient columns for chart type.")
 
     num_needed = sum(1 for req in rules.get("data_types", []) if req["type"] == "numeric")
@@ -84,18 +99,108 @@ def _safe_aggregate(df: pl.DataFrame, group_col: str, value_col: str, agg: Aggre
 
 
 def hydrate_kpi(df: pl.DataFrame, config: KpiConfig) -> Dict[str, Any]:
+    """
+    Hydrate a KPI component with real computed data from the full DataFrame.
+
+    Returns a rich dict:
+      value, label, sparkline_data, comparison_value, comparison_label,
+      delta_percent, format, min_value, max_value, record_count, top_values
+    """
     start = time.time()
     try:
-        validate_config(df, config)
-        if config.aggregation == AggregationType.COUNT:
+        col = config.column
+        agg = config.aggregation
+
+        # --- Primary value ---
+        if agg == AggregationType.COUNT:
             value = len(df)
+        elif col == "__all__" or col not in df.columns:
+            # Fallback for count-all or missing column
+            value = len(df)
+            agg = AggregationType.COUNT
         else:
-            if config.column not in df.columns:
-                raise HydrationError("KPI column missing.")
-            value = df.select(
-                getattr(pl, config.aggregation.value)(config.column)
-            ).item()
-        return {"value": value, "label": config.title}
+            agg_str = agg.value if hasattr(agg, 'value') else agg
+            value = df.select(getattr(pl, agg_str)(col)).item()
+
+        result: Dict[str, Any] = {"value": value, "label": config.title}
+
+        # --- Only enrich if we have a real numeric column ---
+        if col != "__all__" and col in df.columns and df[col].dtype in NUMERIC_DTYPES:
+            series = df[col].drop_nulls()
+            n = len(series)
+
+            # Format detection from column name
+            col_lower = col.lower()
+            if any(kw in col_lower for kw in ("price", "cost", "revenue", "amount", "salary",
+                                                "income", "profit", "tax", "fee", "payment")):
+                result["format"] = "currency"
+            elif any(kw in col_lower for kw in ("percent", "ratio", "rate", "efficiency")):
+                result["format"] = "percentage"
+            elif agg == AggregationType.COUNT:
+                result["format"] = "integer"
+            else:
+                result["format"] = "number"
+
+            # Min / Max / Record count
+            result["min_value"] = float(series.min()) if n > 0 else 0
+            result["max_value"] = float(series.max()) if n > 0 else 0
+            result["record_count"] = n
+
+            # Sparkline — bucket into 16 points (rolling trend)
+            if n >= 8:
+                vals = series.to_list()
+                bucket_count = min(16, n)
+                bucket_size = n // bucket_count
+                sparkline = []
+                for i in range(bucket_count):
+                    chunk = vals[i * bucket_size:(i + 1) * bucket_size]
+                    if chunk:
+                        sparkline.append(round(sum(chunk) / len(chunk), 2))
+                result["sparkline_data"] = sparkline
+
+            # Comparison — first half vs second half (with proper label)
+            if n >= 10:
+                mid = n // 2
+                first_vals = series.slice(0, mid)
+                second_vals = series.slice(mid)
+
+                if agg == AggregationType.SUM:
+                    prev = float(first_vals.sum())
+                    curr = float(second_vals.sum())
+                elif agg == AggregationType.MEAN:
+                    prev = float(first_vals.mean())
+                    curr = float(second_vals.mean())
+                else:
+                    prev = float(first_vals.sum())
+                    curr = float(second_vals.sum())
+
+                result["comparison_value"] = round(prev, 2)
+                result["comparison_label"] = "vs first half"
+
+                if prev != 0:
+                    delta = ((curr - prev) / abs(prev)) * 100
+                    result["delta_percent"] = round(delta, 1)
+
+        elif col in df.columns and df[col].dtype in (CATEGORICAL_DTYPES | {pl.Utf8}):
+            # For categorical KPIs (count/nunique) — provide top value distribution
+            result["format"] = "integer"
+            result["record_count"] = len(df)
+            try:
+                top = (
+                    df.group_by(col)
+                    .agg(pl.count().alias("cnt"))
+                    .sort("cnt", descending=True)
+                    .head(5)
+                )
+                result["top_values"] = [
+                    {"name": str(row[col]), "count": int(row["cnt"])}
+                    for row in top.iter_rows(named=True)
+                ]
+            except Exception:
+                pass
+
+        return result
+
     except Exception as e:
         logger.error(f"KPI hydration failed: {e}")
         return {"value": "N/A", "label": config.title, "error": str(e)[:60]}
@@ -180,59 +285,146 @@ def _get_handler(chart_type: str):
 
 
 def _hydrate_bar(df, config):
+    MAX_BAR_CATEGORIES = 25
     if len(config.columns) < 2:
         return []
     x, y = config.columns[0], config.columns[1]
     agg_df = _safe_aggregate(df, x, y, config.aggregation)
+    
+    # Cap categories: keep top-N by value, aggregate remainder as "Other"
+    total_categories = len(agg_df)
+    if total_categories > MAX_BAR_CATEGORIES:
+        top_df = agg_df.sort("y", descending=True).head(MAX_BAR_CATEGORIES - 1)
+        other_sum = agg_df.sort("y", descending=True).tail(total_categories - (MAX_BAR_CATEGORIES - 1))["y"].sum()
+        other_row = pl.DataFrame({"x": [f"Other ({total_categories - MAX_BAR_CATEGORIES + 1} more)"], "y": [other_sum]})
+        agg_df = pl.concat([top_df, other_row])
+        logger.info(f"Bar chart capped: {total_categories} → {MAX_BAR_CATEGORIES} categories")
+    
     x_data = agg_df["x"].to_list()
     y_data = agg_df["y"].to_list()
     logger.info(f"Bar chart data - X: {x_data[:5]}... (total: {len(x_data)})")
     logger.info(f"Bar chart data - Y: {y_data[:5]}... (total: {len(y_data)})")
-    trace = {"type": "bar", "x": x_data, "y": y_data}
-    logger.info(f"Created trace with keys: {trace.keys()}")
+    trace = {"type": "bar", "x": x_data, "y": y_data, "name": config.title or y}
+    if total_categories > MAX_BAR_CATEGORIES:
+        trace["_sampled"] = {"original_count": total_categories, "shown": MAX_BAR_CATEGORIES}
     return [trace]
 
 
 def _hydrate_line(df, config):
+    MAX_LINE_POINTS = 1000
     if len(config.columns) < 2:
         return []
     x, y = config.columns[0], config.columns[1]
     if df[x].dtype in TEMPORAL_DTYPES:
         df = df.sort(x)
     agg_df = _safe_aggregate(df, x, y, config.aggregation)
-    return [{"type": "scatter", "mode": "lines", "x": agg_df["x"].to_list(), "y": agg_df["y"].to_list()}]
+    
+    # Downsample line charts: take evenly spaced points to preserve shape
+    total_points = len(agg_df)
+    if total_points > MAX_LINE_POINTS:
+        step = max(1, total_points // MAX_LINE_POINTS)
+        agg_df = agg_df.gather_every(step)
+        logger.info(f"Line chart downsampled: {total_points} → {len(agg_df)} points")
+    
+    trace = {"type": "scatter", "mode": "lines", "x": agg_df["x"].to_list(), "y": agg_df["y"].to_list(), "name": config.title or y}
+    if total_points > MAX_LINE_POINTS:
+        trace["_sampled"] = {"original_count": total_points, "shown": len(agg_df)}
+    return [trace]
 
 
 def _hydrate_pie(df, config):
-    if len(config.columns) != 2:
-        return []
-    labels, values = config.columns
-    agg_df = _safe_aggregate(df, labels, values, AggregationType.SUM)
-    return [{"type": "pie", "labels": agg_df["x"].to_list(), "values": agg_df["y"].to_list()}]
+    if len(config.columns) == 1:
+        # Single column → categorical distribution (group by + count)
+        col = config.columns[0]
+        if col not in df.columns:
+            return []
+        counts = (
+            df.select(col)
+            .drop_nulls()
+            .group_by(col)
+            .agg(pl.count().alias("cnt"))
+            .sort("cnt", descending=True)
+            .head(10)  # Top 10 slices to keep pie readable
+        )
+        if counts.is_empty():
+            return []
+        labels = [str(v) for v in counts[col].to_list()]
+        values = counts["cnt"].to_list()
+        return [{"type": "pie", "labels": labels, "values": values, "name": config.title or col}]
+    elif len(config.columns) >= 2:
+        labels, values = config.columns[0], config.columns[1]
+        agg_df = _safe_aggregate(df, labels, values, config.aggregation)
+        if agg_df.is_empty():
+            return []
+        return [{"type": "pie", "labels": agg_df["x"].to_list(), "values": agg_df["y"].to_list(), "name": config.title or labels}]
+    return []
 
 
 def _hydrate_histogram(df, config):
     col = config.columns[0]
-    if df[col].dtype not in NUMERIC_DTYPES:
+    if col not in df.columns:
         return []
+    # For categorical columns → value counts as bar chart
+    if df[col].dtype not in NUMERIC_DTYPES:
+        counts = (
+            df.select(col)
+            .drop_nulls()
+            .group_by(col)
+            .agg(pl.count().alias("cnt"))
+            .sort("cnt", descending=True)
+            .head(20)
+        )
+        if counts.is_empty():
+            return []
+        return [{
+            "type": "bar",
+            "x": [str(v) for v in counts[col].to_list()],
+            "y": counts["cnt"].to_list(),
+            "name": config.title or col,
+        }]
     vals = df[col].drop_nulls().to_numpy()
-    hist, bins = np.histogram(vals, bins=20)
-    return [{"type": "bar", "x": bins[:-1].tolist(), "y": hist.tolist()}]
+    if len(vals) == 0:
+        return []
+    hist, bins = np.histogram(vals, bins=min(20, max(5, len(vals) // 10)))
+    # Format bin labels for readability
+    bin_labels = [f"{bins[i]:.1f}" for i in range(len(hist))]
+    return [{
+        "type": "bar",
+        "x": bin_labels,
+        "y": hist.tolist(),
+        "name": config.title or col,
+    }]
 
 
 def _hydrate_box(df, config):
+    if len(config.columns) < 2:
+        return []
     cat, num = config.columns[0], config.columns[1]
     traces = []
-    for c in df[cat].unique():
+    for c in df[cat].unique().to_list()[:20]:
         group = df.filter(pl.col(cat) == c)[num].drop_nulls().to_list()
         if group:
-            traces.append({"type": "box", "name": str(c), "y": group})
+            traces.append({
+                "type": "box",
+                "name": str(c),
+                "y": group,
+                "boxpoints": "outliers",
+                "whiskerwidth": 0.5,
+            })
     return traces
 
 
 def _hydrate_scatter(df, config):
+    MAX_SCATTER_POINTS = 2000
     x, y = config.columns[0], config.columns[1]
     color = config.columns[2] if len(config.columns) > 2 else None
+    
+    # Sample large datasets to prevent frontend crash and overplotting
+    total_rows = len(df)
+    if total_rows > MAX_SCATTER_POINTS:
+        df = df.sample(n=MAX_SCATTER_POINTS, seed=42)
+        logger.info(f"Scatter chart sampled: {total_rows:,} → {MAX_SCATTER_POINTS} points")
+    
     if color:
         triples = [
             (xv, yv, cv)
@@ -242,7 +434,7 @@ def _hydrate_scatter(df, config):
         if not triples:
             return []
         xs, ys, cs = zip(*triples)
-        trace = {"type": "scatter", "mode": "markers", "x": list(xs), "y": list(ys), "marker": {"color": list(cs)}}
+        trace = {"type": "scatter", "mode": "markers", "x": list(xs), "y": list(ys), "marker": {"color": list(cs)}, "name": config.title or f"{y} vs {x}"}
     else:
         pairs = [
             (xv, yv)
@@ -252,7 +444,10 @@ def _hydrate_scatter(df, config):
         if not pairs:
             return []
         xs, ys = zip(*pairs)
-        trace = {"type": "scatter", "mode": "markers", "x": list(xs), "y": list(ys)}
+        trace = {"type": "scatter", "mode": "markers", "x": list(xs), "y": list(ys), "name": config.title or f"{y} vs {x}"}
+    
+    if total_rows > MAX_SCATTER_POINTS:
+        trace["_sampled"] = {"original_count": total_rows, "shown": MAX_SCATTER_POINTS}
     return [trace]
 
 
@@ -491,11 +686,11 @@ def _hydrate_violin(df, config):
     """Violin plot - distribution shape visualization."""
     if len(config.columns) < 2:
         return []
-    
+
     cat, num = config.columns[0], config.columns[1]
     traces = []
-    
-    for c in df[cat].unique().to_list()[:10]:  # Limit categories
+
+    for c in df[cat].unique().to_list()[:20]:
         group = df.filter(pl.col(cat) == c)[num].drop_nulls().to_list()
         if group:
             traces.append({
@@ -503,9 +698,14 @@ def _hydrate_violin(df, config):
                 "name": str(c),
                 "y": group,
                 "box": {"visible": True},
-                "meanline": {"visible": True}
+                "meanline": {"visible": True},
+                "points": "all",
+                "jitter": 0.3,
+                "pointpos": -1.5,
+                "scalemode": "width",
+                "spanmode": "soft",
             })
-    
+
     return traces
 
 

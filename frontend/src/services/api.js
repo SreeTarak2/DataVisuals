@@ -148,6 +148,15 @@ export const chatAPI = {
 
   // Delete conversation
   deleteConversation: (conversationId) => api.delete(`/chat/conversations/${conversationId}`),
+
+  // Upload an image for embedding in chat messages
+  uploadChatImage: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/chat/attachments', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
 };
 
 // Chart Insights API calls
@@ -290,6 +299,41 @@ export const dashboardAPI = {
 
   // Get dashboard insights
   getDashboardInsights: (datasetId) => api.get(`/dashboard/${datasetId}/insights`),
+};
+
+// Insights API calls (dedicated insights page)
+export const insightsAPI = {
+  // Get comprehensive insights for a dataset
+  getComprehensiveInsights: (datasetId, forceRefresh = false, config = {}, filters = null) => {
+    const params = new URLSearchParams();
+    if (forceRefresh) params.set('force_refresh', 'true');
+    if (filters) params.set('filters', filters);
+    const qs = params.toString();
+    return api.get(`/insights/${datasetId}${qs ? `?${qs}` : ''}`, config);
+  },
+};
+
+// Agentic AI & Belief Store API calls
+export const agenticAPI = {
+  // Run agentic QUIS analysis
+  runAnalysis: (datasetId, options = {}) =>
+    api.post('/agentic/analyze', { dataset_id: datasetId, ...options }),
+
+  // Submit feedback on an insight (feeds the Belief Store)
+  submitFeedback: ({ insight_text, feedback_type, dataset_id = null }) =>
+    api.post('/agentic/feedback', { insight_text, feedback_type, dataset_id }),
+
+  // List user beliefs
+  listBeliefs: (limit = 50) =>
+    api.get(`/agentic/beliefs?limit=${limit}`),
+
+  // Delete a specific belief
+  deleteBelief: (beliefId) =>
+    api.delete(`/agentic/beliefs/${beliefId}`),
+
+  // Clear all beliefs (reset personalization)
+  clearBeliefs: () =>
+    api.delete('/agentic/beliefs'),
 };
 
 export default api;

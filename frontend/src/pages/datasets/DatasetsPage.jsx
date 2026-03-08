@@ -4,331 +4,289 @@ import {
   BarChart3,
   Calendar,
   CheckCircle2,
+  Clock,
   Columns3,
   Database,
   File,
   Grid,
-  Hash,
   List,
   MessageSquare,
   RefreshCw,
+  Rows3,
   Search,
   Trash2,
+  Upload,
   XCircle,
 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-hot-toast";
 import useDatasetStore from "../../store/datasetStore";
-import { cn } from "../../lib/utils";
 import GlobalUploadButton from "../../components/GlobalUploadButton";
 import DeleteConfirmModal from "../../components/common/DeleteConfirmModal";
+import { cn } from "../../lib/utils";
 
-const MotionSection = motion.section;
-const MotionArticle = motion.article;
-
-const surfaceVariants = {
-  hidden: { opacity: 0, y: 16 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.32, ease: "easeOut" },
-  },
-};
-
-const listVariants = {
-  hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: { staggerChildren: 0.06, delayChildren: 0.05 },
-  },
-};
-
-const cardVariants = {
-  hidden: { opacity: 0, y: 12, scale: 0.98 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    scale: 1,
-    transition: { duration: 0.22, ease: "easeOut" },
-  },
-  exit: { opacity: 0, scale: 0.97, transition: { duration: 0.16 } },
-};
-
-const getDatasetId = (dataset) => dataset?.id || dataset?._id;
-const getDatasetName = (dataset) =>
-  dataset?.name || dataset?.filename || "Untitled Dataset";
-
-const getDatasetDate = (dataset) =>
-  dataset?.created_at ||
-  dataset?.uploaded_at ||
-  dataset?.upload_date ||
-  dataset?.createdAt;
+/* ─── Helpers ─── */
+const getDatasetId = (d) => d?.id || d?.dataset_id || d?._id || "";
+const getDatasetName = (d) => d?.name || d?.original_filename || d?.file_name || "Untitled";
+const getDatasetDate = (d) => d?.created_at || d?.uploaded_at || d?.createdAt || "";
 
 const formatDate = (value) => {
-  if (!value) return "Unknown date";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unknown date";
-  return date.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+  if (!value) return "\u2014";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "\u2014";
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 };
+
+const getFileExt = (name) => (name?.split(".").pop() || "").toLowerCase();
+
+const FILE_EXT_COLORS = {
+  csv: "from-emerald-400/80 to-teal-500/80",
+  xls: "from-emerald-400/80 to-teal-500/80",
+  xlsx: "from-emerald-400/80 to-teal-500/80",
+  json: "from-sky-400/80 to-blue-500/80",
+  xml: "from-sky-400/80 to-blue-500/80",
+  parquet: "from-sky-400/80 to-blue-500/80",
+  txt: "from-amber-400/80 to-orange-500/80",
+  pdf: "from-amber-400/80 to-orange-500/80",
+};
+
+const getFileBadgeClass = (name) =>
+  FILE_EXT_COLORS[getFileExt(name)] || "from-granite/60 to-granite/40";
 
 const getStatusConfig = (dataset) => {
   const status = (dataset?.status || "").toLowerCase();
-  if (status === "completed" || dataset?.is_processed) {
-    return {
-      label: "Ready",
-      icon: CheckCircle2,
-      className:
-        "border-emerald-400/30 bg-emerald-500/10 text-emerald-200 shadow-[0_0_24px_rgba(16,185,129,0.16)]",
-    };
+  if (dataset?.is_processed || status === "completed") {
+    return { label: "Ready", icon: CheckCircle2, dot: "bg-emerald-400", text: "text-emerald-300" };
   }
   if (status === "processing") {
-    return {
-      label: "Processing",
-      icon: RefreshCw,
-      className:
-        "border-amber-400/30 bg-amber-500/10 text-amber-100 shadow-[0_0_24px_rgba(245,158,11,0.14)]",
-    };
+    return { label: "Processing", icon: Clock, dot: "bg-gold", text: "text-gold" };
   }
-  if (status === "error") {
-    return {
-      label: "Error",
-      icon: XCircle,
-      className:
-        "border-rose-400/30 bg-rose-500/10 text-rose-100 shadow-[0_0_24px_rgba(244,63,94,0.14)]",
-    };
+  if (status === "failed" || status === "error") {
+    return { label: "Failed", icon: XCircle, dot: "bg-rose-400", text: "text-rose-300" };
   }
-  return {
-    label: "Queued",
-    icon: AlertTriangle,
-    className: "border-slate-500/30 bg-slate-500/10 text-slate-200",
-  };
+  return { label: "Queued", icon: AlertTriangle, dot: "bg-granite", text: "text-granite" };
 };
 
-const getFileTone = (name) => {
-  const ext = (name?.split(".").pop() || "").toLowerCase();
-  if (["csv", "xls", "xlsx"].includes(ext)) {
-    return {
-      label: ext || "table",
-      className: "from-emerald-400 to-teal-500",
-    };
-  }
-  if (["json", "xml", "parquet"].includes(ext)) {
-    return {
-      label: ext || "data",
-      className: "from-sky-400 to-blue-500",
-    };
-  }
-  if (["txt", "pdf"].includes(ext)) {
-    return {
-      label: ext || "file",
-      className: "from-amber-400 to-orange-500",
-    };
-  }
-  return {
-    label: ext || "file",
-    className: "from-slate-400 to-slate-500",
-  };
+/* ─── Motion ─── */
+const fadeUp = {
+  hidden: { opacity: 0, y: 14 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.28, ease: "easeOut" } },
 };
 
-const StatCard = ({ label, value, hint }) => (
-  <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4 backdrop-blur-md">
-    <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">{label}</p>
-    <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
-    <p className="mt-1 text-xs text-slate-500">{hint}</p>
+const stagger = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.06 } },
+};
+
+const cardMotion = {
+  hidden: { opacity: 0, y: 16, scale: 0.97 },
+  visible: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.3, ease: "easeOut" } },
+};
+
+/* ─── Stat Pill ─── */
+const StatPill = ({ icon: Icon, value, label }) => (
+  <div className="flex items-center gap-3 rounded-2xl border border-[var(--surface-border)] bg-[var(--surface-1)] px-5 py-4 backdrop-blur-sm">
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-pearl/[0.07]">
+      <Icon className="h-5 w-5 text-pearl/60" />
+    </div>
+    <div>
+      <p className="text-xl font-semibold text-pearl">{value}</p>
+      <p className="text-[13px] text-granite">{label}</p>
+    </div>
   </div>
 );
 
-const DatasetCard = ({ dataset, viewMode, onChat, onCharts, onDelete }) => {
+/* ─── Grid Card ─── */
+const GridCard = ({ dataset, onChat, onCharts, onDelete }) => {
   const id = getDatasetId(dataset);
   const name = getDatasetName(dataset);
-  const statusConfig = getStatusConfig(dataset);
-  const fileTone = getFileTone(name);
-  const createdLabel = formatDate(getDatasetDate(dataset));
-  const isGrid = viewMode === "grid";
-  const rowCount = dataset?.row_count || 0;
-  const columnCount = dataset?.column_count || 0;
-  const StatusIcon = statusConfig.icon;
+  const ext = getFileExt(name);
+  const status = getStatusConfig(dataset);
+  const date = formatDate(getDatasetDate(dataset));
+  const rows = dataset?.row_count || 0;
+  const cols = dataset?.column_count || 0;
 
   if (!id) return null;
 
-  if (!isGrid) {
-    return (
-      <MotionArticle
-        layout
-        variants={cardVariants}
-        className="group rounded-2xl border border-white/10 bg-[#0a0e17]/90 px-4 py-4 backdrop-blur-md transition-all hover:border-white/20 hover:bg-[#111827]/95"
-      >
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
-          <button
-            onClick={() => onChat(dataset)}
-            className="flex flex-1 items-start gap-3 text-left"
-          >
-            <div
-              className={cn(
-                "mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-white shadow-lg",
-                fileTone.className
-              )}
-            >
-              <File className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="truncate text-base font-semibold text-white">{name}</h3>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                <span className="inline-flex items-center gap-1">
-                  <Calendar className="h-3.5 w-3.5" />
-                  {createdLabel}
-                </span>
-                <span className="text-slate-600">•</span>
-                <span className="uppercase tracking-wider">{fileTone.label}</span>
-              </div>
-            </div>
-          </button>
-
-          <div className="grid grid-cols-2 gap-2 lg:min-w-56">
-            <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-              <p className="text-[11px] text-slate-500">Rows</p>
-              <p className="text-sm font-semibold text-slate-100">
-                {rowCount.toLocaleString()}
-              </p>
-            </div>
-            <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-              <p className="text-[11px] text-slate-500">Columns</p>
-              <p className="text-sm font-semibold text-slate-100">
-                {columnCount.toLocaleString()}
-              </p>
-            </div>
-          </div>
-
-          <div
-            className={cn(
-              "inline-flex w-fit items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
-              statusConfig.className
-            )}
-          >
-            <StatusIcon className="h-3.5 w-3.5" />
-            {statusConfig.label}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => onChat(dataset)}
-              className="rounded-lg border border-slate-500/30 bg-slate-500/10 px-3 py-2 text-sm text-slate-100 transition-colors hover:bg-slate-500/20"
-            >
-              <MessageSquare className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => onCharts(dataset)}
-              className="rounded-lg border border-cyan-400/35 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-100 transition-colors hover:bg-cyan-500/20"
-            >
-              <BarChart3 className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => onDelete(dataset)}
-              className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100 transition-colors hover:bg-rose-500/20"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      </MotionArticle>
-    );
-  }
-
   return (
-    <MotionArticle
+    <motion.article
       layout
-      variants={cardVariants}
-      className="group relative overflow-hidden rounded-3xl border border-white/10 bg-[#090d16]/90 p-5 backdrop-blur-md transition-all hover:-translate-y-1 hover:border-white/20 hover:shadow-[0_20px_40px_-24px_rgba(202,210,253,0.35)]"
+      variants={cardMotion}
+      className="group relative flex flex-col rounded-2xl border border-[var(--surface-border)] bg-[var(--surface-1)] p-5 transition-all duration-200 hover:border-[var(--surface-border-hover)] hover:bg-[var(--surface-2)]"
     >
-      <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-transparent via-[#cad2fd] to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
-
-      <button onClick={() => onChat(dataset)} className="w-full text-left">
-        <div className="flex items-start justify-between gap-3">
-          <div
-            className={cn(
-              "flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br text-white shadow-lg",
-              fileTone.className
-            )}
-          >
-            <File className="h-5 w-5" />
-          </div>
-          <div
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
-              statusConfig.className
-            )}
-          >
-            <StatusIcon className="h-3.5 w-3.5" />
-            {statusConfig.label}
-          </div>
+      {/* top: icon + status */}
+      <div className="flex items-start justify-between gap-3">
+        <div
+          className={cn(
+            "flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br text-white shadow-sm",
+            getFileBadgeClass(name)
+          )}
+        >
+          <File className="h-5 w-5" />
         </div>
+        <span
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full border border-[var(--surface-border)] bg-[var(--surface-2)] px-2.5 py-1 text-[13px]",
+            status.text
+          )}
+        >
+          <span className={cn("h-1.5 w-1.5 rounded-full", status.dot)} />
+          {status.label}
+        </span>
+      </div>
 
-        <h3 className="mt-4 truncate text-lg font-semibold text-white">{name}</h3>
-        <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
+      {/* name + meta */}
+      <button onClick={() => onChat(dataset)} className="mt-4 text-left">
+        <h3 className="truncate text-[17px] font-semibold text-pearl">{name}</h3>
+        <div className="mt-1.5 flex items-center gap-2 text-[13px] text-granite">
           <Calendar className="h-3.5 w-3.5" />
-          {createdLabel}
-          <span className="text-slate-600">•</span>
-          <span className="uppercase tracking-[0.14em] text-slate-500">
-            {fileTone.label}
-          </span>
+          <span>{date}</span>
+          <span className="text-avocado">·</span>
+          <span className="uppercase tracking-wider">{ext || "file"}</span>
         </div>
       </button>
 
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-500">
-            <Hash className="h-3 w-3" />
-            Rows
+      {/* row/col stats */}
+      <div className="mt-4 grid grid-cols-2 gap-2.5">
+        <div className="rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)] px-3 py-2.5">
+          <p className="flex items-center gap-1.5 text-[12px] uppercase tracking-wider text-granite">
+            <Rows3 className="h-3.5 w-3.5" /> Rows
           </p>
-          <p className="mt-1 text-base font-semibold text-slate-100">
-            {rowCount.toLocaleString()}
-          </p>
+          <p className="mt-0.5 text-[15px] font-semibold text-pearl/90">{rows.toLocaleString()}</p>
         </div>
-        <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-500">
-            <Columns3 className="h-3 w-3" />
-            Columns
+        <div className="rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)] px-3 py-2.5">
+          <p className="flex items-center gap-1.5 text-[12px] uppercase tracking-wider text-granite">
+            <Columns3 className="h-3.5 w-3.5" /> Cols
           </p>
-          <p className="mt-1 text-base font-semibold text-slate-100">
-            {columnCount.toLocaleString()}
-          </p>
+          <p className="mt-0.5 text-[15px] font-semibold text-pearl/90">{cols.toLocaleString()}</p>
         </div>
       </div>
 
-      <div className="mt-4 flex items-center gap-2">
+      {/* action footer */}
+      <div className="mt-4 flex items-center gap-2 border-t border-[var(--surface-border)] pt-4">
         <button
           onClick={() => onChat(dataset)}
-          className="flex-1 rounded-xl border border-slate-500/30 bg-slate-500/10 px-3 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-slate-500/20"
+          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-pearl/[0.07] px-3 py-2.5 text-[14px] font-medium text-pearl transition-colors hover:bg-pearl/[0.13]"
         >
-          <span className="inline-flex items-center gap-2">
-            <MessageSquare className="h-4 w-4" />
-            Chat
-          </span>
+          <MessageSquare className="h-4 w-4" /> Chat
         </button>
         <button
           onClick={() => onCharts(dataset)}
-          className="rounded-xl border border-cyan-400/35 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20"
+          className="rounded-xl bg-ocean/[0.12] px-3 py-2.5 text-ocean transition-colors hover:bg-ocean/[0.22]"
           title="Visualize"
         >
           <BarChart3 className="h-4 w-4" />
         </button>
         <button
           onClick={() => onDelete(dataset)}
-          className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-100 transition-colors hover:bg-rose-500/20"
+          className="rounded-xl bg-rose-500/[0.1] px-3 py-2.5 text-rose-300 transition-colors hover:bg-rose-500/[0.2]"
           title="Delete"
         >
           <Trash2 className="h-4 w-4" />
         </button>
       </div>
-    </MotionArticle>
+    </motion.article>
   );
 };
 
+/* ─── List Row ─── */
+const ListRow = ({ dataset, onChat, onCharts, onDelete }) => {
+  const id = getDatasetId(dataset);
+  const name = getDatasetName(dataset);
+  const ext = getFileExt(name);
+  const status = getStatusConfig(dataset);
+  const date = formatDate(getDatasetDate(dataset));
+  const rows = dataset?.row_count || 0;
+  const cols = dataset?.column_count || 0;
+
+  if (!id) return null;
+
+  return (
+    <motion.article
+      layout
+      variants={cardMotion}
+      className="group flex flex-col gap-4 rounded-2xl border border-[var(--surface-border)] bg-midnight/50 px-5 py-4 transition-all duration-200 hover:border-pearl/[0.12] hover:bg-midnight/70 lg:flex-row lg:items-center"
+    >
+      {/* left: icon + name */}
+      <button
+        onClick={() => onChat(dataset)}
+        className="flex flex-1 items-center gap-3.5 text-left"
+      >
+        <div
+          className={cn(
+            "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-white shadow-sm",
+            getFileBadgeClass(name)
+          )}
+        >
+          <File className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <h3 className="truncate text-[16px] font-semibold text-pearl">{name}</h3>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-granite">
+            <span className="inline-flex items-center gap-1">
+              <Calendar className="h-3.5 w-3.5" /> {date}
+            </span>
+            <span className="text-avocado">·</span>
+            <span className="uppercase tracking-wider">{ext || "file"}</span>
+          </div>
+        </div>
+      </button>
+
+      {/* center: row/col pills */}
+      <div className="flex gap-2 lg:min-w-[200px]">
+        <div className="rounded-lg border border-[var(--surface-border)] bg-noir/40 px-3 py-2">
+          <p className="text-[12px] text-granite">Rows</p>
+          <p className="text-[14px] font-semibold text-pearl/90">{rows.toLocaleString()}</p>
+        </div>
+        <div className="rounded-lg border border-[var(--surface-border)] bg-noir/40 px-3 py-2">
+          <p className="text-[12px] text-granite">Columns</p>
+          <p className="text-[14px] font-semibold text-pearl/90">{cols.toLocaleString()}</p>
+        </div>
+      </div>
+
+      {/* status badge */}
+      <span
+        className={cn(
+          "inline-flex w-fit items-center gap-1.5 rounded-full border border-[var(--surface-border)] bg-noir/50 px-2.5 py-1 text-[13px]",
+          status.text
+        )}
+      >
+        <span className={cn("h-1.5 w-1.5 rounded-full", status.dot)} />
+        {status.label}
+      </span>
+
+      {/* actions */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onChat(dataset)}
+          className="rounded-xl bg-pearl/[0.07] px-3 py-2.5 text-pearl transition-colors hover:bg-pearl/[0.13]"
+          title="Chat"
+        >
+          <MessageSquare className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => onCharts(dataset)}
+          className="rounded-xl bg-ocean/[0.12] px-3 py-2.5 text-ocean transition-colors hover:bg-ocean/[0.22]"
+          title="Visualize"
+        >
+          <BarChart3 className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => onDelete(dataset)}
+          className="rounded-xl bg-rose-500/[0.1] px-3 py-2.5 text-rose-300 transition-colors hover:bg-rose-500/[0.2]"
+          title="Delete"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      </div>
+    </motion.article>
+  );
+};
+
+/* ═══════════════════════════════════════════════ */
+/*                  MAIN COMPONENT                 */
+/* ═══════════════════════════════════════════════ */
 const DatasetsPage = () => {
   const { datasets, loading, fetchDatasets, deleteDataset } = useDatasetStore();
   const navigate = useNavigate();
@@ -341,259 +299,218 @@ const DatasetsPage = () => {
     fetchDatasets();
   }, [fetchDatasets]);
 
-  const sortedDatasets = useMemo(() => {
-    return [...datasets].sort(
-      (a, b) => new Date(getDatasetDate(b) || 0) - new Date(getDatasetDate(a) || 0)
-    );
-  }, [datasets]);
+  /* ── Derived data ── */
+  const sortedDatasets = useMemo(
+    () => [...datasets].sort((a, b) => new Date(getDatasetDate(b) || 0) - new Date(getDatasetDate(a) || 0)),
+    [datasets]
+  );
 
   const filteredDatasets = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return sortedDatasets;
-    return sortedDatasets.filter((dataset) =>
-      getDatasetName(dataset).toLowerCase().includes(q)
-    );
+    return sortedDatasets.filter((d) => getDatasetName(d).toLowerCase().includes(q));
   }, [searchQuery, sortedDatasets]);
 
   const stats = useMemo(() => {
     const total = datasets.length;
     const ready = datasets.filter((d) => {
-      const status = (d?.status || "").toLowerCase();
-      return d?.is_processed || status === "completed";
+      const s = (d?.status || "").toLowerCase();
+      return d?.is_processed || s === "completed";
     }).length;
     const rows = datasets.reduce((sum, d) => sum + (d?.row_count || 0), 0);
-    const avgColumns = total
-      ? Math.round(
-          datasets.reduce((sum, d) => sum + (d?.column_count || 0), 0) / total
-        )
+    const avgCols = total
+      ? Math.round(datasets.reduce((sum, d) => sum + (d?.column_count || 0), 0) / total)
       : 0;
-    return { total, ready, rows, avgColumns };
+    return { total, ready, rows, avgCols };
   }, [datasets]);
 
+  /* ── Handlers ── */
   const handleDeleteConfirm = async () => {
     const id = getDatasetId(deleteModal.dataset);
     if (!id) return;
     const result = await deleteDataset(id);
-    if (result.success) {
-      toast.success("Dataset deleted");
-    }
+    if (result.success) toast.success("Dataset deleted");
     setDeleteModal({ isOpen: false, dataset: null });
   };
 
+  const goChat = (d) => navigate(`/app/chat?dataset=${encodeURIComponent(getDatasetId(d))}`);
+  const goCharts = (d) => navigate(`/app/charts?dataset=${encodeURIComponent(getDatasetId(d))}`);
+  const askDelete = (d) => setDeleteModal({ isOpen: true, dataset: d });
+
+  /* ── Render ── */
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#05070d] text-slate-100">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -left-28 -top-36 h-96 w-96 rounded-full bg-[#cad2fd]/12 blur-[120px]" />
-        <div className="absolute -bottom-40 right-[-80px] h-[26rem] w-[26rem] rounded-full bg-[#c7bc92]/15 blur-[130px]" />
-        <div
-          className="absolute inset-0 opacity-[0.16]"
-          style={{
-            backgroundImage:
-              "linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)",
-            backgroundSize: "48px 48px",
-          }}
-        />
-      </div>
+    <div className="h-full flex flex-col overflow-hidden">
+      {/* Scrollable body */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[1440px] space-y-6 p-5 md:p-8">
 
-      <div className="relative z-10 mx-auto w-full max-w-[1440px] space-y-6 p-4 md:p-6 lg:p-8">
-        <MotionSection
-          initial="hidden"
-          animate="visible"
-          variants={surfaceVariants}
-          className="overflow-hidden rounded-3xl border border-white/10 bg-[linear-gradient(120deg,rgba(202,210,253,0.20),rgba(5,7,13,0.80)_42%,rgba(199,188,146,0.22))] p-6 shadow-[0_30px_80px_-45px_rgba(0,0,0,0.9)] md:p-8"
-        >
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <div className="max-w-3xl">
-              <p className="text-xs uppercase tracking-[0.28em] text-slate-300/80">
-                Data Workspace
-              </p>
-              <h1 className="mt-3 text-3xl font-semibold leading-tight text-white md:text-5xl">
-                Datasets built for fast analysis
-              </h1>
-              <p className="mt-3 max-w-2xl text-sm text-slate-300 md:text-base">
-                Upload, inspect, and launch analysis flows from one place with
-                a cleaner operating surface.
-              </p>
-            </div>
-            <div className="w-full max-w-xs">
-              <GlobalUploadButton className="w-full justify-center rounded-xl py-3 font-semibold" />
-            </div>
-          </div>
-        </MotionSection>
+          {/* ─── Header banner removed ─── */}
 
-        <MotionSection
-          initial="hidden"
-          animate="visible"
-          variants={surfaceVariants}
-          className="grid grid-cols-2 gap-3 md:grid-cols-4"
-        >
-          <StatCard
-            label="Total Datasets"
-            value={stats.total.toLocaleString()}
-            hint="Assets in your workspace"
-          />
-          <StatCard
-            label="Ready"
-            value={stats.ready.toLocaleString()}
-            hint="Processed and queryable"
-          />
-          <StatCard
-            label="Total Rows"
-            value={stats.rows.toLocaleString()}
-            hint="Across all datasets"
-          />
-          <StatCard
-            label="Avg Columns"
-            value={stats.avgColumns.toLocaleString()}
-            hint="Typical schema width"
-          />
-        </MotionSection>
+          {/* ─── Stats row ─── */}
+          <motion.section
+            initial="hidden"
+            animate="visible"
+            variants={fadeUp}
+            className="grid grid-cols-2 gap-3 lg:grid-cols-4"
+          >
+            <StatPill icon={Database} value={stats.total} label="Total datasets" />
+            <StatPill icon={CheckCircle2} value={stats.ready} label="Ready to query" />
+            <StatPill icon={Rows3} value={stats.rows.toLocaleString()} label="Total rows" />
+            <StatPill icon={Columns3} value={stats.avgCols} label="Avg columns" />
+          </motion.section>
 
-        <MotionSection
-          initial="hidden"
-          animate="visible"
-          variants={surfaceVariants}
-          className="rounded-2xl border border-white/10 bg-[#070b12]/88 p-3 backdrop-blur-md md:p-4"
-        >
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <label className="relative block w-full md:max-w-md">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-              <input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search by dataset name"
-                className="h-11 w-full rounded-xl border border-white/10 bg-black/30 pl-10 pr-4 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-500 focus:border-[#cad2fd]/40 focus:ring-2 focus:ring-[#cad2fd]/20"
-              />
-            </label>
-
-            <div className="flex items-center justify-between gap-2">
-              <button
-                onClick={() => fetchDatasets(true)}
-                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-200 transition-colors hover:bg-white/10"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Refresh
-              </button>
-
-              <div className="inline-flex rounded-xl border border-white/10 bg-white/5 p-1">
-                <button
-                  onClick={() => setViewMode("grid")}
-                  className={cn(
-                    "rounded-lg px-3 py-2 text-sm transition-colors",
-                    viewMode === "grid"
-                      ? "bg-[#cad2fd] text-[#020203]"
-                      : "text-slate-300 hover:bg-white/10"
-                  )}
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <Grid className="h-4 w-4" />
-                    Grid
-                  </span>
-                </button>
-                <button
-                  onClick={() => setViewMode("list")}
-                  className={cn(
-                    "rounded-lg px-3 py-2 text-sm transition-colors",
-                    viewMode === "list"
-                      ? "bg-[#cad2fd] text-[#020203]"
-                      : "text-slate-300 hover:bg-white/10"
-                  )}
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <List className="h-4 w-4" />
-                    List
-                  </span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </MotionSection>
-
-        <AnimatePresence mode="wait">
-          {loading && datasets.length === 0 ? (
-            <MotionSection
-              key="loading"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className={cn(
-                "grid gap-4",
-                viewMode === "grid"
-                  ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3"
-                  : "grid-cols-1"
-              )}
-            >
-              {Array.from({ length: viewMode === "grid" ? 6 : 4 }).map((_, index) => (
-                <div
-                  key={`skeleton-${index}`}
-                  className="h-56 animate-pulse rounded-3xl border border-white/10 bg-white/[0.04]"
+          {/* ─── Search & controls ─── */}
+          <motion.section
+            initial="hidden"
+            animate="visible"
+            variants={fadeUp}
+            className="rounded-2xl border border-[var(--surface-border)] bg-midnight/40 p-3 md:p-4"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              {/* Search */}
+              <label className="relative block w-full md:max-w-md">
+                <Search className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-granite/60" />
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search by dataset name..."
+                  className="h-12 w-full rounded-xl border border-[var(--surface-border)] bg-noir/60 pl-11 pr-4 text-[15px] text-pearl/90 placeholder:text-granite/50 outline-none transition-all focus:border-pearl/25 focus:ring-2 focus:ring-pearl/10"
                 />
-              ))}
-            </MotionSection>
-          ) : filteredDatasets.length === 0 ? (
-            <MotionSection
-              key="empty"
-              initial={{ opacity: 0, scale: 0.98 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="rounded-3xl border border-dashed border-white/15 bg-black/20 px-6 py-16 text-center"
-            >
-              <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
-                <Database className="h-8 w-8 text-slate-500" />
-              </div>
-              <h3 className="text-xl font-semibold text-white">
-                {searchQuery ? "No matching datasets" : "No datasets yet"}
-              </h3>
-              <p className="mx-auto mt-2 max-w-lg text-sm text-slate-400">
-                {searchQuery
-                  ? "Try a different keyword or clear search to see all datasets."
-                  : "Upload your first dataset to start generating charts and conversations."}
-              </p>
-              {!searchQuery && (
-                <div className="mt-6 inline-flex">
-                  <GlobalUploadButton />
+              </label>
+
+              {/* Right controls */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => fetchDatasets(true)}
+                  className="inline-flex h-11 items-center gap-2 rounded-xl border border-[var(--surface-border)] bg-[var(--surface-2)] px-4 text-[14px] text-pearl/70 transition-colors hover:bg-[var(--surface-2)] hover:text-pearl"
+                >
+                  <RefreshCw className="h-4 w-4" /> Refresh
+                </button>
+
+                <div className="inline-flex rounded-xl border border-[var(--surface-border)] bg-noir/40 p-1">
+                  <button
+                    onClick={() => setViewMode("grid")}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[14px] font-medium transition-colors",
+                      viewMode === "grid"
+                        ? "bg-pearl text-noir shadow-sm"
+                        : "text-granite hover:text-pearl hover:bg-[var(--surface-2)]"
+                    )}
+                  >
+                    <Grid className="h-4 w-4" /> Grid
+                  </button>
+                  <button
+                    onClick={() => setViewMode("list")}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[14px] font-medium transition-colors",
+                      viewMode === "list"
+                        ? "bg-pearl text-noir shadow-sm"
+                        : "text-granite hover:text-pearl hover:bg-[var(--surface-2)]"
+                    )}
+                  >
+                    <List className="h-4 w-4" /> List
+                  </button>
                 </div>
-              )}
-            </MotionSection>
-          ) : (
-            <MotionSection
-              key={`${viewMode}-${filteredDatasets.length}`}
-              variants={listVariants}
-              initial="hidden"
-              animate="visible"
-              className={cn(
-                "grid gap-4",
-                viewMode === "grid"
-                  ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3"
-                  : "grid-cols-1"
-              )}
-            >
-              <AnimatePresence>
-                {filteredDatasets.map((dataset) => (
-                  <DatasetCard
-                    key={getDatasetId(dataset)}
-                    dataset={dataset}
-                    viewMode={viewMode}
-                    onChat={(item) =>
-                      navigate(`/app/chat?dataset=${encodeURIComponent(getDatasetId(item))}`)
-                    }
-                    onCharts={(item) =>
-                      navigate(`/app/charts?dataset=${encodeURIComponent(getDatasetId(item))}`)
-                    }
-                    onDelete={(item) => setDeleteModal({ isOpen: true, dataset: item })}
+
+                <div className="h-6 w-px bg-white/[0.08] mx-1" />
+
+                <GlobalUploadButton className="!bg-pearl !text-noir !border-none !hover:bg-pearl/90 !hover:scale-100 !shadow-none h-11 rounded-xl px-5 text-[14px] font-semibold transition-colors" />
+              </div>
+            </div>
+          </motion.section>
+
+          {/* ─── Dataset list ─── */}
+          <AnimatePresence mode="wait">
+            {loading && datasets.length === 0 ? (
+              /* skeleton loading */
+              <motion.section
+                key="skeleton"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className={cn(
+                  "grid gap-4",
+                  viewMode === "grid" ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"
+                )}
+              >
+                {Array.from({ length: viewMode === "grid" ? 6 : 4 }).map((_, i) => (
+                  <div
+                    key={`sk-${i}`}
+                    className="h-56 animate-pulse rounded-2xl border border-[var(--surface-border)] bg-midnight/30"
                   />
                 ))}
-              </AnimatePresence>
-            </MotionSection>
-          )}
-        </AnimatePresence>
-
-        <DeleteConfirmModal
-          isOpen={deleteModal.isOpen}
-          onClose={() => setDeleteModal({ isOpen: false, dataset: null })}
-          onConfirm={handleDeleteConfirm}
-          itemName={getDatasetName(deleteModal.dataset)}
-        />
+              </motion.section>
+            ) : filteredDatasets.length === 0 ? (
+              /* empty state */
+              <motion.section
+                key="empty"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="rounded-2xl border border-dashed border-[var(--surface-border)] bg-midnight/30 px-6 py-20 text-center"
+              >
+                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-ocean/30 bg-gradient-to-br from-ocean/20 to-cyan-500/10 shadow-[0_0_25px_rgba(91,136,178,0.2)]">
+                  <Database className="h-8 w-8 text-ocean" />
+                </div>
+                <h3 className="text-xl font-semibold text-pearl">
+                  {searchQuery ? "No matching datasets" : "No datasets yet"}
+                </h3>
+                <p className="mx-auto mt-2 max-w-md text-[15px] leading-relaxed text-granite">
+                  {searchQuery
+                    ? "Try a different keyword or clear your search."
+                    : "Upload your first dataset to start generating charts and AI conversations."}
+                </p>
+                {!searchQuery && (
+                  <div className="mt-8 inline-flex">
+                    <GlobalUploadButton className="!h-auto !px-8 !py-3.5 !rounded-xl !bg-gradient-to-r !from-ocean !to-cyan-600 !text-white !font-bold !shadow-[0_4px_20px_rgba(91,136,178,0.3)] !hover:shadow-[0_6px_25px_rgba(91,136,178,0.5)] !transition-all !active:scale-[0.98]" />
+                  </div>
+                )}
+              </motion.section>
+            ) : (
+              /* dataset cards */
+              <motion.section
+                key={`${viewMode}-${filteredDatasets.length}`}
+                variants={stagger}
+                initial="hidden"
+                animate="visible"
+                className={cn(
+                  "grid gap-4",
+                  viewMode === "grid" ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"
+                )}
+              >
+                <AnimatePresence>
+                  {filteredDatasets.map((d) =>
+                    viewMode === "grid" ? (
+                      <GridCard
+                        key={getDatasetId(d)}
+                        dataset={d}
+                        onChat={goChat}
+                        onCharts={goCharts}
+                        onDelete={askDelete}
+                      />
+                    ) : (
+                      <ListRow
+                        key={getDatasetId(d)}
+                        dataset={d}
+                        onChat={goChat}
+                        onCharts={goCharts}
+                        onDelete={askDelete}
+                      />
+                    )
+                  )}
+                </AnimatePresence>
+              </motion.section>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
+
+      {/* Delete modal */}
+      <DeleteConfirmModal
+        isOpen={deleteModal.isOpen}
+        onClose={() => setDeleteModal({ isOpen: false, dataset: null })}
+        onConfirm={handleDeleteConfirm}
+        itemName={getDatasetName(deleteModal.dataset)}
+      />
     </div>
   );
 };

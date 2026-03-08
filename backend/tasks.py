@@ -345,8 +345,12 @@ def process_dataset_task(self, dataset_id: str, file_path: str, user_id: str = "
         # Remove duplicate rows
         df_lazy = df_lazy.unique()
         
-        # Collect the lazy dataframe
-        df = df_lazy.collect()
+        # Collect the lazy dataframe — use streaming for large datasets to reduce peak memory
+        try:
+            df = df_lazy.collect(streaming=True)
+        except Exception:
+            # Streaming not supported for all operations; fallback to eager
+            df = df_lazy.collect()
         cleaned_rows = len(df)
         duplicates_removed = original_rows - cleaned_rows
         
@@ -354,6 +358,19 @@ def process_dataset_task(self, dataset_id: str, file_path: str, user_id: str = "
             logger.info(f"✓ Removed {duplicates_removed:,} duplicate rows ({duplicates_removed/original_rows*100:.1f}%)")
         
         logger.info(f"✓ Cleaned: {cleaned_rows:,} rows × {len(df.columns):,} columns")
+        
+        # =========================================================================
+        # STAGE 2b: SAVE AS PARQUET (10-50× faster reads on future dashboard views)
+        # =========================================================================
+        parquet_path = None
+        try:
+            parquet_path = file_path.rsplit('.', 1)[0] + '.parquet'
+            df.write_parquet(parquet_path, compression="zstd")
+            parquet_size_mb = os.path.getsize(parquet_path) / (1024 * 1024)
+            logger.info(f"✓ Saved Parquet: {parquet_path} ({parquet_size_mb:.1f}MB)")
+        except Exception as e:
+            logger.warning(f"Parquet save failed (non-fatal): {e}")
+            parquet_path = None
         
         # =========================================================================
         # STAGE 3: METADATA GENERATION
@@ -566,9 +583,7 @@ def process_dataset_task(self, dataset_id: str, file_path: str, user_id: str = "
         # =========================================================================
         _update_progress(self, datasets_collection, dataset_id, "Saving to database", 90, "saving")
         
-        datasets_collection.update_one(
-            {"_id": dataset_id},
-            {"$set": {
+        update_fields = {
                 "metadata": sanitized_metadata,
                 "is_processed": True,
                 "processing_status": "success",
@@ -577,7 +592,13 @@ def process_dataset_task(self, dataset_id: str, file_path: str, user_id: str = "
                 "domain": domain_info['domain'],
                 "domain_confidence": domain_info['confidence'],
                 "updated_at": datetime.utcnow()
-            }}
+        }
+        if parquet_path:
+            update_fields["parquet_path"] = parquet_path
+        
+        datasets_collection.update_one(
+            {"_id": dataset_id},
+            {"$set": update_fields}
         )
         
         logger.info(f"✓ Saved to database")

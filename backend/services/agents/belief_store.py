@@ -275,7 +275,7 @@ class BeliefStore:
             # Exponential decay: c(t) = c0 * e^(-λt)
             import math
             decayed = initial_confidence * math.exp(-decay_rate * days_elapsed)
-            return max(0.1, decayed)  # Floor at 0.1
+            return max(0.3, decayed)  # Floor at 0.3 (paper §V.C)
         except Exception:
             return initial_confidence
     
@@ -334,7 +334,7 @@ class BeliefStore:
             belief_text=insight_text,
             source="user_dismissed",
             dataset_id=dataset_id,
-            confidence=0.99  # Very high - user explicitly said they know this
+            confidence=0.95  # Paper §V.B: explicit confirmation c₀ = 0.95
         )
     
     async def accept_insight(
@@ -400,6 +400,41 @@ class BeliefStore:
             logger.error(f"Failed to clear beliefs: {e}")
             return False
     
+    @staticmethod
+    def update_alpha(
+        current_alpha: float,
+        was_rejected: bool,
+        had_high_bayesian: bool,
+        beta: float = 0.9
+    ) -> float:
+        """
+        Adaptive α update via EMA (Paper Eq. 8).
+        
+        α_{t+1} = β·α_t + (1-β)·α̂_t
+        
+        where α̂_t = 1 when the rejected insight had high Bayesian
+        surprise (meaning α should rise to weight semantics more),
+        and 0 otherwise.
+        
+        Args:
+            current_alpha: Current α weight
+            was_rejected: User marked insight as "I already knew this"
+            had_high_bayesian: Bayesian surprise was above 0.5
+            beta: Smoothing factor (default 0.9 per paper)
+        
+        Returns:
+            Updated α, clipped to [0.3, 0.9] for stability
+        """
+        if not was_rejected:
+            return current_alpha
+        
+        # If user rejected despite high Bayesian → semantics missed it → raise α
+        alpha_hat = 1.0 if had_high_bayesian else 0.0
+        new_alpha = beta * current_alpha + (1 - beta) * alpha_hat
+        
+        # Clip to prevent extreme values
+        return max(0.3, min(0.9, new_alpha))
+    
     async def ingest_document(
         self,
         user_id: str,
@@ -437,7 +472,7 @@ class BeliefStore:
                 user_id=user_id,
                 belief_text=chunk,
                 source="document_ingested",
-                confidence=0.6  # Lower confidence for auto-ingested
+                confidence=0.80  # Paper §V.B: document ingestion c₀ = 0.80
             )
             if belief_id:
                 belief_ids.append(belief_id)
@@ -541,22 +576,22 @@ class BayesianTracker:
         prior = self.priors[metric_name]
         μ0, σ0 = prior["mean"], prior["std"]
         
-        # Posterior after single observation (simplified)
-        # In reality, this depends on the likelihood model
-        # Here we assume the observation IS the posterior mean
+        # Posterior after single observation
+        # Paper Eq. 4: posterior mean = observed, variance slightly reduced
         μ1 = observed_value
         σ1 = σ0 * 0.95  # Slightly reduce uncertainty
         
-        # KL divergence for Gaussians
-        # D_KL(N(μ1,σ1) || N(μ0,σ0)) = log(σ0/σ1) + (σ1² + (μ1-μ0)²)/(2σ0²) - 0.5
+        # KL divergence for Gaussians (Paper Eq. 4)
+        # D_KL(P(θ|D) || P(θ)) = 0.5 * [σ0²/σ1² + (μ1-μ0)²/σ1² - 1 + ln(σ1²/σ0²)]
         try:
-            kl = (
-                math.log(σ0 / σ1) +
-                (σ1 ** 2 + (μ1 - μ0) ** 2) / (2 * σ0 ** 2) -
-                0.5
+            kl = 0.5 * (
+                (σ0 ** 2) / (σ1 ** 2) +
+                ((μ1 - μ0) ** 2) / (σ1 ** 2) -
+                1 +
+                math.log((σ1 ** 2) / (σ0 ** 2))
             )
-            # Normalize to 0-1 range using sigmoid-like function
-            surprise = 2 / (1 + math.exp(-kl)) - 1
+            # Normalize to [0,1] with sigmoid, k=2 (Paper Eq. 5)
+            surprise = 2 / (1 + math.exp(-2 * kl)) - 1
             return max(0, min(1, surprise))
         except (ValueError, ZeroDivisionError):
             return 0.5  # Default moderate surprise on error

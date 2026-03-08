@@ -84,16 +84,31 @@ async def get_dashboard_overview(
         for kpi in intelligent_kpis:
             value = kpi["value"]
             # Format large numbers for display
-            if isinstance(value, (int, float)):
+            if isinstance(value, dict):
+                # Structured values (e.g. range: {"min": x, "max": y})
+                if "min" in value and "max" in value:
+                    formatted_value = f"{value['min']:,.2f} – {value['max']:,.2f}"
+                else:
+                    formatted_value = str(value)
+            elif isinstance(value, (int, float)):
                 if value >= 1_000_000:
                     formatted_value = f"{value/1_000_000:.2f}M"
                 elif value >= 1_000:
                     formatted_value = f"{value/1_000:.2f}K"
                 else:
                     formatted_value = f"{value:,.2f}" if isinstance(value, float) else f"{value:,}"
+            elif value is None:
+                formatted_value = "N/A"
             else:
                 formatted_value = str(value)
             
+            # Normalize sparkline: backend may return dict or list
+            raw_sparkline = kpi.get("sparkline_data", [])
+            if isinstance(raw_sparkline, dict):
+                sparkline_data = raw_sparkline.get("data", [])
+            else:
+                sparkline_data = raw_sparkline
+
             kpis.append({
                 "title": kpi["title"],
                 "value": formatted_value,
@@ -103,9 +118,11 @@ async def get_dashboard_overview(
                 "format": kpi.get("format", "number"),
                 "comparison_value": kpi.get("comparison_value"),
                 "comparison_label": kpi.get("comparison_label", "vs last period"),
+                "delta_percent": kpi.get("delta_percent"),
+                "delta_direction": kpi.get("delta_direction"),
                 "target_value": kpi.get("target_value"),
                 "target_label": kpi.get("target_label"),
-                "sparkline_data": kpi.get("sparkline_data", []),
+                "sparkline_data": sparkline_data,
                 "context": kpi.get("context", ""),
                 "column": kpi.get("column", ""),
                 "aggregation": kpi.get("aggregation", "")
@@ -161,97 +178,185 @@ async def get_dashboard_insights(
 
         insights = []
 
+        # ── Helper: generate human-readable titles & descriptions ──
+        def _humanize_correlation(col1: str, col2: str, r: float, effect_interp: str = "") -> tuple[str, str]:
+            """Return (title, description) in plain English for a correlation insight."""
+            direction = "increases with" if r > 0 else "decreases as"
+            strength = effect_interp or ("strongly" if abs(r) >= 0.7 else "moderately" if abs(r) >= 0.4 else "weakly")
+            # Make column names readable
+            c1 = col1.replace("_", " ").title()
+            c2 = col2.replace("_", " ").title()
+            title = f"{c1} {direction} {c2}" if abs(r) < 0.7 else f"Strong link: {c1} ↔ {c2}"
+            desc = f"{c1} and {c2} are {strength} correlated — when one changes, the other tends to follow {'in the same' if r > 0 else 'the opposite'} direction."
+            return title, desc
+
+        def _humanize_comparison(desc: str, finding: dict) -> tuple[str, str]:
+            """Return (title, description) for a group comparison insight."""
+            columns = finding.get("columns", [])
+            col_names = [c.replace("_", " ").title() for c in columns] if columns else []
+            if len(col_names) >= 2:
+                title = f"{col_names[0]} varies across {col_names[1]} groups"
+            else:
+                title = f"Significant difference found across groups"
+            effect_interp = finding.get("effect_interpretation", "notable")
+            human_desc = f"There's a {effect_interp} difference in {col_names[0] if col_names else 'values'} when comparing different groups — this pattern is statistically significant and worth investigating."
+            return title, human_desc
+
+        def _humanize_subspace(desc: str, finding: dict) -> tuple[str, str]:
+            """Return (title, description) for a subspace/hidden pattern insight."""
+            subspace = finding.get("subspace", {})
+            columns = finding.get("columns", [])
+            if subspace:
+                filters = [f"{k}={v}" for k, v in subspace.items()]
+                title = f"Hidden pattern in {', '.join(filters[:2])}"
+                human_desc = f"When filtering to {' and '.join(filters[:2])}, an unexpected pattern emerges that isn't visible in the overall data."
+            elif columns:
+                col_names = [c.replace("_", " ").title() for c in columns[:2]]
+                title = f"Hidden pattern in {' & '.join(col_names)}"
+                human_desc = f"A surprising pattern was found in {' and '.join(col_names)} that only appears in a specific subset of the data."
+            else:
+                title = "Hidden pattern discovered"
+                human_desc = desc or "A non-obvious pattern was detected in a data subset — this could reveal insights not visible in summary statistics."
+            return title, human_desc
+
+        def _is_trivial_correlation(col1: str, col2: str, r: float) -> bool:
+            """Detect obviously redundant column pairs (Close↔Adj Close, etc.)."""
+            if abs(r) > 0.98:
+                return True
+            # Common trivially correlated pairs (case-insensitive substrings)
+            c1, c2 = col1.lower(), col2.lower()
+            trivial_pairs = [
+                ("close", "adj_close"), ("close", "adj close"), ("close", "adjusted_close"),
+                ("open", "high"), ("low", "close"),
+                ("price", "adj_price"), ("amount", "total_amount"),
+            ]
+            for a, b in trivial_pairs:
+                if (a in c1 and b in c2) or (a in c2 and b in c1):
+                    return True
+            return False
+
         # ── If deep_analysis was pre-computed at upload (pipeline v3.0+) ──
         if deep_analysis and deep_analysis.get("analysis_version"):
             enhanced = deep_analysis.get("enhanced_analysis", {})
             quis = deep_analysis.get("quis_insights", {})
             executive_summary = deep_analysis.get("executive_summary", "")
 
+            type_map = {
+                "correlation": "info",
+                "comparison": "warning",
+                "subspace": "success",
+                "trend": "trend",
+                "anomaly": "warning",
+                "simpson_paradox": "success",
+            }
+
+            # Track seen column pairs to avoid duplicates
+            seen_pairs = set()
+
             # Top QUIS insights (beam-search validated, FDR-corrected)
-            for i, finding in enumerate(quis.get("top_insights", [])[:6]):
+            for i, finding in enumerate(quis.get("top_insights", [])[:8]):
                 insight_type = finding.get("insight_type", "insight")
                 desc = finding.get("description", "")
                 p_val = finding.get("p_value")
                 effect = finding.get("effect_size")
                 effect_interp = finding.get("effect_interpretation", "")
-                ci = finding.get("confidence_interval")
+                columns = finding.get("columns", [])
 
-                # Build rich description
-                stat_parts = [desc]
-                if p_val is not None and p_val < 1.0:
-                    stat_parts.append(f"p={p_val:.4f}")
-                if effect is not None and effect > 0:
-                    stat_parts.append(f"effect size={effect:.3f} ({effect_interp})" if effect_interp else f"effect={effect:.3f}")
-                if ci:
-                    stat_parts.append(f"95% CI: [{ci[0]:.3f}, {ci[1]:.3f}]")
+                # Skip statistically insignificant insights
+                if p_val is not None and p_val > 0.05:
+                    continue
 
-                type_map = {
-                    "correlation": "info",
-                    "comparison": "warning",
-                    "subspace": "success",
-                    "trend": "info",
-                    "anomaly": "warning",
-                    "simpson_paradox": "success",
-                }
+                # Skip trivial correlations
+                if insight_type == "correlation" and len(columns) >= 2:
+                    pair = tuple(sorted([columns[0].lower(), columns[1].lower()]))
+                    if pair in seen_pairs or _is_trivial_correlation(columns[0], columns[1], effect or 0):
+                        continue
+                    seen_pairs.add(pair)
+
+                # Generate human-readable title & description
+                if insight_type == "correlation" and len(columns) >= 2:
+                    title, human_desc = _humanize_correlation(columns[0], columns[1], effect or 0, effect_interp)
+                elif insight_type in ("comparison", "group_comparison"):
+                    title, human_desc = _humanize_comparison(desc, finding)
+                elif insight_type == "subspace":
+                    title, human_desc = _humanize_subspace(desc, finding)
+                elif insight_type == "simpson_paradox":
+                    title = "⚠️ Simpson's Paradox detected"
+                    human_desc = desc or "A trend that appears in the overall data reverses when the data is split into groups — be cautious drawing conclusions from aggregated numbers."
+                else:
+                    # trend, anomaly, or unknown — keep original desc but clean up title
+                    title = insight_type.replace("_", " ").title()
+                    human_desc = desc
 
                 confidence = max(10, int((1 - (p_val or 0.5)) * 100))
 
                 insights.append({
                     "id": f"quis_{i}",
                     "type": type_map.get(insight_type, "info"),
-                    "title": insight_type.replace("_", " ").title(),
-                    "description": ". ".join(stat_parts),
+                    "title": title,
+                    "description": human_desc,
                     "confidence": min(confidence, 99),
                     "p_value": p_val,
                     "effect_size": effect,
                     "is_simpson_paradox": finding.get("is_simpson_paradox", False),
+                    "columns": columns,
                 })
 
-            # Strong correlations from enhanced analysis
+            # Strong correlations from enhanced analysis (only if not already covered by QUIS)
             for i, corr in enumerate(enhanced.get("correlations", [])[:4]):
-                if abs(corr.get("correlation", 0)) >= 0.5 and len(insights) < 10:
-                    r = corr["correlation"]
-                    col1 = corr.get("column1", "?")
-                    col2 = corr.get("column2", "?")
-                    method = corr.get("method", "pearson")
-                    p = corr.get("p_value")
-                    ci = corr.get("confidence_interval")
+                r = corr.get("correlation", 0)
+                if abs(r) < 0.5 or len(insights) >= 8:
+                    continue
 
-                    desc = f"{corr.get('strength', 'Notable')} {method} correlation (r={r:.3f}"
-                    if p is not None:
-                        desc += f", p={p:.4f}"
-                    desc += f") between {col1} and {col2}"
-                    if ci:
-                        desc += f". 95% CI: [{ci[0]:.3f}, {ci[1]:.3f}]"
+                col1 = corr.get("column1", "?")
+                col2 = corr.get("column2", "?")
+                p = corr.get("p_value")
 
-                    insights.append({
-                        "id": f"corr_{i}",
-                        "type": "info",
-                        "title": f"Correlation: {col1} ↔ {col2}",
-                        "description": desc,
-                        "confidence": max(10, int((1 - (p or 0.5)) * 100)),
-                        "p_value": p,
-                        "effect_size": abs(r),
-                    })
+                # Skip insignificant, trivial, or already-seen pairs
+                if p is not None and p > 0.05:
+                    continue
+                pair = tuple(sorted([col1.lower(), col2.lower()]))
+                if pair in seen_pairs or _is_trivial_correlation(col1, col2, r):
+                    continue
+                seen_pairs.add(pair)
 
-            # Distribution anomalies
+                strength = corr.get("strength", "notable")
+                title, human_desc = _humanize_correlation(col1, col2, r, strength)
+
+                insights.append({
+                    "id": f"corr_{i}",
+                    "type": "info",
+                    "title": title,
+                    "description": human_desc,
+                    "confidence": max(10, int((1 - (p or 0.5)) * 100)),
+                    "p_value": p,
+                    "effect_size": abs(r),
+                    "columns": [col1, col2],
+                })
+
+            # Distribution anomalies (only genuinely skewed ones)
             for i, dist in enumerate(enhanced.get("distributions", [])[:3]):
                 skew = dist.get("skewness", 0)
-                if abs(skew) > 1.0 and len(insights) < 12:
+                if abs(skew) > 1.5 and len(insights) < 8:
                     col = dist.get("column", "?")
-                    norm_p = dist.get("normality_p_value")
-                    dist_type = dist.get("distribution_type", "unknown")
+                    col_name = col.replace("_", " ").title()
+                    dist_type = dist.get("distribution_type", "skewed")
+                    direction = "right" if skew > 0 else "left"
 
-                    desc = f"{col} follows a {dist_type} distribution (skewness={skew:.2f}, kurtosis={dist.get('kurtosis', 0):.2f})"
-                    if norm_p is not None:
-                        desc += f". Normality test: p={norm_p:.4f}"
+                    title = f"{col_name} is heavily {direction}-skewed"
+                    human_desc = (
+                        f"The distribution of {col_name} is not bell-shaped — it's skewed to the {direction}, "
+                        f"meaning {'most values cluster low with a few extreme highs' if skew > 0 else 'most values cluster high with a few extreme lows'}. "
+                        f"Consider using median instead of mean for this column."
+                    )
 
                     insights.append({
                         "id": f"dist_{i}",
                         "type": "warning" if abs(skew) > 2 else "info",
-                        "title": f"Distribution: {col}",
-                        "description": desc,
+                        "title": title,
+                        "description": human_desc,
                         "confidence": 90,
+                        "columns": [col],
                     })
 
             # Executive summary as first insight if available

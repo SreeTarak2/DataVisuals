@@ -250,27 +250,73 @@ async def critic_node(state: AgentState) -> Dict[str, Any]:
     # Parse and validate the insight
     try:
         import ast
+        import json as _json
         insight_dict = ast.literal_eval(execution_result)
         
         issues = []
         suggestions = []
         
-        # Validate p-value
+        # --- CHECK 1: Statistical sanity (p-value range) ---
         p_value = insight_dict.get("p_value", 1.0)
         if p_value < 0 or p_value > 1:
             issues.append("invalid_p_value")
             suggestions.append(f"P-value {p_value} is out of range [0, 1]")
         
-        # Validate effect size
+        # --- CHECK 2: Statistical sanity (effect size) ---
         effect_size = insight_dict.get("effect_size", 0)
-        if abs(effect_size) > 10:  # Unreasonably large
+        if abs(effect_size) > 10:  # Unreasonably large → unit mismatch
             issues.append("suspicious_effect_size")
             suggestions.append(f"Effect size {effect_size} seems unreasonably large")
+        
+        # --- CHECK 3: Schema compliance (column names exist) ---
+        # Paper §IV.C: "every column name in the insight must appear in
+        # the dataset schema. Hallucinated column references from the
+        # LLM planner are caught here."
+        insight_columns = insight_dict.get("columns", [])
+        if insight_columns and state.get("data_schema"):
+            try:
+                schema = _json.loads(state["data_schema"])
+                if isinstance(schema, list):
+                    valid_cols = {
+                        entry.get("name", entry.get("column", ""))
+                        for entry in schema
+                        if isinstance(entry, dict)
+                    }
+                elif isinstance(schema, dict):
+                    valid_cols = set(schema.keys())
+                else:
+                    valid_cols = set()
+                
+                if valid_cols:
+                    bad_cols = [c for c in insight_columns if c not in valid_cols]
+                    if bad_cols:
+                        issues.append("schema_violation")
+                        suggestions.append(
+                            f"Column(s) {bad_cols} not found in dataset schema"
+                        )
+            except (_json.JSONDecodeError, TypeError):
+                pass  # Schema unparseable — skip check, don't fail
+        
+        # --- CHECK 4: Sample-size floor ---
+        # Paper §IV.C: "insights from fewer than 30 observations are not
+        # rejected outright but are flagged and down-weighted in the
+        # final ranking."
+        sample_size = insight_dict.get("sample_size", 0)
+        sample_size_warning = False
+        if 0 < sample_size < 30:
+            sample_size_warning = True
+            suggestions.append(
+                f"Sample size {sample_size} is below 30 — statistical "
+                f"power may be insufficient. Insight will be down-weighted."
+            )
         
         # Calculate critique score
         score = 1.0
         if issues:
             score = max(0.3, 1.0 - len(issues) * 0.2)
+        # Down-weight (but don't reject) low-sample insights
+        if sample_size_warning:
+            score = max(0.3, score * 0.7)
         
         passed = score >= 0.7 and len(issues) == 0
         
@@ -347,8 +393,9 @@ async def novelty_filter_node(state: AgentState) -> Dict[str, Any]:
             metric_name = "_".join(columns[:2]) if columns else "unknown_metric"
             bayesian_surprise = bayesian_tracker.update_prior(metric_name, float(metric_value))
     
-    # 3. Compute Hybrid Score (α = 0.6, emphasis on semantic novelty)
-    alpha = 0.6
+    # 3. Compute Hybrid Score with adaptive α (Paper Eq. 6, §III.E)
+    # α is per-user tunable and adapts from feedback via EMA (Eq. 8)
+    alpha = state.get("alpha", 0.6)  # Default α = 0.6 per paper
     hybrid_score = alpha * semantic_surprisal + (1 - alpha) * bayesian_surprise
     
     is_novel = hybrid_score >= state["novelty_threshold"]

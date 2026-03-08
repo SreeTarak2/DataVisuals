@@ -1,6 +1,7 @@
 # backend/services/file_storage_service.py
 
 import uuid
+import shutil
 import aiofiles
 import polars as pl
 from pathlib import Path
@@ -24,7 +25,7 @@ class FileStorageService:
         (self.base_path / "datasets").mkdir(exist_ok=True)
 
         self.allowed_extensions = {'csv', 'xlsx', 'xls', 'json'}
-        self.max_size_mb = 50  # Increased max size to 50MB
+        self.max_size_mb = 500  # Increased to support large datasets
         self.max_size_bytes = self.max_size_mb * 1024 * 1024
 
     def _validate_file(self, content: bytes, filename: str) -> str:
@@ -84,6 +85,42 @@ class FileStorageService:
             raise e  # Re-raise validation errors to be sent to the user
         except Exception as e:
             logger.error(f"Failed to save file for user {user_id}: {e}")
+            raise HTTPException(status_code=500, detail="Could not save the uploaded file.")
+
+    async def save_file_from_path(self, source_path: str, filename: str, user_id: str) -> Dict[str, Any]:
+        """Moves a file from a temp path to permanent storage. Used by streaming uploads."""
+        try:
+            file_ext = filename.split('.')[-1].lower() if '.' in filename else ''
+            if file_ext not in self.allowed_extensions:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File type not supported. Allowed types: {', '.join(self.allowed_extensions)}"
+                )
+            
+            source = Path(source_path)
+            file_size = source.stat().st_size
+            
+            file_id = str(uuid.uuid4())
+            new_filename = f"{file_id}.{file_ext}"
+            user_dir = self.base_path / "datasets" / user_id
+            user_dir.mkdir(exist_ok=True)
+            file_path = user_dir / new_filename
+            
+            # Move file (uses rename if same filesystem, copy+delete otherwise)
+            shutil.move(str(source), str(file_path))
+            
+            logger.info(f"File moved for user {user_id} at {file_path}")
+            
+            return {
+                "file_id": file_id,
+                "file_path": str(file_path),
+                "file_size": file_size,
+                "file_extension": file_ext,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to move file for user {user_id}: {e}")
             raise HTTPException(status_code=500, detail="Could not save the uploaded file.")
 
     async def get_paginated_file_data(

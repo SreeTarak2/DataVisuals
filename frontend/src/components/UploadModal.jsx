@@ -99,23 +99,23 @@ const UploadModal = ({ isOpen, onClose }) => {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
               transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="relative transform overflow-hidden rounded-2xl bg-white shadow-2xl transition-all duration-300 scale-100 opacity-100 w-full max-w-2xl"
+              className="relative transform overflow-hidden rounded-2xl bg-white dark:bg-gray-800 shadow-2xl transition-all duration-300 scale-100 opacity-100 w-full max-w-2xl border dark:border-gray-700"
             >
               {/* Header */}
-              <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
                 <div className="flex items-center space-x-3">
                   <div className="p-2 rounded-lg bg-primary/20">
                     <Upload className="h-6 w-6 text-primary" />
                   </div>
                   <div>
-                    <h3 className="text-xl font-semibold text-gray-900">Upload Data</h3>
-                    <p className="text-sm text-gray-500">Choose how you'd like to add your data</p>
+                    <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Upload Data</h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Choose how you'd like to add your data</p>
                   </div>
                 </div>
                 {!uploading && (
                   <button
                     onClick={onClose}
-                    className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                   >
                     <X className="h-5 w-5" />
                   </button>
@@ -134,19 +134,19 @@ const UploadModal = ({ isOpen, onClose }) => {
                     className={`p-4 rounded-xl border-2 transition-all duration-200 ${
                       uploadType === 'file'
                         ? 'border-primary bg-primary/10 shadow-md'
-                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                        : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
                     }`}
                   >
                     <div className="text-center">
                       <div className={`p-3 rounded-lg mx-auto mb-3 ${
-                        uploadType === 'file' ? 'bg-primary/20' : 'bg-gray-100'
+                        uploadType === 'file' ? 'bg-primary/20' : 'bg-gray-100 dark:bg-gray-700'
                       }`}>
                         <FileText className={`h-6 w-6 ${
-                          uploadType === 'file' ? 'text-primary' : 'text-gray-600'
+                          uploadType === 'file' ? 'text-primary' : 'text-gray-600 dark:text-gray-400'
                         }`} />
                       </div>
-                      <h4 className="font-medium text-gray-900 mb-1">File Upload</h4>
-                      <p className="text-sm text-gray-500">CSV, Excel files</p>
+                      <h4 className="font-medium text-gray-900 dark:text-white mb-1">File Upload</h4>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">CSV, Excel files</p>
                     </div>
                   </motion.button>
 
@@ -156,17 +156,17 @@ const UploadModal = ({ isOpen, onClose }) => {
                     whileTap={{ scale: 0.98 }}
                     onClick={handleGoogleSheets}
                     disabled
-                    className="p-4 rounded-xl border-2 border-gray-200 bg-gray-50 cursor-not-allowed opacity-60"
+                    className="p-4 rounded-xl border-2 border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 cursor-not-allowed opacity-60"
                   >
                     <div className="text-center">
-                      <div className="p-3 rounded-lg bg-gray-100 mx-auto mb-3">
-                        <Cloud className="h-6 w-6 text-gray-400" />
+                      <div className="p-3 rounded-lg bg-gray-100 dark:bg-gray-700 mx-auto mb-3">
+                        <Cloud className="h-6 w-6 text-gray-400 dark:text-gray-500" />
                       </div>
-                      <h4 className="font-medium text-gray-500 mb-1">Google Sheets</h4>
-                      <p className="text-sm text-gray-400">Coming Soon</p>
+                      <h4 className="font-medium text-gray-500 dark:text-gray-400 mb-1">Google Sheets</h4>
+                      <p className="text-sm text-gray-400 dark:text-gray-500">Coming Soon</p>
                       <div className="mt-2 flex items-center justify-center space-x-1">
-                        <AlertCircle className="h-3 w-3 text-gray-400" />
-                        <span className="text-xs text-gray-400">Disabled</span>
+                        <AlertCircle className="h-3 w-3 text-gray-400 dark:text-gray-500" />
+                        <span className="text-xs text-gray-400 dark:text-gray-500">Disabled</span>
                       </div>
                     </div>
                   </motion.button>
@@ -177,17 +177,17 @@ const UploadModal = ({ isOpen, onClose }) => {
                     whileTap={{ scale: 0.98 }}
                     onClick={handleSQLDatabase}
                     disabled
-                    className="p-4 rounded-xl border-2 border-gray-200 bg-gray-50 cursor-not-allowed opacity-60"
+                    className="p-4 rounded-xl border-2 border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 cursor-not-allowed opacity-60"
                   >
                     <div className="text-center">
-                      <div className="p-3 rounded-lg bg-gray-100 mx-auto mb-3">
-                        <Server className="h-6 w-6 text-gray-400" />
+                      <div className="p-3 rounded-lg bg-gray-100 dark:bg-gray-700 mx-auto mb-3">
+                        <Server className="h-6 w-6 text-gray-400 dark:text-gray-500" />
                       </div>
-                      <h4 className="font-medium text-gray-500 mb-1">SQL Database</h4>
-                      <p className="text-sm text-gray-400">Coming Soon</p>
+                      <h4 className="font-medium text-gray-500 dark:text-gray-400 mb-1">SQL Database</h4>
+                      <p className="text-sm text-gray-400 dark:text-gray-500">Coming Soon</p>
                       <div className="mt-2 flex items-center justify-center space-x-1">
-                        <AlertCircle className="h-3 w-3 text-gray-400" />
-                        <span className="text-xs text-gray-400">Disabled</span>
+                        <AlertCircle className="h-3 w-3 text-gray-400 dark:text-gray-500" />
+                        <span className="text-xs text-gray-400 dark:text-gray-500">Disabled</span>
                       </div>
                     </div>
                   </motion.button>
@@ -205,7 +205,7 @@ const UploadModal = ({ isOpen, onClose }) => {
                       className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200 ${
                         isDragActive
                           ? 'border-primary bg-primary/10 scale-105'
-                          : 'border-gray-300 hover:border-primary hover:bg-primary/5'
+                          : 'border-gray-300 dark:border-gray-600 hover:border-primary dark:hover:border-primary hover:bg-primary/5'
                       } ${uploading ? 'pointer-events-none' : 'cursor-pointer'}`}
                     >
                       <input {...getInputProps()} />
@@ -226,14 +226,14 @@ const UploadModal = ({ isOpen, onClose }) => {
                         </motion.div>
                         
                         <div>
-                          <h4 className="text-lg font-semibold text-gray-900 mb-2">
+                          <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
                             {isDragActive ? 'Drop files here' : 'Upload your datasets'}
                           </h4>
-                          <p className="text-gray-600 mb-4">
+                          <p className="text-gray-600 dark:text-gray-400 mb-4">
                             Drag and drop CSV or Excel files, or click to browse
                           </p>
                           
-                          <div className="flex items-center justify-center space-x-6 text-sm text-gray-500">
+                          <div className="flex items-center justify-center space-x-6 text-sm text-gray-500 dark:text-gray-400">
                             <div className="flex items-center space-x-2">
                               <FileText className="h-4 w-4" />
                               <span>CSV</span>
@@ -255,7 +255,7 @@ const UploadModal = ({ isOpen, onClose }) => {
                             animate={{ opacity: 1, y: 0 }}
                             className="space-y-3"
                           >
-                            <div className="w-full bg-gray-200 rounded-full h-2">
+                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                               <motion.div 
                                 className="bg-primary h-2 rounded-full transition-all duration-300 ease-out"
                                 initial={{ width: 0 }}
@@ -285,21 +285,21 @@ const UploadModal = ({ isOpen, onClose }) => {
                     animate={{ opacity: 1, scale: 1 }}
                     className="text-center py-4"
                   >
-                    <div className="flex items-center justify-center space-x-2 text-green-600 mb-2">
+                    <div className="flex items-center justify-center space-x-2 text-green-600 dark:text-green-400 mb-2">
                       <CheckCircle className="h-5 w-5" />
                       <span className="font-medium">Upload Complete!</span>
                     </div>
-                    <p className="text-sm text-gray-500">Your data is being processed...</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Your data is being processed...</p>
                   </motion.div>
                 )}
               </div>
 
               {/* Footer */}
-              <div className="flex items-center justify-end space-x-3 p-6 border-t border-gray-200 bg-gray-50">
+              <div className="flex items-center justify-end space-x-3 p-6 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
                 {!uploading && (
                   <button
                     onClick={onClose}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                    className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                   >
                     Cancel
                   </button>

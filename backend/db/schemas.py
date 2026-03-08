@@ -167,9 +167,6 @@ class LoginResponse(BaseModel):
 class TokenData(BaseModel):
     email: Optional[str] = None
 
-class UserProfileUpdate(BaseModel):
-    username: Optional[str] = None
-
 class PasswordChange(BaseModel):
     old_password: str
     new_password: str

@@ -921,6 +921,11 @@ class AnalysisService:
         """
         Run comprehensive enhanced analysis.
         
+        For datasets > 100K rows, analysis runs on a representative random sample.
+        Statistical properties (correlations, distributions, outlier percentages)
+        are nearly identical on 100K samples vs full data — this is standard
+        practice in Tableau, PowerBI, and every production BI tool.
+        
         Args:
             df: Polars DataFrame
             depth: Analysis depth
@@ -933,10 +938,23 @@ class AnalysisService:
         """
         logger.info(f"Running enhanced analysis with depth={depth}")
         
+        full_row_count = len(df)
+        full_col_count = len(df.columns)
+        
+        # Sample large datasets for statistical analysis (100K threshold)
+        SAMPLE_THRESHOLD = 100_000
+        sampled = False
+        if full_row_count > SAMPLE_THRESHOLD:
+            df = df.sample(n=SAMPLE_THRESHOLD, seed=42)
+            sampled = True
+            logger.info(f"Sampled {SAMPLE_THRESHOLD:,} of {full_row_count:,} rows for statistical analysis")
+        
         results = {
             "depth": depth,
-            "row_count": len(df),
-            "column_count": len(df.columns)
+            "row_count": full_row_count,
+            "column_count": full_col_count,
+            "sampled": sampled,
+            "sample_size": SAMPLE_THRESHOLD if sampled else full_row_count,
         }
         
         # Basic always included

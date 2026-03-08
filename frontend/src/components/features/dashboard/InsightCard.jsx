@@ -3,12 +3,12 @@ import { motion } from 'framer-motion';
 import { BarChart3, TrendingUp, Target, AlertCircle, Eye } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-const InsightCard = ({ 
-  insight, 
-  onVisualize, 
-  onExplore, 
+const InsightCard = ({
+  insight,
+  onVisualize,
+  onExplore,
   index,
-  isHighlighted = false 
+  isHighlighted = false
 }) => {
   const getInsightIcon = (type) => {
     switch (type?.toLowerCase()) {
@@ -33,18 +33,18 @@ const InsightCard = ({
     switch (type?.toLowerCase()) {
       case 'trend':
       case 'temporal':
-        return 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20';
+        return 'text-status-success bg-status-success/10 border-status-success/20';
       case 'correlation':
       case 'relationship':
-        return 'text-blue-400 bg-blue-400/10 border-blue-400/20';
+        return 'text-blue-400 bg-blue-500/10 border-blue-500/20';
       case 'performance':
       case 'metric':
-        return 'text-purple-400 bg-purple-400/10 border-purple-400/20';
+        return 'text-purple-400 bg-purple-500/10 border-purple-500/20';
       case 'anomaly':
       case 'outlier':
-        return 'text-orange-400 bg-orange-400/10 border-orange-400/20';
+        return 'text-status-warning bg-status-warning/10 border-status-warning/20';
       default:
-        return 'text-cyan-400 bg-cyan-400/10 border-cyan-400/20';
+        return 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20';
     }
   };
 
@@ -55,7 +55,7 @@ const InsightCard = ({
       transition={{ delay: index * 0.1 }}
       className={cn(
         "group relative p-4 rounded-xl border transition-all duration-200 hover:shadow-lg",
-        "bg-slate-800/50 backdrop-blur-sm border-slate-700/50",
+        "bg-surface backdrop-blur-sm border-ui-border",
         isHighlighted && "ring-2 ring-primary/50 shadow-lg",
         getInsightColor(insight.type)
       )}
@@ -69,13 +69,13 @@ const InsightCard = ({
           {getInsightIcon(insight.type)}
         </div>
         <div className="flex-1 min-w-0">
-          <h4 className="font-semibold text-slate-100 text-sm leading-tight">
+          <h4 className="font-semibold text-text-primary text-sm leading-tight">
             {insight.title}
           </h4>
           {insight.confidence && (
             <div className="flex items-center gap-1 mt-1">
-              <div className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span className="text-xs text-slate-400">
+              <div className="w-2 h-2 rounded-full bg-status-success" />
+              <span className="text-xs text-text-secondary">
                 {insight.confidence} confidence
               </span>
             </div>
@@ -84,7 +84,7 @@ const InsightCard = ({
       </div>
 
       {/* Insight Description */}
-      <p className="text-sm text-slate-300 leading-relaxed mb-4">
+      <p className="text-sm text-text-secondary leading-relaxed mb-4">
         {insight.description}
       </p>
 
@@ -94,10 +94,10 @@ const InsightCard = ({
           {insight.metrics.map((metric, idx) => (
             <div
               key={idx}
-              className="px-2 py-1 rounded-md bg-slate-700/50 text-xs text-slate-300"
+              className="px-2 py-1 rounded-md bg-base-bg text-xs text-text-secondary border border-ui-border"
             >
               <span className="font-medium">{metric.label}:</span>{' '}
-              <span className="text-emerald-400 font-semibold">{metric.value}</span>
+              <span className="text-text-primary font-semibold">{metric.value}</span>
             </div>
           ))}
         </div>
@@ -110,7 +110,7 @@ const InsightCard = ({
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onVisualize(insight)}
-            className="flex-1 px-3 py-2 rounded-lg bg-primary/20 text-primary hover:bg-primary/30 transition-colors text-sm font-medium flex items-center justify-center gap-2"
+            className="flex-1 px-3 py-2 rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 border border-transparent hover:border-cyan-500/30 transition-all text-sm font-medium flex items-center justify-center gap-2"
           >
             <BarChart3 className="w-4 h-4" />
             Visualize
@@ -121,7 +121,7 @@ const InsightCard = ({
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={() => onExplore(insight)}
-            className="px-3 py-2 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-700/50 transition-colors text-sm font-medium flex items-center justify-center gap-2"
+            className="px-3 py-2 rounded-lg border border-ui-border text-text-secondary hover:text-text-primary hover:bg-base-bg transition-colors text-sm font-medium flex items-center justify-center gap-2"
           >
             <Eye className="w-4 h-4" />
             Explore

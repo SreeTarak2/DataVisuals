@@ -111,7 +111,7 @@ const useChatStore = create(
         streamingContent: state.streamingContent + token
       })),
 
-      finishStreaming: (fullContent, chartConfig = null) => {
+      finishStreaming: (fullContent, chartConfig = null, sql = null) => {
         const state = get();
         const { currentConversationId, streamingMessageId } = state;
 
@@ -126,6 +126,7 @@ const useChatStore = create(
           role: 'assistant',
           content: extractTextFromResponse(fullContent),
           chart_config: chartConfig,
+          sql: sql ?? null,
           timestamp: new Date().toISOString(),
         };
 
@@ -287,6 +288,7 @@ const useChatStore = create(
               role: msg.role === 'ai' ? 'assistant' : msg.role, // Map "ai" to "assistant"
               content: msg.role !== 'user' ? extractTextFromResponse(msg.content) : msg.content,
               chart_config: msg.chart_config || null,
+              sql: msg.sql || null,
               technical_details: msg.technical_details || null,
               timestamp: msg.timestamp || conv.created_at
             }));
@@ -329,7 +331,10 @@ const useChatStore = create(
       },
 
       // Send message
-      sendMessage: async (message, datasetId, conversationId = null) => {
+      // options.skipUserMessage = true when the caller already added the user message to the
+      // conversation (e.g. ChatPage pre-appends it for instant UI feedback before calling here).
+      sendMessage: async (message, datasetId, conversationId = null, options = {}) => {
+        const { skipUserMessage = false } = options;
         set({ loading: true, error: null });
 
         // Get or create conversation (use temporary ID if new)
@@ -339,27 +344,29 @@ const useChatStore = create(
           currentConvId = get().startNewConversation(datasetId);
         }
 
-        // Add user message immediately
-        const userMessage = {
-          id: `msg_${Date.now()}_user`,
-          role: 'user',
-          content: message,
-          timestamp: new Date().toISOString(),
-        };
+        if (!skipUserMessage) {
+          // Add user message immediately
+          const userMessage = {
+            id: `msg_${Date.now()}_user`,
+            role: 'user',
+            content: message,
+            timestamp: new Date().toISOString(),
+          };
 
-        // Add user message to conversation immediately
-        set((state) => ({
-          conversations: {
-            ...state.conversations,
-            [currentConvId]: {
-              ...state.conversations[currentConvId],
-              messages: [
-                ...(state.conversations[currentConvId]?.messages || []),
-                userMessage
-              ]
+          // Add user message to conversation immediately
+          set((state) => ({
+            conversations: {
+              ...state.conversations,
+              [currentConvId]: {
+                ...state.conversations[currentConvId],
+                messages: [
+                  ...(state.conversations[currentConvId]?.messages || []),
+                  userMessage
+                ]
+              }
             }
-          }
-        }));
+          }));
+        }
 
         try {
           const response = await aiAPI.processChat(datasetId, message, conversationId);
@@ -368,6 +375,7 @@ const useChatStore = create(
           const backendConvId = response.data.conversation_id;
           const aiResponse = response.data.response;
           const chart_config = response.data.chart_config;
+          const sql = response.data.sql || null;
 
           // Debug logging
           console.log('Backend Response:', response.data);
@@ -411,6 +419,7 @@ const useChatStore = create(
             role: 'assistant',
             content: extractTextFromResponse(aiResponse) || 'No response from AI',
             chart_config: chart_config || null,
+            sql,
             timestamp: new Date().toISOString(),
           };
 
@@ -451,6 +460,7 @@ const useChatStore = create(
               role: 'assistant',
               content: responseData.response || responseData.response_text || '',
               chart_config: null,
+              sql: null,
               timestamp: new Date().toISOString(),
               is_fallback: true,
               fallback_reason: responseData.fallback_reason

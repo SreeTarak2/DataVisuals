@@ -381,14 +381,21 @@ class ChartRecommender:
     
     def _deduplicate_recommendations(self, recommendations: List[Dict]) -> List[Dict]:
         """Remove duplicate recommendations based on chart_type + config."""
+        def make_hashable(obj):
+            if isinstance(obj, dict):
+                return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
+            elif isinstance(obj, list):
+                return tuple(make_hashable(item) for item in obj)
+            return obj
+
         seen = set()
         unique_recs = []
         
         for rec in recommendations:
-            # Create signature from chart type and main config keys
+            # Create signature from chart type and main config
             signature = (
                 rec["chart_type"],
-                tuple(sorted(rec["config"].items()))
+                make_hashable(rec.get("config", {}))
             )
             
             if signature not in seen:

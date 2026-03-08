@@ -6,8 +6,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "deepseek/deepseek-r1-0528:free"
-DEFAULT_MODEL = "openai/gpt-oss-120b:free"
+# DEFAULT_MODEL = "deepseek/deepseek-r1-0528:free"
+# DEFAULT_MODEL = "openai/gpt-oss-120b:free"
+DEFAULT_MODEL = "arcee-ai/trinity-large-preview:free"
 DEFAULT_PROMPT = "What is the meaning of life?"
 
 
@@ -48,3 +49,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -91,6 +91,25 @@ class KpiConfig(BaseComponentConfig):
     icon: Optional[str] = None
     color: Optional[str] = None
 
+    @field_validator("aggregation", mode="before")
+    @classmethod
+    def normalize_aggregation(cls, v):
+        if isinstance(v, str):
+            v = v.lower().strip()
+            mapping = {
+                "average": "mean",
+                "avg": "mean",
+                "sum": "sum",
+                "mean": "mean",
+                "count": "count",
+                "nunique": "nunique",
+                "distinct": "nunique",
+                "first": "first",
+                "none": "none"
+            }
+            return mapping.get(v, v)
+        return v
+
 
 # -------------------------
 # CHART COMPONENT
@@ -113,13 +132,73 @@ class ChartConfig(BaseComponentConfig):
             return [c.strip() for c in v.split(",")]
         return v
 
+    @field_validator("chart_type", mode="before")
+    @classmethod
+    def normalize_chart_type(cls, v):
+        if not isinstance(v, str):
+            return v
+        
+        rt = v.lower().strip()
+        mapping = {
+            "bar_chart": "bar", "bar": "bar",
+            "line_chart": "line", "line": "line",
+            "pie_chart": "pie", "pie": "pie",
+            "histogram": "histogram", "hist": "histogram",
+            "box_plot": "box_plot", "box": "box_plot",
+            "scatter_plot": "scatter", "scatter": "scatter",
+            "heatmap": "heatmap", "treemap": "treemap",
+            "grouped_bar": "grouped_bar", "grouped_bar_chart": "grouped_bar",
+            "area_chart": "area", "area": "area",
+            "donut": "pie", "donut_chart": "pie"
+        }
+        if rt in mapping:
+            return mapping[rt]
+        
+        # Substring matching fallback
+        clean = re.sub(r"[^a-z0-9_]", "_", rt)
+        for k, v_mapped in mapping.items():
+            if k in clean:
+                return v_mapped
+        return v
+
+    @field_validator("group_by", mode="before")
+    @classmethod
+    def ensure_group_by_list(cls, v):
+        if isinstance(v, str):
+            if not v.strip():
+                return []
+            return [v.strip()]
+        if v is None:
+            return []
+        return v
+
+    @field_validator("aggregation", mode="before")
+    @classmethod
+    def normalize_aggregation(cls, v):
+        if isinstance(v, str):
+            v = v.lower().strip()
+            mapping = {
+                "average": "mean",
+                "avg": "mean",
+                "sum": "sum",
+                "mean": "mean",
+                "count": "count",
+                "nunique": "nunique",
+                "distinct": "nunique",
+                "first": "first",
+                "none": "none"
+            }
+            return mapping.get(v, v)
+        return v
+
     @model_validator(mode="after")
     def validate_chart(self):
         t = self.chart_type
         cols = self.columns
 
-        if t == ChartType.PIE and len(cols) != 2:
-            raise ValueError("Pie requires exactly two columns.")
+        # Pie supports 1 column (categorical distribution) or 2 columns (label + value)
+        if t == ChartType.PIE and len(cols) < 1:
+            raise ValueError("Pie requires at least one column.")
 
         if t in [ChartType.BAR, ChartType.LINE] and len(cols) < 2:
             raise ValueError("Bar/Line require x and y columns.")
@@ -266,7 +345,7 @@ class SchemaRepairer:
     def _normalize_chart_type(raw: Optional[str]) -> str:
         if not raw:
             return "bar"
-        rt = str(raw).lower()
+        rt = str(raw).lower().strip()
         mapping = {
             "bar_chart": "bar", "bar": "bar",
             "line_chart": "line", "line": "line",
@@ -276,7 +355,8 @@ class SchemaRepairer:
             "scatter_plot": "scatter", "scatter": "scatter",
             "heatmap": "heatmap", "treemap": "treemap",
             "grouped_bar": "grouped_bar", "grouped_bar_chart": "grouped_bar",
-            "area_chart": "area", "area": "area"
+            "area_chart": "area", "area": "area",
+            "donut": "pie", "donut_chart": "pie"
         }
         if rt in mapping:
             return mapping[rt]
