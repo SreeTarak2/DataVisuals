@@ -34,6 +34,24 @@ const HeroSection = () => {
 
     return (
         <section className="relative min-h-[90vh] flex flex-col items-center pt-32 pb-0 overflow-hidden">
+            {/* Ambient Background Glows */}
+            <motion.div
+                animate={{
+                    scale: [1, 1.2, 1],
+                    opacity: [0.3, 0.5, 0.3],
+                }}
+                transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+                className="absolute top-[10%] left-[15%] w-[40vw] h-[40vw] max-w-[600px] max-h-[600px] bg-sky-500/20 rounded-full blur-[120px] pointer-events-none"
+            />
+            <motion.div
+                animate={{
+                    scale: [1, 1.3, 1],
+                    opacity: [0.2, 0.4, 0.2],
+                }}
+                transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+                className="absolute top-[30%] right-[10%] w-[35vw] h-[35vw] max-w-[500px] max-h-[500px] bg-purple-500/20 rounded-full blur-[100px] pointer-events-none"
+            />
+
             <div className="container mx-auto px-4 z-10 relative flex flex-col items-center text-center max-w-5xl">
                 <motion.div
                     className="flex flex-col items-center text-center"

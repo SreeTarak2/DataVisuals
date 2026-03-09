@@ -58,6 +58,7 @@ export const useWebSocket = ({
     onDone,
     onError,
     onStatus,
+    onThinkingStep,
     autoConnect = false
 } = {}) => {
     const [isConnected, setIsConnected] = useState(false);
@@ -155,6 +156,10 @@ export const useWebSocket = ({
                             clientMessageId
                         });
                         pendingMessagesRef.current.delete(clientMessageId);
+                        break;
+
+                    case 'thinking_step':
+                        onThinkingStep?.(data.label, data.step);
                         break;
 
                     case 'error':

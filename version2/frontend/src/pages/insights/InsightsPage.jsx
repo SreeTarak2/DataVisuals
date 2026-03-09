@@ -204,7 +204,13 @@ const InsightsPage = () => {
         );
     }
 
-    if (!data) return null;
+    if (!data) {
+        return (
+            <div className="min-h-full bg-[var(--page-bg)] px-4 py-6 sm:p-8">
+                <LoadingSkeleton />
+            </div>
+        );
+    }
 
     const counts = data.counts || {};
     const healthColor = data.data_quality?.health_color || 'blue';

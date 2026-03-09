@@ -28,6 +28,36 @@ from db.database import get_database
 from services.llm_router import llm_router
 from services.datasets.dataset_loader import load_dataset, create_context_string
 from services.datasets.faiss_vector_service import faiss_vector_service
+
+
+async def _passive_belief_update(
+    user_id: str,
+    query: str,
+    ai_response: str,
+    dataset_id: str = None
+):
+    """
+    Background task: passively update belief store from a chat interaction.
+    No explicit user feedback needed — learns implicitly.
+    
+    1. Boost beliefs related to what the user is asking (implicit engagement signal)
+    2. Auto-ingest new factual insights from the AI response
+    """
+    try:
+        from services.agents.belief_store import get_belief_store, PassiveBeliefIngestion
+        belief_store = get_belief_store()
+
+        # 1. Implicit engagement: user asked about this topic → boost related beliefs
+        await PassiveBeliefIngestion.boost_related_beliefs(belief_store, user_id, query)
+
+        # 2. Auto-observe: extract key facts from response → low-confidence beliefs
+        await PassiveBeliefIngestion.auto_ingest_from_response(
+            belief_store, user_id, ai_response, dataset_id
+        )
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Passive belief update failed (non-critical): {e}")
+
+
 from services.memory.memory_service import memory_service
 from services.rag.chunk_service import chunk_service
 from services.rag.reranker_service import reranker_service
@@ -1843,6 +1873,7 @@ class AIService:
             yield {"type": "done", "conversation_id": conversation_id, "chart_config": None}
             return
 
+        yield {"type": "thinking_step", "label": "Loading conversation history", "step": 1}
         conv = await load_or_create_conversation(conversation_id, user_id, dataset_id)
         messages = conv.get("messages", [])
         messages.append({"role": "user", "content": query})
@@ -1857,12 +1888,14 @@ class AIService:
             yield {"type": "error", "content": "Dataset is still being processed"}
             return
 
+        yield {"type": "thinking_step", "label": "Reading dataset structure", "step": 2}
         # --- DEEP ANALYSIS ROUTER: Route complex queries to QUIS ---
         routing_info = DeepAnalysisRouter.get_routing_info(query)
         if routing_info["route_to_quis"]:
             logger.info(f"Streaming: Routing to QUIS for deep analysis: {routing_info['reason']}")
             try:
                 from services.agents.quis_graph import run_quis_analysis
+                yield {"type": "thinking_step", "label": "Running deep analysis", "step": 3}
                 quis_result = await run_quis_analysis(
                     dataset_id=dataset_id,
                     user_id=user_id,
@@ -1883,6 +1916,8 @@ class AIService:
                 # Save to conversation
                 messages.append({"role": "ai", "content": quis_text})
                 await save_conversation(conv["_id"], messages)
+                # Passive belief update (fire-and-forget)
+                asyncio.create_task(_passive_belief_update(user_id, query, quis_text, dataset_id))
                 yield {"type": "done", "conversation_id": str(conv["_id"]), "chart_config": quis_charts[0] if quis_charts else None}
                 return
             except ImportError as e:
@@ -1897,6 +1932,7 @@ class AIService:
             if file_path:
                 try:
                     df = await load_dataset(file_path)
+                    yield {"type": "thinking_step", "label": "Executing data query", "step": 3}
                     result = await query_executor.execute_query(
                         query=query,
                         df=df,
@@ -1918,6 +1954,7 @@ class AIService:
                         ))
                         _min_rows = 1 if _chart_intent else 2
                         if result.get("data") and len(result["data"]) >= _min_rows:
+                            yield {"type": "thinking_step", "label": "Building visualization", "step": 4}
                             chart_data = await self._generate_chart_for_results(
                                 result["data"],
                                 result.get("columns", []),
@@ -1938,6 +1975,8 @@ class AIService:
                             ai_message["chart_config"] = chart_data
                         messages.append(ai_message)
                         await save_conversation(conv["_id"], messages)
+                        # Passive belief update (fire-and-forget)
+                        asyncio.create_task(_passive_belief_update(user_id, query, ai_text, dataset_id))
                         yield {
                             "type": "done",
                             "conversation_id": str(conv["_id"]),
@@ -1949,6 +1988,7 @@ class AIService:
                     logger.warning(f"Streaming SQL execution failed, falling back to LLM: {e}")
 
         # --- RAG context retrieval ---
+        yield {"type": "thinking_step", "label": "Searching relevant context", "step": 3}
         dataset_context = await self._get_rag_context(query, dataset_id, user_id, metadata)
 
         # Rewrite query internally for better LLM understanding (NOT shown to user)
@@ -1964,15 +2004,33 @@ class AIService:
         
         # Retrieve relevant memories for context-aware responses
         memories = await memory_service.retrieve_relevant_memories(query, user_id, dataset_id)
-        
-        prompt = factory.get_prompt(PromptType.CONVERSATIONAL, user_message=enhanced_query, history=optimized_messages, memories=memories)
+
+        # Retrieve belief context — what the user already knows (passive novelty)
+        belief_context: list = []
+        try:
+            from services.agents.belief_store import get_belief_store, PassiveBeliefIngestion
+            _bs = get_belief_store()
+            belief_context = await PassiveBeliefIngestion.get_novelty_context(
+                _bs, user_id, query, max_beliefs=5
+            )
+        except Exception:
+            pass  # Belief store is optional — never block chat
+
+        prompt = factory.get_prompt(
+            PromptType.CONVERSATIONAL,
+            user_message=enhanced_query,
+            history=optimized_messages,
+            memories=memories,
+            belief_context=belief_context,
+        )
 
         # Analyze query complexity for adaptive formatting
         query_complexity = QueryComplexityAnalyzer.classify(query)
         logger.info(f"Query complexity: {query_complexity} for query: '{query[:50]}...'")
 
         full_response = ""
-        
+        yield {"type": "thinking_step", "label": "Generating response", "step": 4}
+
         try:
             async for chunk in llm_router.call_streaming(
                 prompt, 
@@ -2240,6 +2298,9 @@ class AIService:
         asyncio.create_task(
             memory_service.extract_and_store(query, full_response, user_id, dataset_id)
         )
+
+        # Passive belief update (fire-and-forget, no explicit feedback needed)
+        asyncio.create_task(_passive_belief_update(user_id, query, full_response, dataset_id))
 
         yield {
             "type": "done",

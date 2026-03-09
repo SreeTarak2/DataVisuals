@@ -16,6 +16,7 @@ from .quis_graph import create_quis_graph, run_agentic_quis
 from .belief_store import (
     BeliefStore,
     BayesianTracker,
+    PassiveBeliefIngestion,
     get_belief_store,
     get_bayesian_tracker
 )
@@ -27,6 +28,7 @@ __all__ = [
     "run_agentic_quis",
     "BeliefStore",
     "BayesianTracker",
+    "PassiveBeliefIngestion",
     "get_belief_store",
     "get_bayesian_tracker"
 ]

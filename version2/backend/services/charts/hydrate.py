@@ -33,6 +33,11 @@ class HydrationError(Exception):
 
 
 def validate_config(df: pl.DataFrame, config: ChartConfig) -> None:
+    # Guard: default to "bar" if chart_type is None
+    if config.chart_type is None:
+        logger.warning("chart_type is None — defaulting to 'bar'")
+        config.chart_type = "bar"
+
     # Handle both string and enum types
     chart_type_str = config.chart_type.value if hasattr(config.chart_type, 'value') else config.chart_type
     chart_def = CHART_DEFINITIONS_BY_ID.get(chart_type_str, {})
@@ -240,6 +245,11 @@ def hydrate_chart(df: pl.DataFrame, config: ChartConfig) -> Tuple[List[Dict[str,
         df = df.sample(n=sample_size, shuffle=True)
     
     rows_used = len(df)
+
+    # Guard: default to "bar" if chart_type is None
+    if config.chart_type is None:
+        logger.warning("chart_type is None in hydrate_chart — defaulting to 'bar'")
+        config.chart_type = "bar"
 
     # Handle both string and enum types
     chart_type = config.chart_type.value if hasattr(config.chart_type, 'value') else config.chart_type

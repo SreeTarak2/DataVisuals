@@ -687,6 +687,15 @@ async def chat_socket(websocket: WebSocket):
     connection_tracked = True
     logger.info(f"WebSocket connection established for user {user_id} (active: {connection_count})")
 
+    async def safe_send(data: dict) -> bool:
+        """Send JSON to WebSocket, returning False if the connection is closed."""
+        try:
+            await websocket.send_json(data)
+            return True
+        except (WebSocketDisconnect, RuntimeError) as e:
+            logger.info(f"WebSocket send failed (client disconnected): {e}")
+            return False
+
     try:
         while True:
             try:
@@ -696,14 +705,14 @@ async def chat_socket(websocket: WebSocket):
                 logger.info(f"WebSocket disconnected by client for user {user['id']}")
                 break
             except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "detail": "Invalid JSON payload"})
+                await safe_send({"type": "error", "detail": "Invalid JSON payload"})
                 continue
 
             # --- Message Rate Limiting ---
             rate_allowed, remaining = WebSocketRateLimiter.check_message_rate(user_id)
             if not rate_allowed:
                 logger.warning(f"User {user_id} exceeded WebSocket message rate limit")
-                await websocket.send_json({
+                await safe_send({
                     "type": "error",
                     "detail": f"Rate limit exceeded. Maximum {MAX_WS_MESSAGES_PER_MINUTE} messages per minute.",
                     "retry_after_seconds": WS_RATE_WINDOW_SECONDS
@@ -713,17 +722,19 @@ async def chat_socket(websocket: WebSocket):
             # --- Message Processing ---
             client_message_id = payload.get("clientMessageId")
             use_streaming = payload.get("streaming", True) 
-            await websocket.send_json({
+            if not await safe_send({
                 "type": "status",
                 "status": "processing",
                 "clientMessageId": client_message_id,
                 "rate_limit_remaining": remaining,
-            })
+            }):
+                break  # Client disconnected
 
             try:
                 if use_streaming:
                     # --- STREAMING MODE ---
                     # Stream tokens as they arrive from LLM
+                    client_disconnected = False
                     async for chunk in ai_service.process_chat_message_streaming(
                         query=payload.get("message", "").strip(),
                         dataset_id=payload.get("datasetId"),
@@ -732,43 +743,66 @@ async def chat_socket(websocket: WebSocket):
                     ):
                         if chunk["type"] == "token":
                             # Send each token as it arrives
-                            await websocket.send_json({
+                            if not await safe_send({
                                 "type": "token",
                                 "clientMessageId": client_message_id,
                                 "content": chunk["content"]
-                            })
+                            }):
+                                client_disconnected = True
+                                break
                             
                         elif chunk["type"] == "response_complete":
-                            await websocket.send_json({
+                            if not await safe_send({
                                 "type": "response_complete",
                                 "clientMessageId": client_message_id,
                                 "fullResponse": chunk.get("full_response", chunk.get("content", ""))
-                            })
+                            }):
+                                client_disconnected = True
+                                break
                             
                         elif chunk["type"] == "chart":
                             # Chart data ready
-                            await websocket.send_json({
+                            if not await safe_send({
                                 "type": "chart",
                                 "clientMessageId": client_message_id,
                                 "chartConfig": chunk["chart_config"]
-                            })
+                            }):
+                                client_disconnected = True
+                                break
                             
                         elif chunk["type"] == "error":
-                            await websocket.send_json({
+                            if not await safe_send({
                                 "type": "error",
                                 "clientMessageId": client_message_id,
                                 "detail": chunk["content"]
-                            })
+                            }):
+                                client_disconnected = True
+                                break
                             
+                        elif chunk["type"] == "thinking_step":
+                            if not await safe_send({
+                                "type": "thinking_step",
+                                "clientMessageId": client_message_id,
+                                "label": chunk["label"],
+                                "step": chunk.get("step", 0)
+                            }):
+                                client_disconnected = True
+                                break
+
                         elif chunk["type"] == "done":
                             # Final message with conversation ID (and optional sql when from SQL execution path)
-                            await websocket.send_json({
+                            await safe_send({
                                 "type": "done",
                                 "clientMessageId": client_message_id,
                                 "conversationId": chunk["conversation_id"],
                                 "chartConfig": chunk.get("chart_config"),
                                 "sql": chunk.get("sql"),
                             })
+                    
+                    if client_disconnected:
+                        logger.info(f"Client disconnected mid-stream for user {user_id}, exiting loop")
+                        break
+
                 else:
                     # --- NON-STREAMING MODE (fallback) ---
                     response = await ai_service.process_chat_message_enhanced(
@@ -779,24 +813,25 @@ async def chat_socket(websocket: WebSocket):
                         mode=payload.get("mode", "learning"),
                     )
 
-                    await websocket.send_json({
+                    if not await safe_send({
                         "type": "assistant_message",
                         "clientMessageId": client_message_id,
                         "conversationId": response.get("conversation_id"),
                         "message": response.get("response"),
                         "chartConfig": response.get("chart_config"),
                         "technicalDetails": response.get("technical_details"),
-                    })
+                    }):
+                        break
 
             except HTTPException as exc:
-                await websocket.send_json({
+                await safe_send({
                     "type": "error",
                     "clientMessageId": client_message_id,
                     "detail": exc.detail,
                 })
             except Exception as exc:
                 logger.error(f"WebSocket chat processing failed: {exc}", exc_info=True)
-                await websocket.send_json({
+                await safe_send({
                     "type": "error",
                     "clientMessageId": client_message_id,
                     "detail": "An internal error occurred during chat processing."

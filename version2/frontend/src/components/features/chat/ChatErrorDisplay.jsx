@@ -1,6 +1,6 @@
-import React from 'react';
-import { AlertCircle, Clock, Wifi, WifiOff, RefreshCw, Zap, Info, XCircle } from 'lucide-react';
-import { motion } from 'framer-motion';
+import React, { useState, useEffect } from 'react';
+import { AlertCircle, Clock, Wifi, WifiOff, RefreshCw, Zap, Info, XCircle, ChevronRight, CheckCircle2, Loader2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
 /**
@@ -322,6 +322,76 @@ export const TypingIndicator = ({
           />
         ))}
       </div>
+    </div>
+  );
+};
+
+/**
+ * ThinkingSteps - GitHub Copilot-style collapsible step transparency
+ * Shows the AI pipeline steps in real-time before and during response generation.
+ */
+export const ThinkingSteps = ({ steps, isStreaming = false, className }) => {
+  const [isOpen, setIsOpen] = useState(true);
+
+  // Auto-collapse when streaming content starts arriving
+  useEffect(() => {
+    if (isStreaming) setIsOpen(false);
+  }, [isStreaming]);
+
+  if (!steps || steps.length === 0) return null;
+
+  return (
+    <div className={cn('select-none', className)}>
+      <button
+        type="button"
+        onClick={() => setIsOpen(v => !v)}
+        className="flex items-center gap-1 text-slate-400 hover:text-slate-300 transition-colors group"
+      >
+        <ChevronRight
+          size={13}
+          className={cn(
+            'transition-transform duration-200 text-slate-500 group-hover:text-slate-400',
+            isOpen && 'rotate-90'
+          )}
+        />
+        <span className="text-xs text-slate-400 font-medium">
+          {isStreaming ? `Used ${steps.length} steps` : 'Thinking...'}
+        </span>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            key="steps"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.15 }}
+            className="overflow-hidden"
+          >
+            <div className="mt-1.5 ml-4 flex flex-col gap-1.5 pb-1">
+              {steps.map((step, i) => {
+                const isActive = i === steps.length - 1 && !isStreaming;
+                return (
+                  <div key={i} className="flex items-center gap-2">
+                    {isActive ? (
+                      <Loader2 size={11} className="text-blue-400 animate-spin shrink-0" />
+                    ) : (
+                      <CheckCircle2 size={11} className="text-slate-600 shrink-0" />
+                    )}
+                    <span className={cn(
+                      'text-xs',
+                      isActive ? 'text-slate-300' : 'text-slate-500'
+                    )}>
+                      {step}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

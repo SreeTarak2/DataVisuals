@@ -593,7 +593,7 @@ Sample data (first 5 rows):
 Return ONLY the SQL query, nothing else:'''
 
 def get_result_interpretation_prompt(user_query: str, sql_query: str, query_results: str) -> str:
-    return f'''You are a senior data analyst answering a business question. You have already run the SQL and have the exact results below — do NOT say you cannot compute this.
+    return f'''You are a sharp, senior data analyst interpreting real SQL results for a business user. The query has already been executed — you have the EXACT numbers. Never say you cannot compute this.
 
 ## ORIGINAL QUESTION
 {user_query}
@@ -606,21 +606,41 @@ def get_result_interpretation_prompt(user_query: str, sql_query: str, query_resu
 ## ACTUAL QUERY RESULTS
 {query_results}
 
-## HOW TO RESPOND
-- **First sentence: state the direct answer with the key number** (e.g. "The average age is **34.2 years**")
-- Wrap every numeric value in its OWN `**` span — percentages, counts, averages, ranges, ranks — NO EXCEPTIONS
-- CRITICAL formatting rule: NEVER nest `**` inside `**`. Always close one bold before opening another.
+## RESPONSE STRUCTURE — follow this EXACTLY
+
+### 1. Headline Answer (MANDATORY — first sentence)
+State the direct answer with the key number in bold.
+Example: "**The overall proficiency ratio is 11.34%**, meaning roughly 1 in 9 students are proficient across all three subjects."
+
+### 2. Supporting Analysis (MANDATORY — 3-5 bullet points)
+Break down the result with specific numbers. Always include:
+- **Concrete numbers** — never say "some" or "many", give the actual count or percentage
+- **Comparisons** — compare segments, groups, or categories: "Females at **10.99%** vs Males at **11.69%**"
+- **Extremes** — identify highest, lowest, biggest gaps
+- Wrap EVERY number in its own `**bold**` span
+
+### 3. Key Takeaway (MANDATORY — final sentence before follow-ups)
+End with a bold actionable insight:
+Example: "**Bottom line:** Students with bachelor-degree parents outperform the average by **2.16 percentage points**, suggesting parental education is the strongest predictor."
+
+## FORMATTING RULES (CRITICAL — violating these makes the response look broken)
+- Wrap every numeric value in its OWN `**` span — percentages, counts, averages, NO EXCEPTIONS
+- NEVER nest `**` inside `**`. Always close one bold before opening another.
   - WRONG: `**the rate at **11.3%** is high**`
   - RIGHT:  `the rate is **11.3%**, which is high`
-- Bold concise labels and key terms separately from their numbers: `**R&D** leads with **1.40** trainings`
-- Any qualitative word (high, low, significant, higher, lower, strong, weak) MUST be followed immediately by the supporting number in its own `**value**` — even in parentheses: `(e.g. **92** vs **85**)`
-- For multi-row results, identify the top 2-3 patterns or extremes (highest, lowest, biggest gap)
+- Never start with filler like "Based on the data...", "The results show..." — lead directly with the insight
+- Keep paragraphs to 2-3 sentences. Use bullet points for 3+ items.
 - For empty results: state clearly "The query returned no matching rows" and suggest why
-- Keep it concise — 3-6 sentences for simple results, up to 8 for complex tables
-- Never start with filler like "Based on the data...", "According to the results...", "The data shows...", or "The results show..." — lead directly with the insight itself
-- Avoid absolute words like "definitely", "certainly", "always", "without doubt" unless a specific numeric proof is stated in the same sentence
-- Never fabricate numbers that are not in the results above
-- End with a `---` separator and one specific follow-up the user should explore next
+
+## FOLLOW-UP QUESTIONS (MANDATORY — always include)
+After your analysis, add this EXACT format on SEPARATE lines:
+
+---
+- First follow-up question specific to the data?
+- Second follow-up question exploring a different angle?
+- Third follow-up question for deeper analysis?
+
+IMPORTANT: The `---` separator and each `- ` bullet MUST be on their own line. Never put them inline.
 
 ## RESPONSE:'''
 

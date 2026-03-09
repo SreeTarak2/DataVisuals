@@ -1,5 +1,6 @@
 # backend/api/analysis.py
 
+import asyncio
 import logging
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,6 +21,11 @@ from bson import ObjectId
 # --- Configuration ---
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# --- Dashboard generation deduplication lock ---
+# Prevents concurrent design-dashboard calls for the same dataset
+_dashboard_generation_locks: Dict[str, asyncio.Lock] = {}
+_dashboard_generation_futures: Dict[str, asyncio.Task] = {}
 
 
 # ---------------------------------------------------------
@@ -286,28 +292,64 @@ async def design_intelligent_dashboard(
     """
     Creates an intelligent dashboard design using the AI Designer service,
     then hydrates each component with real data (Plotly traces, KPI values, table rows).
+    
+    Includes deduplication: concurrent calls for the same dataset will share
+    a single generation pipeline instead of running 4x in parallel.
     """
     try:
         force_regenerate = request.get("force_regenerate", False)
         design_preference = request.get("design_preference")
-        
-        response = await ai_designer_service.design_intelligent_dashboard(
-            dataset_id=dataset_id,
-            user_id=current_user["id"],
-            design_preference=design_preference,
-            force_regenerate=force_regenerate
-        )
+        lock_key = f"{dataset_id}:{current_user['id']}"
 
-        # Hydrate the blueprint with actual data
-        blueprint = response.get("dashboard_blueprint")
-        if blueprint and isinstance(blueprint, dict):
-            logger.info(f"Hydrating designer blueprint for dataset {dataset_id}...")
-            response["dashboard_blueprint"] = await _hydrate_blueprint(
-                blueprint, dataset_id, current_user["id"]
+        # Get or create a per-dataset lock to prevent concurrent generation
+        if lock_key not in _dashboard_generation_locks:
+            _dashboard_generation_locks[lock_key] = asyncio.Lock()
+        lock = _dashboard_generation_locks[lock_key]
+
+        # If another call is already generating, wait for it instead of starting a new one
+        if lock.locked() and not force_regenerate:
+            logger.info(f"Dashboard generation already in-flight for {lock_key}, waiting for result...")
+            async with lock:
+                # The first call finished — fetch the cached result
+                existing = await ai_designer_service.get_existing_dashboard(
+                    dataset_id=dataset_id,
+                    user_id=current_user["id"]
+                )
+                if existing:
+                    return existing
+                # If somehow no cached result, fall through to generate
+
+        async with lock:
+            response = await ai_designer_service.design_intelligent_dashboard(
+                dataset_id=dataset_id,
+                user_id=current_user["id"],
+                design_preference=design_preference,
+                force_regenerate=force_regenerate
             )
-            logger.info(f"Blueprint hydration complete.")
 
-        return response
+            # Hydrate the blueprint with actual data
+            blueprint = response.get("dashboard_blueprint")
+            if blueprint and isinstance(blueprint, dict):
+                logger.info(f"Hydrating designer blueprint for dataset {dataset_id}...")
+                response["dashboard_blueprint"] = await _hydrate_blueprint(
+                    blueprint, dataset_id, current_user["id"]
+                )
+                logger.info(f"Blueprint hydration complete.")
+
+                # Passive belief ingestion: KPI values → candidate beliefs (fire-and-forget)
+                try:
+                    from services.agents.belief_store import get_belief_store, PassiveBeliefIngestion
+                    _bs = get_belief_store()
+                    components = blueprint.get("components", [])
+                    asyncio.create_task(
+                        PassiveBeliefIngestion.ingest_dashboard_kpis(
+                            _bs, current_user["id"], components, dataset_id
+                        )
+                    )
+                except Exception as _e:
+                    logger.debug(f"Dashboard belief ingestion skipped: {_e}")
+
+            return response
     except Exception as e:
         logger.error(f"AI Designer error: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to design dashboard.")
