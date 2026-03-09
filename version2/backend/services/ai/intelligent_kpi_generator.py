@@ -132,8 +132,9 @@ class IntelligentKPIGenerator:
 
             # Call LLM
             response = await llm_router.call(
-                task="kpi_suggestion",
-                messages=[{"role": "user", "content": prompt}],
+                prompt=prompt,
+                model_role="kpi_suggestion",
+                expect_json=True,
                 temperature=0.0,
             )
 
@@ -339,6 +340,13 @@ class IntelligentKPIGenerator:
             if len(col) == 0:
                 return None
 
+            # Guard: non-numeric columns can only use count-based aggregations
+            if col.dtype not in pl.NUMERIC_DTYPES:
+                if aggregation in ("count", "count_unique", "nunique"):
+                    pass  # these are safe for non-numeric
+                else:
+                    return float(col.count())  # safe fallback
+
             if aggregation == "sum":
                 return float(col.sum())
             elif aggregation in ("mean", "avg"):
@@ -471,6 +479,16 @@ class IntelligentKPIGenerator:
     ) -> Any:
         """Calculate KPI value from real data."""
         try:
+            is_numeric = df[column].dtype in pl.NUMERIC_DTYPES
+
+            # Guard: redirect non-numeric columns to count-based aggregations
+            if not is_numeric and aggregation in ("sum", "mean", "avg", "max", "min", "std", "range", "pct_change"):
+                logger.warning(
+                    f"Aggregation '{aggregation}' invalid for non-numeric column '{column}' "
+                    f"(dtype={df[column].dtype}) — falling back to count_unique"
+                )
+                aggregation = "count_unique"
+
             if aggregation == "sum":
                 return int(df[column].sum())
             elif aggregation == "mean":

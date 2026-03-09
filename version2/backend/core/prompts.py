@@ -262,6 +262,15 @@ class PromptFactory:
                 prompt_parts.append(
                     f"RELEVANT MEMORIES (key facts from past analysis of this dataset):\n{memories_text}"
                 )
+
+            # Inject belief context — facts the user already knows
+            # This prevents the LLM from repeating stale/obvious insights
+            belief_context = kwargs.get("belief_context", [])
+            if belief_context:
+                beliefs_text = "\n".join(f"• {b}" for b in belief_context[:5])
+                prompt_parts.append(
+                    f"USER ALREADY KNOWS (do NOT repeat these — provide NEW insights instead):\n{beliefs_text}"
+                )
             
             if history_block:
                 prompt_parts.append(f"CONVERSATION HISTORY (for context, do NOT repeat these):\n{history_block}")

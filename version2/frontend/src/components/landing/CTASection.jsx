@@ -1,17 +1,41 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import { ArrowRight, CheckCircle2 } from 'lucide-react';
 
 const CTASection = () => {
     return (
-        <section className="py-32 bg-[#020617] relative border-t border-slate-900 border-b">
-            <div className="container mx-auto px-6 max-w-4xl text-center">
-                <h2 className="text-4xl md:text-5xl font-bold text-slate-50 mb-6 tracking-tight text-balance">
+        <section className="py-32 bg-[#020617] relative border-t border-slate-900 border-b overflow-hidden">
+            {/* Animated background layer */}
+            <div className="absolute inset-0 z-0 pointer-events-none">
+                <motion.div
+                    animate={{
+                        opacity: [0.1, 0.3, 0.1],
+                        scale: [1, 1.2, 1]
+                    }}
+                    transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+                    className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[400px] bg-sky-500/20 blur-[120px] rounded-full"
+                />
+            </div>
+            <div className="container mx-auto px-6 max-w-4xl text-center relative z-10">
+                <motion.h2
+                    initial={{ opacity: 0, y: 20 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.5 }}
+                    className="text-4xl md:text-5xl font-bold text-slate-50 mb-6 tracking-tight text-balance"
+                >
                     Start analyzing your data today.
-                </h2>
-                <p className="text-slate-400 text-lg md:text-xl mb-10 max-w-2xl mx-auto text-balance">
+                </motion.h2>
+                <motion.p
+                    initial={{ opacity: 0, y: 20 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.5, delay: 0.1 }}
+                    className="text-slate-400 text-lg md:text-xl mb-10 max-w-2xl mx-auto text-balance"
+                >
                     Join 10,000+ analysts who have stopped writing boilerplate SQL and started delivering insights faster.
-                </p>
+                </motion.p>
 
                 <div className="flex flex-col items-center gap-6">
                     <Link

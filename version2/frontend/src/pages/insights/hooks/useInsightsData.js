@@ -17,17 +17,17 @@ const cacheKey = (id, filters) => `${id}__${filters || ''}`;
 export const useInsightsData = (selectedDataset) => {
     const datasetId = selectedDataset?.id || selectedDataset?._id || null;
 
-    const [loading, setLoading] = useState(false);
+    const cachedData = datasetId ? insightsCache.get(cacheKey(datasetId, null)) : null;
+    const [loading, setLoading] = useState(!cachedData && !!datasetId);
     const [error, setError] = useState(null);
     const [filters, setFilters] = useState(null); // e.g. "col1:val1,col2:val2"
-    const [data, setData] = useState(() => {
-        return datasetId ? (insightsCache.get(cacheKey(datasetId, null)) || null) : null;
-    });
+    const [data, setData] = useState(() => cachedData || null);
     const abortRef = useRef(null);
 
     const fetchInsights = useCallback(async (forceRefresh = false, activeFilters = filters) => {
         if (!datasetId) {
             setData(null);
+            setLoading(false);
             return;
         }
 
@@ -36,6 +36,7 @@ export const useInsightsData = (selectedDataset) => {
         // Serve from cache if not forcing refresh
         if (!forceRefresh && insightsCache.has(key)) {
             setData(insightsCache.get(key));
+            setLoading(false);
             return;
         }
 
@@ -43,7 +44,8 @@ export const useInsightsData = (selectedDataset) => {
         if (abortRef.current) {
             abortRef.current.abort();
         }
-        abortRef.current = new AbortController();
+        const controller = new AbortController();
+        abortRef.current = controller;
 
         setLoading(true);
         setError(null);
@@ -52,18 +54,18 @@ export const useInsightsData = (selectedDataset) => {
             const res = await insightsAPI.getComprehensiveInsights(
                 datasetId,
                 forceRefresh,
-                { signal: abortRef.current.signal },
+                { signal: controller.signal },
                 activeFilters
             );
             const result = res.data;
             insightsCache.set(key, result);
             setData(result);
+            setLoading(false);
         } catch (err) {
             if (err.name === 'CanceledError' || err.name === 'AbortError') return;
             console.error('Failed to load insights:', err);
             setError(err.response?.data?.detail || 'Failed to load insights');
             toast.error('Failed to load insights. Please try again.');
-        } finally {
             setLoading(false);
         }
     }, [datasetId, filters]);

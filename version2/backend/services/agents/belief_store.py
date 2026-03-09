@@ -66,9 +66,6 @@ class BeliefStore:
     # Collection name prefix for multi-tenancy
     COLLECTION_PREFIX = "beliefs_"
     
-    # Embedding model (BGE is recommended for semantic similarity)
-    DEFAULT_MODEL = "BAAI/bge-base-en-v1.5"
-    
     def __init__(
         self,
         persist_directory: str = "./chroma_db",
@@ -80,9 +77,18 @@ class BeliefStore:
         Args:
             persist_directory: Where to store ChromaDB data
             embedding_model: HuggingFace model name for embeddings
+                             (defaults to Settings.EMBEDDING_MODEL from config)
         """
         self.persist_directory = persist_directory
-        self.embedding_model_name = embedding_model or self.DEFAULT_MODEL
+
+        # Use the same embedding model as the RAG pipeline (from config.py)
+        if embedding_model is None:
+            try:
+                from core.config import settings
+                embedding_model = settings.EMBEDDING_MODEL
+            except Exception:
+                embedding_model = "BAAI/bge-large-en-v1.5"
+        self.embedding_model_name = embedding_model
         
         # Initialize ChromaDB
         if CHROMADB_AVAILABLE:
@@ -611,6 +617,379 @@ class BayesianTracker:
     def load_state(self, state: Dict[str, Any]):
         """Load state from persistence."""
         self.priors = state.get("priors", {})
+
+
+# ============================================================
+# PASSIVE BELIEF INGESTION (Implicit Signal Collection)
+# ============================================================
+# Instead of relying on explicit user feedback (thumbs up/down),
+# we passively extract beliefs from every AI interaction.
+# This solves the cold-start problem — the belief store populates
+# itself automatically as the user chats and views dashboards.
+# ============================================================
+
+class PassiveBeliefIngestion:
+    """
+    Implicit belief collection — no explicit user feedback required.
+
+    Architecture (per ChatGPT / senior-ML-engineer review):
+
+        LLM Response
+            ↓
+        Fact Extractor  (heuristic, zero LLM cost)
+            ↓
+        Candidate Belief Store   confidence = 0.25
+            ↓
+        Engagement Tracker        similarity-gated (cosine > 0.6)
+            ↓
+        Confidence Updater        follow-up +0.15, dashboard +0.10
+            ↓
+        Promotion Engine           promoted when confidence ≥ 0.55
+            ↓
+        Belief Graph  ←  only promoted beliefs enter novelty filter
+
+    Also handles:
+    • Contradiction detection  (cosine > 0.85 AND numeric delta → replace)
+    • Cold-start bootstrapping (dashboard KPIs, document ingestion)
+    """
+
+    # ── Confidence tiers ────────────────────────────────────
+    CANDIDATE_CONFIDENCE   = 0.25   # just extracted, user merely saw it
+    DASHBOARD_CONFIDENCE   = 0.20   # KPI on screen — may not have read it
+    PROMOTION_THRESHOLD    = 0.55   # only promoted beliefs affect novelty
+    EXPLICIT_CONFIDENCE    = 0.90   # rare explicit feedback
+
+    BOOST_FOLLOWUP         = 0.15   # user asked a related follow-up
+    BOOST_DASHBOARD_VIEW   = 0.10   # user opened a dashboard with this KPI
+    BOOST_EXPORT           = 0.20   # user exported / downloaded
+
+    SIMILARITY_GATE        = 0.60   # must exceed before boosting
+    CONTRADICTION_SIM      = 0.85   # same topic
+    DEDUP_SIM              = 0.88   # skip if near-duplicate exists
+
+    # ── Fact extraction ─────────────────────────────────────
+
+    @staticmethod
+    def _extract_factual_statements(text: str, max_statements: int = 5) -> List[str]:
+        """
+        Heuristic extraction of data-bearing sentences from AI text.
+        Zero latency — no LLM call, just regex.
+        """
+        import re
+
+        # Strip markdown
+        clean = re.sub(r'[#>]', '', text)
+        clean = re.sub(r'\*\*([^*]+)\*\*', r'\1', clean)
+        clean = re.sub(r'`([^`]+)`', r'\1', clean)
+        clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', clean)
+        clean = re.sub(r'```[\s\S]*?```', '', clean)
+        clean = re.sub(r'---+', '', clean)
+        clean = re.sub(r'\|[^\n]+\|', '', clean)
+
+        sentences = re.split(r'(?<=[.!?])\s+', clean)
+
+        factual: List[str] = []
+        for sent in sentences:
+            sent = sent.strip().lstrip('- •')
+            if len(sent) < 25 or len(sent) > 300:
+                continue
+            if re.match(
+                r'^(Here\s|Let me|I can|Sure|I\'ll|I will|Great|Of course|'
+                r'Absolutely|You can|Feel free|Would you|Do you want)',
+                sent, re.I,
+            ):
+                continue
+            has_data = bool(re.search(
+                r'\d+\.?\d*\s*%|'
+                r'\$[\d,.]+|'
+                r'\b\d{2,}[,.]?\d*\b|'
+                r'\b(increased|decreased|grew|declined|dropped|rose|fell)\b|'
+                r'\b(highest|lowest|top|bottom|peak|minimum|maximum)\b|'
+                r'\b(average|total|median|sum|count|mean)\b|'
+                r'\b(correlation|trend|pattern|outlier|anomaly)\b|'
+                r'\b(\d+x|\d+\.\d+x)\b',
+                sent, re.I,
+            ))
+            if has_data:
+                factual.append(sent)
+        return factual[:max_statements]
+
+    # ── Numeric extraction for contradiction detection ──────
+
+    @staticmethod
+    def _extract_numbers(text: str) -> List[float]:
+        """Pull all numbers (incl. decimals, $, %) from a string."""
+        import re
+        raw = re.findall(r'[\$]?([\d,]+\.?\d*)', text)
+        nums: List[float] = []
+        for r in raw:
+            try:
+                nums.append(float(r.replace(',', '')))
+            except ValueError:
+                pass
+        return nums
+
+    # ── Core: ingest candidates from AI response ────────────
+
+    @staticmethod
+    async def auto_ingest_from_response(
+        belief_store: 'BeliefStore',
+        user_id: str,
+        ai_response: str,
+        dataset_id: str = None,
+        max_beliefs: int = 3,
+    ) -> List[str]:
+        """
+        Extract factual sentences → store as **candidate** beliefs (0.25).
+        Handles deduplication AND contradiction detection:
+        - Near-duplicate (>0.88 cosine, numbers match) → skip
+        - Contradiction  (>0.85 cosine, numbers differ) → replace old belief
+        """
+        statements = PassiveBeliefIngestion._extract_factual_statements(
+            ai_response, max_statements=max_beliefs + 2
+        )
+        if not statements:
+            return []
+
+        belief_ids: List[str] = []
+        for stmt in statements:
+            if len(belief_ids) >= max_beliefs:
+                break
+
+            try:
+                similar = await belief_store.query_similar_beliefs(
+                    user_id, stmt, n_results=1
+                )
+                if similar:
+                    top = similar[0]
+                    sim = top["similarity"]
+
+                    # ── Contradiction detection ──
+                    if sim > PassiveBeliefIngestion.CONTRADICTION_SIM:
+                        old_nums = PassiveBeliefIngestion._extract_numbers(top["document"])
+                        new_nums = PassiveBeliefIngestion._extract_numbers(stmt)
+                        numbers_differ = (
+                            old_nums and new_nums
+                            and any(
+                                abs(o - n) / max(abs(o), 1) > 0.05
+                                for o, n in zip(old_nums, new_nums)
+                            )
+                        )
+                        if numbers_differ:
+                            # Replace stale belief
+                            await belief_store.delete_belief(user_id, top["id"])
+                            logger.info(
+                                f"Belief contradiction: replaced '{top['document'][:50]}…' "
+                                f"with '{stmt[:50]}…'"
+                            )
+                        else:
+                            # Near-duplicate, skip
+                            logger.debug(
+                                f"Belief dedup: skipping '{stmt[:50]}…' "
+                                f"(sim={sim:.2f})"
+                            )
+                            continue
+
+                    elif sim > PassiveBeliefIngestion.DEDUP_SIM:
+                        continue  # too similar, not contradictory
+
+            except Exception:
+                pass
+
+            belief_id = await belief_store.add_belief(
+                user_id=user_id,
+                belief_text=stmt,
+                source="candidate",
+                dataset_id=dataset_id,
+                confidence=PassiveBeliefIngestion.CANDIDATE_CONFIDENCE,
+            )
+            if belief_id:
+                belief_ids.append(belief_id)
+
+        if belief_ids:
+            logger.info(
+                f"Passive belief ingestion: {len(belief_ids)} candidates from "
+                f"{len(statements)} facts for user {user_id}"
+            )
+        return belief_ids
+
+    # ── Similarity-gated confidence boosting ─────────────────
+
+    @staticmethod
+    async def boost_related_beliefs(
+        belief_store: 'BeliefStore',
+        user_id: str,
+        query_text: str,
+        boost_amount: float = None,
+        signal: str = "followup",
+    ) -> int:
+        """
+        Implicit engagement signal → boost related beliefs.
+
+        Critical fix: similarity gate at 0.60 prevents random boosts
+        when the follow-up question is on a different topic.
+
+        Signals & boost amounts:
+            followup   +0.15  (user asked related question)
+            dashboard  +0.10  (user opened dashboard)
+            export     +0.20  (user exported chart/data)
+        """
+        boost_map = {
+            "followup":  PassiveBeliefIngestion.BOOST_FOLLOWUP,
+            "dashboard": PassiveBeliefIngestion.BOOST_DASHBOARD_VIEW,
+            "export":    PassiveBeliefIngestion.BOOST_EXPORT,
+        }
+        amount = boost_amount if boost_amount is not None else boost_map.get(signal, 0.15)
+
+        try:
+            similar = await belief_store.query_similar_beliefs(
+                user_id, query_text, n_results=5
+            )
+        except Exception:
+            return 0
+
+        boosted = 0
+        for belief in similar:
+            # ── SIMILARITY GATE: only boost if topic actually matches ──
+            if belief["similarity"] < PassiveBeliefIngestion.SIMILARITY_GATE:
+                continue
+
+            collection = belief_store._get_collection(user_id)
+            if not collection:
+                continue
+
+            new_confidence = min(0.95, belief["confidence"] + amount)
+            updated_meta = {**belief["metadata"], "confidence": new_confidence}
+
+            # Track promotion pathway
+            old_source = updated_meta.get("source", "")
+            if old_source == "candidate" and new_confidence >= PassiveBeliefIngestion.PROMOTION_THRESHOLD:
+                updated_meta["source"] = "promoted"
+                updated_meta["promoted_at"] = datetime.utcnow().isoformat()
+                logger.info(
+                    f"Belief promoted: '{belief['document'][:60]}…' "
+                    f"(confidence {belief['confidence']:.2f} → {new_confidence:.2f})"
+                )
+            elif old_source == "candidate":
+                updated_meta["source"] = "implicitly_engaged"
+
+            try:
+                collection.update(
+                    ids=[belief["id"]],
+                    metadatas=[updated_meta],
+                )
+                boosted += 1
+            except Exception:
+                pass
+
+        if boosted:
+            logger.debug(f"Implicit boost ({signal}): {boosted} beliefs for user {user_id}")
+        return boosted
+
+    # ── Dashboard KPI ingestion ──────────────────────────────
+
+    @staticmethod
+    async def ingest_dashboard_kpis(
+        belief_store: 'BeliefStore',
+        user_id: str,
+        components: List[Dict[str, Any]],
+        dataset_id: str = None,
+    ) -> List[str]:
+        """
+        Dashboard viewed → KPI values become candidate beliefs (0.20).
+        Lower than chat candidates because users may skim dashboards.
+        """
+        belief_ids: List[str] = []
+
+        for comp in components:
+            if comp.get("type", "") != "kpi":
+                continue
+
+            title = comp.get("title", "")
+            value = comp.get("value")
+            if not title or value is None:
+                continue
+
+            unit   = comp.get("unit", "")
+            prefix = comp.get("prefix", "")
+            suffix = comp.get("suffix", "")
+            dv = f"{prefix}{value}{suffix}" if prefix or suffix else str(value)
+            if unit:
+                dv = f"{dv} {unit}"
+            belief_text = f"The {title} is {dv}."
+
+            change = comp.get("change")
+            if change is not None:
+                direction = "up" if change > 0 else "down"
+                belief_text += f" It is {direction} {abs(change):.1f}%."
+
+            # Dedup / contradiction (same logic as chat)
+            try:
+                similar = await belief_store.query_similar_beliefs(
+                    user_id, belief_text, n_results=1
+                )
+                if similar:
+                    top = similar[0]
+                    if top["similarity"] > PassiveBeliefIngestion.CONTRADICTION_SIM:
+                        old_nums = PassiveBeliefIngestion._extract_numbers(top["document"])
+                        new_nums = PassiveBeliefIngestion._extract_numbers(belief_text)
+                        if old_nums and new_nums and any(
+                            abs(o - n) / max(abs(o), 1) > 0.05
+                            for o, n in zip(old_nums, new_nums)
+                        ):
+                            await belief_store.delete_belief(user_id, top["id"])
+                        else:
+                            continue  # same value, skip
+                    elif top["similarity"] > PassiveBeliefIngestion.DEDUP_SIM:
+                        continue
+            except Exception:
+                pass
+
+            belief_id = await belief_store.add_belief(
+                user_id=user_id,
+                belief_text=belief_text,
+                source="dashboard_candidate",
+                dataset_id=dataset_id,
+                confidence=PassiveBeliefIngestion.DASHBOARD_CONFIDENCE,
+            )
+            if belief_id:
+                belief_ids.append(belief_id)
+
+        if belief_ids:
+            logger.info(
+                f"Dashboard belief ingestion: {len(belief_ids)} KPI candidates "
+                f"for user {user_id}"
+            )
+        return belief_ids
+
+    # ── Novelty context for prompt injection ─────────────────
+
+    @staticmethod
+    async def get_novelty_context(
+        belief_store: 'BeliefStore',
+        user_id: str,
+        query_text: str,
+        max_beliefs: int = 5,
+    ) -> List[str]:
+        """
+        Retrieve what the user **already knows** about a topic.
+        Injected into LLM prompt so it avoids repeating stale insights.
+
+        Critical: only returns **promoted** beliefs (confidence ≥ 0.55).
+        Candidate beliefs (0.25) are never shown — they haven't been
+        validated by engagement signals yet.
+        """
+        try:
+            similar = await belief_store.query_similar_beliefs(
+                user_id, query_text, n_results=max_beliefs
+            )
+            return [
+                b["document"] for b in similar
+                if b["similarity"] > 0.45
+                and b["confidence"] >= PassiveBeliefIngestion.PROMOTION_THRESHOLD
+            ]
+        except Exception:
+            return []
 
 
 # ============================================================

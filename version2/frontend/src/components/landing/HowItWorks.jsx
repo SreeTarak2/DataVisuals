@@ -40,7 +40,15 @@ const HowItWorks = () => {
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto relative">
                     {/* Connecting Line (Desktop) */}
-                    <div className="hidden md:block absolute top-14 left-[16%] right-[16%] h-px bg-slate-800" aria-hidden="true"></div>
+                    <div className="hidden md:block absolute top-14 left-[16%] right-[16%] h-px bg-slate-800" aria-hidden="true">
+                        <motion.div
+                            initial={{ scaleX: 0 }}
+                            whileInView={{ scaleX: 1 }}
+                            viewport={{ once: true, margin: "-100px" }}
+                            transition={{ duration: 1.5, ease: "easeInOut" }}
+                            className="h-full bg-sky-500 origin-left"
+                        />
+                    </div>
 
                     <Step
                         icon={UploadCloud}

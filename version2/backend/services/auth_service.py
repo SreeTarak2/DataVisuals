@@ -29,7 +29,7 @@ if len(SECRET_KEY) < 32:
         "Generate a secure key with: python -c \"import secrets; print(secrets.token_hex(32))\""
     )
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days - extended for better UX
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days 
 
 # Security scheme
 security = HTTPBearer()

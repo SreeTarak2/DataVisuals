@@ -10,7 +10,7 @@ import DOMPurify from 'dompurify';
 import PlotlyChart from '@/components/features/charts/PlotlyChart';
 import ChatHistoryModal from '@/components/features/observatory/ChatHistoryModal';
 import { markdownComponents, streamingMarkdownComponents } from '@/components/features/chat/MarkdownRenderers';
-import { ChatErrorDisplay, RateLimitBanner, TypingIndicator } from '@/components/features/chat/ChatErrorDisplay';
+import { ChatErrorDisplay, RateLimitBanner, TypingIndicator, ThinkingSteps } from '@/components/features/chat/ChatErrorDisplay';
 import useChatStore from '@/store/chatStore';
 import useDatasetStore from '@/store/datasetStore';
 import { chatAPI } from '@/services/api';
@@ -86,7 +86,7 @@ const buildChartLayout = (chartConfig, height = 380) => {
   plot_bgcolor: 'rgba(6,8,13,1)',
   font: { color: '#b3c0d4', size: 12, family: 'Rubik, system-ui, sans-serif' },
   height,
-  margin: { t: 30, b: 50, l: 60, r: 20 },
+  margin: { t: 30, b: 80, l: 60, r: 20 },
   xaxis: {
     ...(chartConfig?.layout?.xaxis || {}),
     title: chartConfig?.layout?.xaxis?.title || { text: meta.xLabel },
@@ -125,8 +125,40 @@ const withPointMarkers = (chartData = []) => {
 
 const extractFollowUpSuggestions = (content = '') => {
   if (!content) return [];
-  const lines = content.split('\n');
-  const anchorIndex = lines.findIndex((line) => /to explore.*further|you might want to|you could also|follow.?up|next.?steps|explore this/i.test(line));
+
+  // ── Pre-processing: normalize inline separator formats ──
+  // Some models (Gemini) output: "text --- * Q1? * Q2? * Q3?"
+  // Normalize to multi-line: "text\n---\n- Q1?\n- Q2?\n- Q3?"
+  let normalized = content.replace(
+    /\s*---\s*\*\s*/g,
+    (match, offset) => offset === content.indexOf('---') ? '\n---\n- ' : '\n- '
+  );
+  // Also handle: "--- \n* Q1? * Q2?" or "* Q1? * Q2?" after ---
+  if (normalized.includes('---')) {
+    const parts = normalized.split(/^---$/m);
+    if (parts.length >= 2) {
+      const afterSep = parts.slice(1).join('---');
+      // Split on " * " patterns (inline bullets)
+      const fixed = afterSep.replace(/\s*\*\s+/g, '\n- ');
+      normalized = parts[0] + '\n---' + fixed;
+    }
+  }
+
+  const lines = normalized.split('\n');
+
+  // Try standard anchor first ("you might want to...", "next steps", etc.)
+  let anchorIndex = lines.findIndex((line) => /to explore.*further|you might want to|you could also|follow.?up|next.?steps|explore this/i.test(line));
+
+  // Fallback: look for a trailing "---" separator (SQL path uses this)
+  if (anchorIndex === -1) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (/^-{3,}$/.test(lines[i].trim())) {
+        anchorIndex = i;
+        break;
+      }
+    }
+  }
+
   if (anchorIndex === -1) return [];
 
   const suggestions = [];
@@ -136,13 +168,20 @@ const extractFollowUpSuggestions = (content = '') => {
       if (suggestions.length > 0) break;
       continue;
     }
-    const match = line.match(/^[-*•\d.]+\s+(.+?)$/);
-    if (!match) {
-      if (suggestions.length > 0) break;
-      continue;
+    // Match bullet points: "- text", "* text", "• text", "1. text"
+    const bulletMatch = line.match(/^[-*•\d.]+\s+(.+?)$/);
+    if (bulletMatch) {
+      const suggestion = bulletMatch[1].replace(/`/g, '').replace(/\*\*/g, '').trim();
+      if (suggestion.length > 5) suggestions.push(suggestion);
+    } else if (suggestions.length === 0 && line.length > 10 && !line.startsWith('#')) {
+      // Non-bullet plain text follow-up (common in SQL path responses)
+      const cleaned = line.replace(/`/g, '').replace(/\*\*/g, '').replace(/^["']|["']$/g, '').trim();
+      if (cleaned.length > 10 && /\?|explore|try|look|compare|check|break|analyze/i.test(cleaned)) {
+        suggestions.push(cleaned);
+      }
+    } else if (suggestions.length > 0 && !bulletMatch) {
+      break;
     }
-    const suggestion = match[1].replace(/`/g, '').trim();
-    if (suggestion) suggestions.push(suggestion);
     if (suggestions.length >= 4) break;
   }
 
@@ -152,8 +191,34 @@ const extractFollowUpSuggestions = (content = '') => {
 const stripFollowUpSection = (content = '') => {
   if (!content) return '';
 
-  const lines = content.split('\n');
-  const anchorIndex = lines.findIndex((line) => /to explore.*further|you might want to|you could also|follow.?up|next.?steps|explore this/i.test(line));
+  // ── Normalize inline separator formats (same as extractFollowUpSuggestions) ──
+  // Handles: "text --- * Q1? * Q2?" → multi-line
+  let normalized = content;
+  if (/---\s*\*/.test(normalized)) {
+    normalized = normalized.replace(
+      /\s*---\s*\*\s*/g,
+      (match, offset) => offset === normalized.indexOf('---') ? '\n---\n- ' : '\n- '
+    );
+  }
+  if (normalized.includes('---')) {
+    const parts = normalized.split(/^---$/m);
+    if (parts.length >= 2) {
+      const afterSep = parts.slice(1).join('---');
+      const fixed = afterSep.replace(/\s*\*\s+/g, '\n- ');
+      normalized = parts[0] + '\n---' + fixed;
+    }
+  }
+
+  const lines = normalized.split('\n');
+
+  // First, try anchor-phrase detection
+  let anchorIndex = lines.findIndex((line) => /to explore.*further|you might want to|you could also|follow.?up|next.?steps|explore this/i.test(line));
+
+  // Fallback: detect bare --- separator (used by SQL path responses)
+  if (anchorIndex === -1) {
+    anchorIndex = lines.findIndex((line) => /^---\s*$/.test(line.trim()));
+  }
+
   if (anchorIndex === -1) return content;
 
   let endIndex = anchorIndex + 1;
@@ -171,11 +236,17 @@ const stripFollowUpSection = (content = '') => {
       endIndex = i + 1;
       continue;
     }
+    // For --- separator, also consume non-bullet follow-up lines (plain text questions)
+    if (/\?|explore|try|look|compare|check|break|analyze/i.test(line)) {
+      endIndex = i + 1;
+      continue;
+    }
     if (i > anchorIndex + 1) {
       break;
     }
   }
 
+  // If --- was the separator, strip it too
   const cleanedLines = [...lines.slice(0, anchorIndex), ...lines.slice(endIndex)];
   return cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 };
@@ -399,7 +470,7 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <BarChart3 size={15} className="text-slate-300 shrink-0" />
-                    <span className="text-[15px] font-semibold tracking-tight text-slate-100 truncate">
+                    <span className="text-[15px] font-semibold tracking-tight text-slate-100 break-words">
                       {getChartTitle(msg.chart_config)}
                     </span>
                   </div>
@@ -554,6 +625,9 @@ const Chat = () => {
   const [rateLimitRemaining, setRateLimitRemaining] = useState(null);
   const [showRateLimitBanner, setShowRateLimitBanner] = useState(true);
 
+  // Thinking-steps state (Copilot-style pipeline transparency)
+  const [thinkingSteps, setThinkingSteps] = useState([]);
+
   const messages = getCurrentConversationMessages();
   const isAITyping = loading || isStreaming;
 
@@ -571,12 +645,23 @@ const Chat = () => {
       scrollToBottom();
     }, [appendStreamingToken]),
 
-    onResponseComplete: useCallback(() => {
-      // Response complete - content accumulated via onToken
+    onResponseComplete: useCallback((fullResponse) => {
+      // Use fullResponse as fallback if tokens didn't accumulate properly
+      if (fullResponse) {
+        const currentContent = useChatStore.getState().streamingContent;
+        if (!currentContent || currentContent.trim().length < fullResponse.trim().length * 0.5) {
+          // streamingContent is empty or significantly shorter — replace with full response
+          useChatStore.setState({ streamingContent: fullResponse });
+        }
+      }
     }, []),
 
     onChart: useCallback((chartConfig) => {
       setStreamingChartConfig(chartConfig);
+    }, []),
+
+    onThinkingStep: useCallback((label) => {
+      setThinkingSteps(prev => [...prev, label]);
     }, []),
 
     onDone: useCallback(({ conversationId, chartConfig, sql }) => {
@@ -605,6 +690,7 @@ const Chat = () => {
       const content = useChatStore.getState().streamingContent;
       finishStreaming(content, chartConfig || streamingChartConfig, sql);
       setStreamingChartConfig(null);
+      setThinkingSteps([]);
 
       // Update URL params
       const finalConvId = conversationId || localConvId;
@@ -619,6 +705,7 @@ const Chat = () => {
 
     onError: useCallback((error) => {
       cancelStreaming();
+      setThinkingSteps([]);
       // Set error state for display
       setChatError(error);
       // Don't show toast for rate limit errors - we show the banner instead
@@ -1273,10 +1360,16 @@ const Chat = () => {
 
               {/* Message Container */}
               <div className="flex flex-col items-start max-w-[80%]">
-                <span className="text-xs font-medium text-slate-300 mb-1.5">DataSage AI</span>
                 <div className="px-1 text-slate-200">
                   {isStreaming && streamingContent ? (
                     <div className="max-w-none">
+                      {thinkingSteps.length > 0 && (
+                        <ThinkingSteps
+                          steps={thinkingSteps}
+                          isStreaming={true}
+                          className="mb-3"
+                        />
+                      )}
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={streamingMarkdownComponents}
@@ -1285,6 +1378,8 @@ const Chat = () => {
                       </ReactMarkdown>
                       <span className="inline-block w-1.5 h-5 bg-blue-400 rounded-sm animate-pulse ml-0.5 align-text-bottom" />
                     </div>
+                  ) : thinkingSteps.length > 0 ? (
+                    <ThinkingSteps steps={thinkingSteps} isStreaming={false} />
                   ) : (
                     <TypingIndicator stage={loading ? 'thinking' : 'generating'} />
                   )}

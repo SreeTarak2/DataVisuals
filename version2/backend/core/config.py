@@ -26,31 +26,46 @@ class Settings:
     LLM_REQUEST_STAGGER_SECONDS: float = float(os.getenv("LLM_REQUEST_STAGGER_SECONDS", "0.5"))
 
     # -------------------------------------------------------------------------
-    # OpenRouter Models — Updated February 2026
-    # PAID TIER — Optimized for $5 budget: cheapest models with best accuracy
-    # Free models commented out — uncomment to switch back
+    # OpenRouter Models — Updated March 2026
+    # Strategy: Gemini primary, Mistral fallback, Qwen3 VL for vision
     # -------------------------------------------------------------------------
     OPENROUTER_MODELS: Dict[str, Dict[str, Any]] = {
 
         # ═══════════════════════════════════════════════════════════════════
-        # TIER 1: WORKHORSE — Mistral Small 3.2 24B ($0.06/$0.18 per M)
-        # Cheapest accurate model on OpenRouter. Use for ALL high-volume tasks.
-        # Estimated cost: ~5K tokens per call × 10 calls = ~$0.01
+        # PRIMARY — Gemini 2.5 Flash Lite ($0.075/$0.30 per M)
+        # Best response formatting + speed. Natively writes structured
+        # markdown, tables, bold numbers. 1M context. Use for ALL
+        # user-facing and reasoning tasks.
+        # ═══════════════════════════════════════════════════════════════════
+
+        "gemini_flash_lite": {
+            "model": "google/gemini-2.5-flash-lite",
+            "name": "Gemini 2.5 Flash Lite",
+            "strengths": ["instruction_following", "structured_output", "reasoning", "speed", "markdown_formatting"],
+            "best_for": ["chat_engine", "chat_streaming", "conversational", "sql_generator", "kpi_suggestion", "insight_generation", "chart_recommendation", "complex_analysis"],
+            "context_window": 1000000,
+            "cost": "$0.075/$0.30",
+        },
+
+        # ═══════════════════════════════════════════════════════════════════
+        # FALLBACK — Mistral Small 3.2 24B ($0.06/$0.18 per M)
+        # Cheapest accurate model. Reliable for structured JSON, charts,
+        # validation. Falls back here if Gemini has issues.
         # ═══════════════════════════════════════════════════════════════════
 
         "mistral_small_32": {
             "model": "mistralai/mistral-small-3.2-24b-instruct",
             "name": "Mistral Small 3.2 24B",
             "strengths": ["instruction_following", "sql", "structured_output", "function_calling", "vision"],
-            "best_for": ["chart_recommendation", "chart_explanation", "validation", "simple_query", "rewrite_engine", "draft_generation"],
+            "best_for": ["chart_explanation", "validation", "simple_query", "rewrite_engine", "draft_generation"],
             "context_window": 131000,
             "cost": "$0.06/$0.18",
         },
 
         # ═══════════════════════════════════════════════════════════════════
-        # TIER 2: POWER — DeepSeek V3.2 ($0.25/$0.40 per M)
-        # Best value frontier model. Reasoning + agentic + tool-use.
-        # Estimated cost: ~5K tokens per call = ~$0.003
+        # VISION — Qwen3 VL 8B (free on OpenRouter)
+        # Dedicated vision model for chart/image analysis tasks.
+        # Keeps vision costs at $0.
         # ═══════════════════════════════════════════════════════════════════
 
         "deepseek_v32": {
@@ -173,74 +188,80 @@ class Settings:
     }
 
     # -------------------------------------------------------------------------
-    # Role → Model Mapping (Paid Tier — Cost-Optimized)
+    # Role → Model Mapping
     #
     # Strategy:
-    #   - HIGH VOLUME tasks → mistral_small_32 ($0.06/$0.18) — cheapest
-    #   - REASONING tasks  → deepseek_v32 ($0.25/$0.40)     — best value
-    #   - COMPLEX/DESIGN   → minimax_m25 ($0.30/$1.10)      — frontier quality
+    #   - ALL user-facing & reasoning → gemini_flash_lite (best formatting)
+    #   - Cheap structured tasks      → mistral_small_32 (fallback/budget)
+    #   - Vision tasks                → qwen3_vl_8b (free, dedicated VL)
     # -------------------------------------------------------------------------
     OPENROUTER_ROLE_MAPPING: Dict[str, str] = {
-        # Charts & Visualization — chart recommendation uses reasoning model for quality
-        "chart_recommendation":     "deepseek_v32",
+        # Charts & Visualization
+        "chart_recommendation":     "gemini_flash_lite",
         "chart_explanation":         "mistral_small_32",
-        "visualization_engine":      "mistral_small_32",
+        "visualization_engine":      "gemini_flash_lite",
 
-        # KPIs — needs domain reasoning; Insights — grounded writing task
-        "kpi_suggestion":            "deepseek_v32",
-        "insight_generation":        "mistral_small_32",
-        "narrative_insights":        "deepseek_v32",
+        # KPIs & Insights
+        "kpi_suggestion":            "gemini_flash_lite",
+        "insight_generation":        "gemini_flash_lite",
+        "narrative_insights":        "gemini_flash_lite",
 
-        # SQL Generation — needs strong reasoning + coding
-        "sql_generator":             "deepseek_v32",
+        # SQL Generation
+        "sql_generator":             "gemini_flash_lite",
 
-        # Chat & Conversational — balanced cost vs quality
-        "chat_engine":               "deepseek_v32",
-        "conversational":            "mistral_small_32",
-        "chat_streaming":            "deepseek_v32",
+        # Chat & Conversational — all on Gemini for polished prose
+        "chat_engine":               "gemini_flash_lite",
+        "conversational":            "gemini_flash_lite",
+        "chat_streaming":            "gemini_flash_lite",
 
-        # Design & Layout — complex, use frontier
-        "layout_designer":           "minimax_m25",
-        "dashboard_design":          "minimax_m25",
-        "layout_from_image":         "mistral_small_32",
-        
+        # Design & Layout
+        "layout_designer":           "gemini_flash_lite",
+        "dashboard_design":          "gemini_flash_lite",
+
         # Quick Tasks — cheapest model
         "draft_generation":          "mistral_small_32",
         "simple_query":              "mistral_small_32",
         "rewrite_engine":            "mistral_small_32",
 
         # Refinement & Validation
-        "refinement":                "deepseek_v32",
+        "refinement":                "gemini_flash_lite",
         "validation":                "mistral_small_32",
 
-        # Vision Tasks — Mistral 3.2 supports vision
-        "chart_image_analysis":      "mistral_small_32",
-        "visual_extraction":         "mistral_small_32",
+        # Vision Tasks — dedicated Qwen3 VL (free)
+        "chart_image_analysis":      "qwen3_vl_8b",
+        "visual_extraction":         "qwen3_vl_8b",
+        "layout_from_image":         "qwen3_vl_8b",
 
         # High-Level Planning & Complex Reasoning
-        "system_design":             "deepseek_v32",
-        "requirements_synthesis":    "deepseek_v32",
-        "pipeline_planner":          "minimax_m25",
-        "complex_analysis":          "deepseek_v32",
+        "system_design":             "gemini_flash_lite",
+        "requirements_synthesis":    "gemini_flash_lite",
+        "pipeline_planner":          "gemini_flash_lite",
+        "complex_analysis":          "gemini_flash_lite",
 
         # Default Fallback
         "default":                   "mistral_small_32",
     }
 
     # -------------------------------------------------------------------------
-    # Fallback Chains (ordered by cost: cheapest first)
+    # Fallback Chains
+    # Primary fails → try next in chain
     # -------------------------------------------------------------------------
     FALLBACKS: Dict[str, List[str]] = {
-        "chat_engine":          ["deepseek_v32", "minimax_m25", "mistral_small_32"],
-        "kpi_suggestion":       ["deepseek_v32", "minimax_m25", "mistral_small_32"],
-        "insight_generation":   ["mistral_small_32", "deepseek_v32"],
-        "sql_generator":        ["deepseek_v32", "mistral_small_32", "minimax_m25"],
-        "layout_designer":      ["minimax_m25", "deepseek_v32", "mistral_small_32"],
-        "chart_image_analysis": ["mistral_small_32", "deepseek_v32"],
-        "layout_from_image":    ["mistral_small_32", "deepseek_v32"],
-        "complex_analysis":     ["deepseek_v32", "minimax_m25", "mistral_small_32"],
-        "simple_query":         ["mistral_small_32", "deepseek_v32"],
-        "default":              ["mistral_small_32", "deepseek_v32", "minimax_m25"],
+        "chat_engine":          ["gemini_flash_lite", "mistral_small_32"],
+        "chat_streaming":       ["gemini_flash_lite", "mistral_small_32"],
+        "conversational":       ["gemini_flash_lite", "mistral_small_32"],
+        "kpi_suggestion":       ["gemini_flash_lite", "mistral_small_32"],
+        "insight_generation":   ["gemini_flash_lite", "mistral_small_32"],
+        "sql_generator":        ["gemini_flash_lite", "mistral_small_32"],
+        "layout_designer":      ["gemini_flash_lite", "mistral_small_32"],
+        "dashboard_design":     ["gemini_flash_lite", "mistral_small_32"],
+        "chart_recommendation": ["gemini_flash_lite", "mistral_small_32"],
+        "complex_analysis":     ["gemini_flash_lite", "mistral_small_32"],
+        "chart_image_analysis": ["qwen3_vl_8b", "mistral_small_32"],
+        "visual_extraction":    ["qwen3_vl_8b", "mistral_small_32"],
+        "layout_from_image":    ["qwen3_vl_8b", "mistral_small_32"],
+        "simple_query":         ["mistral_small_32", "gemini_flash_lite"],
+        "default":              ["mistral_small_32", "gemini_flash_lite"],
     }
 
     # -------------------------------------------------------------------------

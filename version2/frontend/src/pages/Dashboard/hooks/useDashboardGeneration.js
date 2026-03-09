@@ -6,7 +6,7 @@
  * Extracted from Dashboard.jsx to separate AI dashboard generation concerns.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'react-hot-toast';
 import { normalizeDashboardConfig } from '../../../utils/dashboardUtils';
 import { getAuthToken } from '../../../services/api';
@@ -26,6 +26,10 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
     const [layoutLoading, setLayoutLoading] = useState(false);
     const [redesignCount, setRedesignCount] = useState(0);
 
+    // Deduplication: track in-flight requests and allow cancellation
+    const abortControllerRef = useRef(null);
+    const isGeneratingRef = useRef(false);
+
     const generateAiDashboard = useCallback(async (forceRegenerate = false) => {
         if (!selectedDataset || !selectedDataset.id) {
             console.log('No dataset selected, skipping AI dashboard generation');
@@ -39,13 +43,26 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
             return;
         }
 
+        // Deduplication guard: skip if a generation is already in-flight
+        if (isGeneratingRef.current && !forceRegenerate) {
+            console.log('Dashboard generation already in-flight, skipping duplicate call');
+            return;
+        }
+
+        // Cancel any previous in-flight request
+        if (abortControllerRef.current) {
+            console.log('Aborting previous dashboard generation request');
+            abortControllerRef.current.abort();
+        }
+
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+        isGeneratingRef.current = true;
+
         try {
             setLayoutLoading(true);
             const token = getAuthToken();
             console.log('Starting AI dashboard generation for dataset:', selectedDataset.id);
-
-            // Delay before AI dashboard generation
-            await new Promise(resolve => setTimeout(resolve, 2000));
 
             // Try AI Designer service first
             try {
@@ -56,7 +73,8 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
                         'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ force_regenerate: !!forceRegenerate })
+                    body: JSON.stringify({ force_regenerate: !!forceRegenerate }),
+                    signal: controller.signal
                 });
 
                 if (response.ok) {
@@ -101,7 +119,8 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
                 `/api/ai/${selectedDataset.id}/generate-dashboard?force_regenerate=${forceRegenerate}`,
                 {
                     method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    signal: controller.signal
                 }
             );
 
@@ -137,11 +156,20 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
                 throw new Error('Failed to generate AI dashboard');
             }
         } catch (error) {
+            // Don't show error for intentionally aborted requests
+            if (error.name === 'AbortError') {
+                console.log('Dashboard generation aborted (superseded by new request)');
+                return;
+            }
             console.error('AI Dashboard generation failed:', error);
             setAiDashboardConfig(null);
             toast.error('Failed to generate AI dashboard');
         } finally {
-            setLayoutLoading(false);
+            // Only reset loading if this is still the active request (not aborted)
+            if (abortControllerRef.current === controller) {
+                isGeneratingRef.current = false;
+                setLayoutLoading(false);
+            }
 
             if (aiDashboardConfig !== null) {
                 setTimeout(() => {
@@ -168,6 +196,16 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
         if (selectedDataset?.id) {
             generateAiDashboard();
         }
+    }, [selectedDataset?.id]);
+
+    // Cleanup: abort in-flight request on unmount or dataset change
+    useEffect(() => {
+        return () => {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+                isGeneratingRef.current = false;
+            }
+        };
     }, [selectedDataset?.id]);
 
     return {

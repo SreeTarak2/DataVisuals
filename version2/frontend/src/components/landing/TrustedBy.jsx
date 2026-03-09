@@ -10,20 +10,24 @@ const TrustedBy = () => {
     ];
 
     return (
-        <section className="py-12 bg-[#020617] border-y border-slate-900">
+        <section className="py-12 border-y border-white/5 bg-slate-950 overflow-hidden">
             <div className="container mx-auto px-6">
                 <p className="text-center text-slate-500 text-xs font-semibold mb-8 tracking-widest uppercase">
                     Powered by world-class infrastructure
                 </p>
-                <div className="flex flex-wrap justify-center items-center gap-10 md:gap-20">
-                    {partners.map((partner, index) => (
-                        <div
-                            key={index}
-                            className="text-lg md:text-xl font-bold text-slate-600 hover:text-slate-300 transition-colors cursor-default"
-                        >
-                            {partner}
-                        </div>
-                    ))}
+
+                {/* Auto-scrolling carousel setup */}
+                <div className="relative flex overflow-x-hidden">
+                    <div className="animate-marquee whitespace-nowrap flex items-center gap-16 md:gap-32 py-4">
+                        {[...partners, ...partners, ...partners].map((partner, index) => (
+                            <div
+                                key={index}
+                                className="text-xl md:text-2xl font-bold text-slate-700/80 hover:text-slate-400 transition-colors cursor-default whitespace-nowrap"
+                            >
+                                {partner}
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
         </section>
