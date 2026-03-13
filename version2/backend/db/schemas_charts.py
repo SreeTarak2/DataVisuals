@@ -98,6 +98,7 @@ class ChartResponse(BaseModel):
     explanation: Optional[str] = Field(default="", description="Natural language explanation")
     confidence: float = Field(0.0, ge=0.0, le=1.0, description="Confidence score for recommendations")
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional metadata")
+    point_intelligence: Optional[Dict[str, Any]] = Field(default=None, description="Per-data-point statistical intelligence for tooltip enrichment")
 
     class Config(_Config):
         pass

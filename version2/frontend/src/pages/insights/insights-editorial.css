@@ -1,0 +1,248 @@
+/* ═══════════════════════════════════════════════════════════
+   DataSage Intelligence — Dark Narrative Editorial Theme
+   A premium editorial report design for CEOs, Managers, Analysts
+   ═══════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500;1,600;1,700&family=Inter:wght@100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+
+/* ── Design Tokens ── */
+.insights-editorial-page {
+  --ink:        #F1F5F9;
+  --ink-soft:   #94A3B8;
+  --ink-muted:  #64748B;
+  --ink-dim:    #475569;
+  --accent:     #3B82F6;
+  --accent-glow: rgba(59, 130, 246, 0.12);
+  --accent-hot: #60A5FA;
+  --surface-0:  #0B0F1A;
+  --surface-1:  #111827;
+  --surface-2:  #1E293B;
+  --surface-3:  #283548;
+  --border:     rgba(148, 163, 184, 0.08);
+  --border-vis: rgba(148, 163, 184, 0.14);
+  --emerald:    #34D399;
+  --emerald-bg: rgba(52, 211, 153, 0.08);
+  --red:        #F87171;
+  --red-bg:     rgba(248, 113, 113, 0.08);
+  --amber:      #FBBF24;
+  --amber-bg:   rgba(251, 191, 36, 0.08);
+
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--surface-0);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Typography ── */
+.insights-editorial-page .serif {
+  font-family: 'Cormorant Garamond', 'Georgia', serif;
+}
+
+.insights-editorial-page .mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ── Layout ── */
+.insights-editorial-page .report-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-left: 2rem;
+  padding-right: 2rem;
+}
+
+@media (min-width: 768px) {
+  .insights-editorial-page .report-container {
+    padding-left: 3rem;
+    padding-right: 3rem;
+  }
+}
+
+@media (min-width: 1280px) {
+  .insights-editorial-page .report-container {
+    padding-left: 4rem;
+    padding-right: 4rem;
+  }
+}
+
+/* ── Micro Labels ── */
+.insights-editorial-page .label-caps {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+
+/* ── Analyst Panel (Statistical Proof) ── */
+.insights-editorial-page .analyst-panel {
+  background: var(--surface-2);
+  border: 1px solid var(--border-vis);
+  border-radius: 16px;
+  padding: 1.5rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* ── Semantic Color Utilities ── */
+.insights-editorial-page .text-brand-ink    { color: var(--ink); }
+.insights-editorial-page .text-brand-muted  { color: var(--ink-muted); }
+.insights-editorial-page .text-brand-accent { color: var(--accent); }
+.insights-editorial-page .bg-brand-accent   { background-color: var(--accent); }
+.insights-editorial-page .border-brand-border { border-color: var(--border); }
+
+/* ── Surface Cards ── */
+.insights-editorial-page .surface-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.insights-editorial-page .surface-card:hover {
+  border-color: var(--border-vis);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+/* ── Glow Hover ── */
+.insights-editorial-page .glow-hover {
+  transition: all 0.3s ease;
+}
+
+.insights-editorial-page .glow-hover:hover {
+  border-color: rgba(59, 130, 246, 0.3);
+  box-shadow: 0 0 30px rgba(59, 130, 246, 0.06), 0 8px 32px rgba(0, 0, 0, 0.25);
+}
+
+/* ── Tag Chips ── */
+.insights-editorial-page .tag-chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  border: 1px solid var(--border);
+}
+
+/* ── Gradient Accent Text ── */
+.insights-editorial-page .gradient-text {
+  background: linear-gradient(135deg, var(--accent-hot), var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Chapter Numbers ── */
+.insights-editorial-page .chapter-num {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 80px;
+  font-weight: 300;
+  line-height: 1;
+  color: var(--surface-2);
+  user-select: none;
+}
+
+/* ── Ambient Glow ── */
+.insights-editorial-page .ambient-glow {
+  position: relative;
+  overflow: hidden;
+}
+
+.insights-editorial-page .ambient-glow::before {
+  content: '';
+  position: absolute;
+  top: -200px;
+  right: -100px;
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.04) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Recommendation Cards ── */
+.insights-editorial-page .rec-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2rem;
+  transition: all 0.3s ease;
+}
+
+.insights-editorial-page .rec-card:hover {
+  border-color: rgba(59, 130, 246, 0.25);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+/* ── Chart Container ── */
+.insights-editorial-page .chart-container {
+  background: var(--surface-2);
+  border: 1px solid var(--border-vis);
+  border-radius: 16px;
+  padding: 1.5rem;
+}
+
+/* ── Recharts Tooltip Dark Override ── */
+.insights-editorial-page .recharts-default-tooltip {
+  background: var(--surface-2) !important;
+  border: 1px solid var(--border-vis) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+}
+
+.insights-editorial-page .recharts-tooltip-label {
+  color: var(--ink) !important;
+  font-weight: 600 !important;
+}
+
+.insights-editorial-page .recharts-tooltip-item {
+  color: var(--ink-soft) !important;
+}
+
+/* ── Scrollbar ── */
+.insights-editorial-page::-webkit-scrollbar,
+.insights-editorial-page *::-webkit-scrollbar {
+  width: 5px;
+}
+
+.insights-editorial-page::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.insights-editorial-page::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: 10px;
+}
+
+.insights-editorial-page::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-dim);
+}
+
+/* ── Selection ── */
+.insights-editorial-page ::selection {
+  background: var(--accent);
+  color: white;
+}
+
+/* ── Severity Badges ── */
+.insights-editorial-page .sev-critical { color: var(--red); }
+.insights-editorial-page .sev-high     { color: var(--amber); }
+.insights-editorial-page .sev-positive { color: var(--emerald); }
+.insights-editorial-page .sev-neutral  { color: var(--ink-muted); }
+
+/* ── Print ── */
+@media print {
+  .insights-editorial-page {
+    background: white !important;
+    color: #0f172a !important;
+    --ink: #0f172a;
+    --ink-soft: #475569;
+    --surface-0: white;
+    --surface-1: white;
+    --surface-2: #f8fafc;
+    --border: #e2e8f0;
+  }
+}

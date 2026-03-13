@@ -41,7 +41,7 @@ const downsampleLTTB = (xArr, yArr, targetPoints) => {
     const nextBucketEnd = Math.min(Math.floor((i + 1) * bucketSize) + 1, len);
 
     // Average of next bucket for reference
-    let avgX = 0, avgY = 0, count = 0;
+    let avgY = 0, count = 0;
     for (let j = nextBucketStart; j < nextBucketEnd; j++) {
       avgY += (typeof yArr[j] === 'number' ? yArr[j] : 0);
       count++;
@@ -50,7 +50,6 @@ const downsampleLTTB = (xArr, yArr, targetPoints) => {
 
     // Find point in current bucket with max triangle area
     let maxArea = -1, maxIndex = bucketStart;
-    const prevX = typeof xArr[prevIndex] === 'number' ? prevIndex : prevIndex;
     const prevY = typeof yArr[prevIndex] === 'number' ? yArr[prevIndex] : 0;
     for (let j = bucketStart; j < bucketEnd; j++) {
       const curY = typeof yArr[j] === 'number' ? yArr[j] : 0;
@@ -129,6 +128,174 @@ const DENSITY = {
   DOWNSAMPLE_AT: 300,     // Start downsampling above this
   TARGET_POINTS: 200,     // Downsample to this many points
   DISABLE_SPLINE: 500,    // Use linear interpolation above this
+};
+
+const toFiniteNumber = (value) => {
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+const toTimeMs = (value) => {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.getTime();
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
+const detectTemporal = (xArr = []) => {
+  const sample = xArr.filter(v => v !== null && v !== undefined).slice(0, 40);
+  if (sample.length < 3) return false;
+  const parseable = sample.filter(v => toTimeMs(v) !== null).length;
+  return parseable / sample.length >= 0.8;
+};
+
+const pickBucketMs = (spanMs, pointCount, targetPoints) => {
+  if (!Number.isFinite(spanMs) || spanMs <= 0 || pointCount <= targetPoints) return null;
+
+  const ideal = spanMs / targetPoints;
+  const candidates = [
+    60 * 60 * 1000,       // 1h
+    3 * 60 * 60 * 1000,   // 3h
+    6 * 60 * 60 * 1000,   // 6h
+    12 * 60 * 60 * 1000,  // 12h
+    24 * 60 * 60 * 1000,  // 1d
+    2 * 24 * 60 * 60 * 1000,
+    7 * 24 * 60 * 60 * 1000,   // 1w
+    14 * 24 * 60 * 60 * 1000,
+    30 * 24 * 60 * 60 * 1000,  // ~1mo
+    90 * 24 * 60 * 60 * 1000,  // ~1q
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate >= ideal) return candidate;
+  }
+  return candidates[candidates.length - 1];
+};
+
+const formatTemporalBucket = (bucketStartMs, bucketMs) => {
+  const date = new Date(bucketStartMs);
+  if (bucketMs >= 24 * 60 * 60 * 1000) {
+    return date.toISOString().slice(0, 10);
+  }
+  return date.toISOString();
+};
+
+const normalizeLineSeries = (xArr = [], yArr = [], targetPoints = DENSITY.TARGET_POINTS) => {
+  const rows = [];
+  const len = Math.min(xArr.length, yArr.length);
+  for (let i = 0; i < len; i += 1) {
+    const x = xArr[i];
+    const y = toFiniteNumber(yArr[i]);
+    if (x === null || x === undefined || y === null) continue;
+    rows.push({ x, y, i, t: toTimeMs(x) });
+  }
+  if (rows.length === 0) return { x: [], y: [], meta: { originalPoints: 0, displayedPoints: 0 } };
+
+  const temporal = detectTemporal(rows.map(r => r.x));
+  let ordered = rows;
+
+  if (temporal) {
+    ordered = [...rows].sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+  } else {
+    const numericX = rows.map(r => toFiniteNumber(r.x));
+    const hasNumericX = numericX.every(v => v !== null);
+    if (hasNumericX) {
+      ordered = [...rows].sort((a, b) => Number(a.x) - Number(b.x));
+    }
+  }
+
+  let reduced = ordered;
+  let bucketMsUsed = null;
+
+  if (temporal) {
+    const minT = ordered[0].t ?? 0;
+    const maxT = ordered[ordered.length - 1].t ?? minT;
+    const spanMs = maxT - minT;
+    const bucketMs = pickBucketMs(spanMs, ordered.length, targetPoints);
+
+    if (bucketMs) {
+      const bucketMap = new Map();
+      for (const row of ordered) {
+        const t = row.t ?? minT;
+        const bucketStart = Math.floor(t / bucketMs) * bucketMs;
+        const existing = bucketMap.get(bucketStart);
+        if (existing) {
+          existing.y += row.y;
+          existing.count += 1;
+        } else {
+          bucketMap.set(bucketStart, { t: bucketStart, y: row.y, count: 1 });
+        }
+      }
+      reduced = [...bucketMap.values()]
+        .sort((a, b) => a.t - b.t)
+        .map(row => ({
+          x: formatTemporalBucket(row.t, bucketMs),
+          y: row.y,
+          i: 0,
+          t: row.t,
+        }));
+      bucketMsUsed = bucketMs;
+    } else {
+      // Collapse duplicate timestamps while preserving trend semantics.
+      const tsMap = new Map();
+      for (const row of ordered) {
+        const key = row.t ?? 0;
+        const existing = tsMap.get(key);
+        if (existing) {
+          existing.y += row.y;
+          existing.count += 1;
+        } else {
+          tsMap.set(key, { t: key, y: row.y, count: 1 });
+        }
+      }
+      reduced = [...tsMap.values()]
+        .sort((a, b) => a.t - b.t)
+        .map(row => ({
+          x: formatTemporalBucket(row.t, 24 * 60 * 60 * 1000),
+          y: row.y,
+          i: 0,
+          t: row.t,
+        }));
+    }
+  } else {
+    const dupMap = new Map();
+    for (const row of reduced) {
+      const key = String(row.x);
+      const existing = dupMap.get(key);
+      if (existing) {
+        existing.y += row.y;
+        existing.count += 1;
+      } else {
+        dupMap.set(key, { x: row.x, y: row.y, count: 1 });
+      }
+    }
+    reduced = [...dupMap.values()].map(row => ({ x: row.x, y: row.y, i: 0, t: null }));
+  }
+
+  let finalX = reduced.map(r => r.x);
+  let finalY = reduced.map(r => r.y);
+  const needsDownsample = finalX.length > targetPoints;
+  if (needsDownsample) {
+    const sampled = downsampleLTTB(finalX, finalY, targetPoints);
+    finalX = sampled.x;
+    finalY = sampled.y;
+  }
+
+  return {
+    x: finalX,
+    y: finalY,
+    meta: {
+      originalPoints: rows.length,
+      preDownsamplePoints: reduced.length,
+      displayedPoints: finalX.length,
+      temporal,
+      bucketMs: bucketMsUsed,
+      downsampled: needsDownsample,
+    },
+  };
 };
 
 // ── Rich Color Palettes — Chart-Type Specific ──
@@ -218,13 +385,37 @@ const applyTraceColors = (traces, chartType) => {
 const CustomTooltip = ({ visible, x, y, data }) => {
   if (!visible || !data || !Array.isArray(data.items) || data.items.length === 0) return null;
 
-  const { xLabel, xValue, items, grandTotal } = data;
+  const { xLabel, xValue, items, grandTotal, yLabel, avg, rank, totalCategories, totalRecords, backendInsight, isOutlier, zScore, percentile } = data;
   const isSingle = items.length === 1;
+  const primaryItem = items[0];
+  const pct = grandTotal > 0 ? ((primaryItem.rawValue / grandTotal) * 100) : 0;
+  const vsAvg = avg > 0 ? (((primaryItem.rawValue - avg) / avg) * 100) : null;
+
+  // Use backend-computed insight if available, otherwise fall back to client heuristic
+  const generateInsight = () => {
+    if (backendInsight) return backendInsight;
+    if (!primaryItem) return null;
+    if (rank === 1) return 'Highest value across all categories';
+    if (rank === totalCategories) return 'Lowest value across all categories';
+    if (vsAvg !== null) {
+      if (vsAvg > 50) return 'Significantly above the average for this dataset';
+      if (vsAvg > 15) return 'Moderately above average — a strong performer';
+      if (vsAvg > 0) return 'Slightly above average';
+      if (vsAvg > -15) return 'Slightly below average';
+      if (vsAvg > -50) return 'Moderately below average';
+      return 'Significantly below the average for this dataset';
+    }
+    if (pct > 30) return 'Dominant share — contributes a major portion';
+    if (pct < 5) return 'Minor share — relatively small contribution';
+    return null;
+  };
+
+  const insight = generateInsight();
 
   // Position: default top-right of cursor, flip near edges
   const tooltipStyle = { left: x + 16, top: y - 16 };
-  if (x > window.innerWidth - 280) tooltipStyle.left = x - 260;
-  if (y > window.innerHeight - 240) tooltipStyle.top = y - 200;
+  if (x > window.innerWidth - 320) tooltipStyle.left = x - 300;
+  if (y > window.innerHeight - 320) tooltipStyle.top = y - 280;
 
   return createPortal(
     <AnimatePresence>
@@ -242,77 +433,160 @@ const CustomTooltip = ({ visible, x, y, data }) => {
       >
         <div
           style={{
-            width: isSingle ? 230 : 260,
-            borderRadius: 10,
+            width: isSingle ? 260 : 280,
+            borderRadius: 12,
             overflow: 'hidden',
-            background: 'rgba(26,25,28,0.96)',
-            backdropFilter: 'blur(20px)',
-            border: '1px solid rgba(202,210,253,0.08)',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.55), 0 0 0 1px rgba(202,210,253,0.03)',
+            background: 'rgba(26,25,28,0.97)',
+            backdropFilter: 'blur(24px)',
+            border: '1px solid rgba(202,210,253,0.10)',
+            boxShadow: '0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(202,210,253,0.04)',
             fontFamily: 'Inter, -apple-system, system-ui, sans-serif',
           }}
         >
-          {/* ── Header: x-axis label + value ── */}
-          <div style={{ padding: '9px 12px 7px', borderBottom: '1px solid rgba(202,210,253,0.06)' }}>
-            <div style={{ fontSize: 9, fontWeight: 600, color: '#6C6E79', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+          {/* ── Header: Category identification ── */}
+          <div style={{ padding: '10px 14px 8px', borderBottom: '1px solid rgba(202,210,253,0.07)' }}>
+            <div style={{ fontSize: 9, fontWeight: 600, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>
               {xLabel || 'Category'}
             </div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#CAD2FD', letterSpacing: '-0.01em' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#CAD2FD', letterSpacing: '-0.01em' }}>
               {xValue ?? '—'}
             </div>
           </div>
 
-          {/* ── Metric rows ── */}
-          <div style={{ padding: '8px 12px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {/* ── Primary metric rows ── */}
+          <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
             {items.map((item, index) => {
-              const pct = grandTotal > 0 ? ((item.rawValue / grandTotal) * 100) : 0;
+              const itemPct = grandTotal > 0 ? ((item.rawValue / grandTotal) * 100) : 0;
               return (
                 <div key={`${item.name}-${index}`}>
-                  {/* Name + Value row */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                    <span style={{
-                      width: 7, height: 7, borderRadius: '50%',
-                      backgroundColor: item.color, flexShrink: 0,
-                      boxShadow: `0 0 8px ${item.color}35`,
-                    }} />
-                    <span style={{
-                      fontSize: 11, color: '#9498A4', flex: 1, minWidth: 0,
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
-                      {item.name}
-                    </span>
-                    <span style={{
-                      fontSize: 13, fontWeight: 700, color: '#CAD2FD',
-                      fontVariantNumeric: 'tabular-nums', flexShrink: 0,
-                    }}>
-                      {item.value}
-                    </span>
+                  {/* Hero value row */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                      <span style={{
+                        width: 8, height: 8, borderRadius: '50%',
+                        backgroundColor: item.color, flexShrink: 0,
+                        boxShadow: `0 0 10px ${item.color}40`,
+                      }} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{
+                          fontSize: 10, color: '#9CA3AF', marginBottom: 2,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {yLabel || item.name || 'Value'}
+                        </div>
+                        <div style={{ fontSize: 20, fontWeight: 800, color: '#CAD2FD', fontVariantNumeric: 'tabular-nums', lineHeight: 1, letterSpacing: '-0.02em' }}>
+                          {item.value}
+                        </div>
+                      </div>
+                    </div>
+                    {/* Percentage badge */}
+                    <div style={{ textAlign: 'right', flexShrink: 0, paddingTop: 2 }}>
+                      <div style={{
+                        fontSize: 13, fontWeight: 700, color: item.color,
+                        fontVariantNumeric: 'tabular-nums', lineHeight: 1,
+                      }}>
+                        {itemPct.toFixed(1)}%
+                      </div>
+                      <div style={{ fontSize: 9, color: '#6B7280', marginTop: 2 }}>
+                        of total
+                      </div>
+                    </div>
                   </div>
-                  {/* Proportion bar + percentage */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 13 }}>
+
+                  {/* Proportion bar */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <div style={{
-                      flex: 1, height: 3, borderRadius: 2,
+                      flex: 1, height: 4, borderRadius: 3,
                       background: 'rgba(202,210,253,0.06)', overflow: 'hidden',
                     }}>
                       <div style={{
-                        height: '100%', borderRadius: 2,
-                        width: `${Math.min(pct, 100)}%`,
-                        background: item.color, opacity: 0.7,
-                        transition: 'width 0.15s ease',
+                        height: '100%', borderRadius: 3,
+                        width: `${Math.min(itemPct, 100)}%`,
+                        background: `linear-gradient(90deg, ${item.color}CC, ${item.color})`,
+                        transition: 'width 0.2s ease',
                       }} />
                     </div>
-                    <span style={{
-                      fontSize: 10, fontWeight: 600, color: '#6C6E79',
-                      fontVariantNumeric: 'tabular-nums', flexShrink: 0,
-                      minWidth: 34, textAlign: 'right',
-                    }}>
-                      {pct.toFixed(1)}%
-                    </span>
                   </div>
                 </div>
               );
             })}
           </div>
+
+          {/* ── Benchmarking row ── */}
+          {(vsAvg !== null || rank || isOutlier) && (
+            <div style={{
+              padding: '8px 14px',
+              borderTop: '1px solid rgba(202,210,253,0.06)',
+              display: 'flex', gap: 6, flexWrap: 'wrap',
+            }}>
+              {isOutlier && (
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '3px 8px', borderRadius: 6,
+                  background: 'rgba(245,158,11,0.12)',
+                  border: '1px solid rgba(245,158,11,0.25)',
+                }}>
+                  <span style={{ fontSize: 10 }}>⚠</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: '#f59e0b', letterSpacing: '0.04em' }}>
+                    OUTLIER
+                  </span>
+                </div>
+              )}
+              {vsAvg !== null && (
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '3px 8px', borderRadius: 6,
+                  background: vsAvg >= 0 ? 'rgba(16,185,129,0.10)' : 'rgba(239,68,68,0.10)',
+                  border: `1px solid ${vsAvg >= 0 ? 'rgba(16,185,129,0.20)' : 'rgba(239,68,68,0.20)'}`,
+                }}>
+                  <span style={{ fontSize: 10, color: vsAvg >= 0 ? '#34d399' : '#f87171' }}>
+                    {vsAvg >= 0 ? '▲' : '▼'}
+                  </span>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: vsAvg >= 0 ? '#34d399' : '#f87171', fontVariantNumeric: 'tabular-nums' }}>
+                    {Math.abs(vsAvg).toFixed(1)}% vs avg
+                  </span>
+                </div>
+              )}
+              {rank && totalCategories && (
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '3px 8px', borderRadius: 6,
+                  background: 'rgba(202,210,253,0.06)',
+                  border: '1px solid rgba(202,210,253,0.08)',
+                }}>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#9CA3AF', fontVariantNumeric: 'tabular-nums' }}>
+                    #{rank} of {totalCategories}
+                  </span>
+                </div>
+              )}
+              {totalRecords && (
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '3px 8px', borderRadius: 6,
+                  background: 'rgba(202,210,253,0.06)',
+                  border: '1px solid rgba(202,210,253,0.08)',
+                }}>
+                  <span style={{ fontSize: 10, fontWeight: 500, color: '#6B7280' }}>
+                    {totalRecords.toLocaleString()} records
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Intelligence insight ── */}
+          {insight && (
+            <div style={{
+              padding: '8px 14px 10px',
+              borderTop: '1px dashed rgba(202,210,253,0.08)',
+              display: 'flex', alignItems: 'flex-start', gap: 6,
+            }}>
+              <span style={{ fontSize: 11, flexShrink: 0, marginTop: 1 }}>{backendInsight ? '🔬' : '💡'}</span>
+              <span style={{ fontSize: 10, fontStyle: 'italic', color: backendInsight ? '#CAD2FD' : '#B0B8C4', lineHeight: 1.4 }}>
+                {insight}
+              </span>
+            </div>
+          )}
         </div>
       </MotionDiv>
     </AnimatePresence>,
@@ -320,7 +594,7 @@ const CustomTooltip = ({ visible, x, y, data }) => {
   );
 };
 
-const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartType = 'bar', onPointClick }) => {
+const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartType = 'bar', onPointClick, pointIntelligence }) => {
   const plotRef = useRef(null);
   const dataHashRef = useRef(null);
   const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, data: null });
@@ -367,17 +641,20 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                 (trace.mode === 'lines' || trace.mode === 'lines+markers' || trace.mode === 'lines+text');
               
               if (isScatterLine && Array.isArray(trace.x) && Array.isArray(trace.y)) {
-                const pts = trace.x.length;
-                const isDense = pts > DENSITY.DOWNSAMPLE_AT;
-                
-                // Downsample dense pre-built traces
-                if (isDense) {
-                  const sampled = downsampleLTTB(trace.x, trace.y, DENSITY.TARGET_POINTS);
-                  enhanced.x = sampled.x;
-                  enhanced.y = sampled.y;
-                  enhanced.meta = { totalPoints: pts, displayedPoints: sampled.x.length };
-                }
-                
+                const normalized = normalizeLineSeries(trace.x, trace.y, DENSITY.TARGET_POINTS);
+                enhanced.x = normalized.x;
+                enhanced.y = normalized.y;
+                enhanced.meta = {
+                  ...(trace.meta || {}),
+                  totalPoints: normalized.meta.originalPoints,
+                  displayedPoints: normalized.meta.displayedPoints,
+                  preDownsamplePoints: normalized.meta.preDownsamplePoints,
+                  temporal: normalized.meta.temporal,
+                  bucketMs: normalized.meta.bucketMs,
+                  downsampled: normalized.meta.downsampled,
+                };
+
+                const isDense = normalized.meta.displayedPoints > DENSITY.DOWNSAMPLE_AT;
                 const displayPts = enhanced.x.length;
                 
                 // Smart markers: only show when data is sparse enough
@@ -504,16 +781,11 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
               // ── Smart Line Chart Rendering ──
               let rawX = data.map(row => row[xKey]);
               let rawY = data.map(row => row[yKey]);
-              const totalPoints = rawX.length;
-              const isDense = totalPoints > DENSITY.DOWNSAMPLE_AT;
-
-              // Downsample if too many points
-              let plotX = rawX, plotY = rawY;
-              if (isDense) {
-                const sampled = downsampleLTTB(rawX, rawY, DENSITY.TARGET_POINTS);
-                plotX = sampled.x;
-                plotY = sampled.y;
-              }
+              const normalized = normalizeLineSeries(rawX, rawY, DENSITY.TARGET_POINTS);
+              let plotX = normalized.x;
+              let plotY = normalized.y;
+              const totalPoints = normalized.meta.originalPoints;
+              const isDense = normalized.meta.displayedPoints > DENSITY.DOWNSAMPLE_AT;
 
               // Gradient colors per point (value-based: cyan→violet)
               const gradientColors = generateGradientColors(plotY, 185, 270);
@@ -539,7 +811,14 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                 name: yLabel,
                 hoverinfo: 'none',
                 // Show number of displayed points vs total
-                meta: { totalPoints, displayedPoints: plotX.length },
+                meta: {
+                  totalPoints,
+                  displayedPoints: plotX.length,
+                  preDownsamplePoints: normalized.meta.preDownsamplePoints,
+                  temporal: normalized.meta.temporal,
+                  bucketMs: normalized.meta.bucketMs,
+                  downsampled: normalized.meta.downsampled,
+                },
               }];
 
               // Area fill trace (gradient underneath the line)
@@ -684,7 +963,12 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
           const isLineType = chartType === 'line' || chartType === 'line_chart';
           const traceLen = processedData?.[0]?.x?.length || (Array.isArray(data) ? data.length : 0);
           const rawDataLen = Array.isArray(data) ? data.length : traceLen;
-          const isDenseData = rawDataLen > DENSITY.DOWNSAMPLE_AT;
+          const primaryLineTrace = isLineType
+            ? processedData.find(trace => trace.type === 'scatter' && trace.fill !== 'tozeroy')
+            : null;
+          const metaTotal = primaryLineTrace?.meta?.totalPoints || rawDataLen;
+          const metaPreDownsample = primaryLineTrace?.meta?.preDownsamplePoints || traceLen;
+          const isDenseData = metaTotal > DENSITY.DOWNSAMPLE_AT || metaPreDownsample > DENSITY.DOWNSAMPLE_AT;
           const wasDownsampled = isLineType && isDenseData;
 
           // ── Build min/max annotations for line charts ──
@@ -805,6 +1089,16 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             const allYValues = firstTrace?.y || firstTrace?.values || [];
             const grandTotal = allYValues.reduce((s, v) => s + (Number(v) || 0), 0);
 
+            // Compute average across all data points in the trace
+            const numericYValues = allYValues.map(v => Number(v) || 0).filter(v => v > 0);
+            const avg = numericYValues.length > 0 ? numericYValues.reduce((s, v) => s + v, 0) / numericYValues.length : 0;
+
+            // Compute total categories/data points
+            const totalCategories = numericYValues.length;
+
+            // Total records from dataset metadata if available
+            const totalRecords = firstTrace?.meta?.totalRecords || null;
+
             let total = 0;
             const items = points.map(pt => {
               const rawValue = Number(pt.y ?? pt.value ?? 0) || 0;
@@ -819,26 +1113,48 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
               };
             });
 
+            // Compute rank of the current value (1 = highest)
+            const currentValue = items[0]?.rawValue || 0;
+            const sortedValues = [...numericYValues].sort((a, b) => b - a);
+            const rank = sortedValues.indexOf(currentValue) + 1;
+
             // For Pie charts
             if (chartType === 'pie' || chartType === 'donut') {
                const pt = points[0];
-               const pieTotal = Array.isArray(pt?.data?.values)
-                 ? pt.data.values.reduce((sum, value) => sum + (Number(value) || 0), 0)
-                 : total;
+               const pieValues = Array.isArray(pt?.data?.values) ? pt.data.values : [];
+               const pieTotal = pieValues.reduce((sum, value) => sum + (Number(value) || 0), 0);
+               const pieNumericValues = pieValues.map(v => Number(v) || 0).filter(v => v > 0);
+               const pieAvg = pieNumericValues.length > 0 ? pieNumericValues.reduce((s, v) => s + v, 0) / pieNumericValues.length : 0;
+               const pieSorted = [...pieNumericValues].sort((a, b) => b - a);
+               const pieVal = Number(pt.value) || 0;
+               const pieRank = pieSorted.indexOf(pieVal) + 1;
+
+               // Look up pre-computed intelligence from backend
+               const ptIntel = pointIntelligence?.points?.[String(pt.label)] || null;
+
                setTooltip({
                  visible: true,
                  x: eventData.event.clientX,
                  y: eventData.event.clientY,
                  data: {
-                   xLabel: 'Slice',
+                   xLabel: pointIntelligence?.x_label || xAxisLabel || 'Slice',
                    xValue: pt.label,
+                   yLabel: pointIntelligence?.y_label || yAxisLabel || 'Value',
                    items: [{
                      name: pt.label,
-                     value: formatValue(Number(pt.value) || 0),
-                     rawValue: Number(pt.value) || 0,
+                     value: formatValue(pieVal),
+                     rawValue: pieVal,
                      color: resolvePointColor(pt)
                    }],
-                   grandTotal: pieTotal
+                   grandTotal: pieTotal,
+                   avg: ptIntel ? pointIntelligence.stats.mean : pieAvg,
+                   rank: ptIntel?.rank || pieRank,
+                   totalCategories: ptIntel ? Object.keys(pointIntelligence.points).length : pieNumericValues.length,
+                   totalRecords: ptIntel?.record_count || pointIntelligence?.total_records || null,
+                   backendInsight: ptIntel?.insight || null,
+                   isOutlier: ptIntel?.is_outlier || false,
+                   zScore: ptIntel?.z_score || null,
+                   percentile: ptIntel?.percentile || null,
                  }
                });
             } else {
@@ -852,15 +1168,27 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                   }))
                 : items.filter(item => item.rawValue > 0);
 
+              // Look up pre-computed intelligence from backend
+              const ptIntel = pointIntelligence?.points?.[String(xVal)] || null;
+
               setTooltip({
                 visible: true,
                 x: eventData.event.clientX,
                 y: eventData.event.clientY,
                 data: {
-                  xLabel: xAxisLabel,
+                  xLabel: pointIntelligence?.x_label || xAxisLabel,
                   xValue: xVal,
+                  yLabel: pointIntelligence?.y_label || yAxisLabel || '',
                   items: enrichedItems.length > 0 ? enrichedItems : items,
-                  grandTotal
+                  grandTotal,
+                  avg: ptIntel ? pointIntelligence.stats.mean : avg,
+                  rank: ptIntel?.rank || (rank > 0 ? rank : null),
+                  totalCategories: ptIntel ? Object.keys(pointIntelligence.points).length : totalCategories,
+                  totalRecords: ptIntel?.record_count || pointIntelligence?.total_records || null,
+                  backendInsight: ptIntel?.insight || null,
+                  isOutlier: ptIntel?.is_outlier || false,
+                  zScore: ptIntel?.z_score || null,
+                  percentile: ptIntel?.percentile || null,
                 }
               });
             }
@@ -923,7 +1251,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
         cleanupPlotElement.innerHTML = '';
       }
     };
-  }, [data, layout, config, chartType]);
+  }, [data, layout, config, chartType, pointIntelligence]);
 
   return (
     <>

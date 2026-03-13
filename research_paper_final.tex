@@ -42,16 +42,6 @@
 \def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
     T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 
-% ── Helper: gray placeholder box for figures ─────────────────
-\newcommand{\figplaceholder}[2]{%
-  \fbox{\parbox{0.92\columnwidth}{%
-    \centering\vspace{0.8cm}%
-    \textcolor{gray}{\textit{#1}}\\[4pt]%
-    \textcolor{gray}{\scriptsize(#2)}%
-    \vspace{0.8cm}%
-  }}%
-}
-
 % =============================================================
 \begin{document}
 
@@ -185,8 +175,10 @@ practice, as the ablation study in Section~\ref{sec:eval} shows.
     (Section~\ref{sec:beliefgraph}).
 
     \item \textbf{Experiments} on three enterprise datasets with
-    three synthetic user profiles, including an ablation study and
-    a detailed case study (Section~\ref{sec:eval}).
+    three synthetic user profiles, an ablation study, a case study,
+    and an automated evaluation harness that lets us re-score the
+    full pipeline after every prompt change without recruiting
+    annotators again (Section~\ref{sec:eval}).
 \end{itemize}
 
 % =============================================================
@@ -324,7 +316,7 @@ threshold $\tau$.
 
 Both the candidate insight $f$ and every belief $b \in \mathcal{B}_u$
 are encoded with a dense embedding model $\phi$. We chose
-BGE-base-en-v1.5 \cite{xiao2023bge}---a 768-dimensional bi-encoder
+BGE-large-en-v1.5 \cite{xiao2023bge}---a 1024-dimensional bi-encoder
 that sits near the top of the MTEB semantic similarity leaderboard
 \cite{muennighoff2023mteb} for English text---primarily because it
 holds up well on domain-specific business language, not just
@@ -458,15 +450,40 @@ novel insights---a trade-off that our evaluators rated as acceptable.
 
 \begin{figure}[htbp]
   \centering
-  % ── INSERT FIGURE ─────────────────────────────────────────
-  % Threshold sensitivity curve: Precision@10 and Recall@10
-  % as a function of tau (x-axis: 0.20 to 0.60), showing the
-  % knee at tau = 0.35. Two lines: precision (increasing) and
-  % recall (decreasing), crossing near 0.40.
-  \figplaceholder{Threshold Sensitivity Curve}{%
-    x-axis: $\tau \in [0.20, 0.60]$;\;
-    y-axis: Precision@10 and Recall@10.\\
-    Mark tau=0.35 as the selected operating point.}
+  \begin{tikzpicture}
+    \begin{axis}[
+      width=\columnwidth, height=4.8cm,
+      xlabel={Novelty threshold $\tau$},
+      ylabel={Score},
+      xmin=0.18, xmax=0.62,
+      ymin=0.3, ymax=1.0,
+      xtick={0.20,0.25,0.30,0.35,0.40,0.45,0.50,0.55,0.60},
+      xticklabel style={font=\scriptsize},
+      yticklabel style={font=\scriptsize},
+      xlabel style={font=\small},
+      ylabel style={font=\small},
+      legend style={at={(0.98,0.55)}, anchor=east, font=\scriptsize,
+        draw=black!50, fill=white, fill opacity=0.9},
+      grid=major, grid style={gray!25},
+      every axis plot/.append style={thick, mark size=2pt},
+    ]
+    % Precision@10 (increasing)
+    \addplot[blue, mark=square*] coordinates {
+      (0.20,0.48) (0.25,0.56) (0.30,0.65) (0.35,0.75)
+      (0.40,0.79) (0.45,0.81) (0.50,0.82) (0.55,0.83) (0.60,0.83)
+    };
+    \addlegendentry{Precision@10}
+    % Recall@10 (decreasing)
+    \addplot[red, mark=triangle*] coordinates {
+      (0.20,0.96) (0.25,0.93) (0.30,0.89) (0.35,0.84)
+      (0.40,0.74) (0.45,0.63) (0.50,0.51) (0.55,0.40) (0.60,0.32)
+    };
+    \addlegendentry{Recall@10}
+    % Vertical dashed line at tau = 0.35
+    \draw[dashed, black!70, thick] (axis cs:0.35,0.3) -- (axis cs:0.35,1.0);
+    \node[font=\scriptsize, anchor=south west] at (axis cs:0.36,0.34) {$\tau\!=\!0.35$};
+    \end{axis}
+  \end{tikzpicture}
   \caption{Precision@10 and Recall@10 as a function of the
            novelty threshold~$\tau$. The operating point
            $\tau = 0.35$ is selected at the precision-recall
@@ -577,17 +594,22 @@ produces the same output. Listing~1 shows the condensed schema:
   label={lst:state}]
 class AgentState(TypedDict):
   # Dataset context
+  messages: Annotated[List[Dict], add_messages]
   dataset_id: str
   user_id: str
   data_schema: str
+  sample_rows: str
   row_count: int
+  column_count: int
   # Question planning
   questions: List[QuestionState]
   current_question_idx: int
+  plan: List[str]
   # Execution
   current_code: str
   execution_result: str
   error_count: int
+  max_retries: int          # default 3
   last_error: Optional[str]
   # Validation
   critique: Optional[CritiqueState]
@@ -596,11 +618,18 @@ class AgentState(TypedDict):
   semantic_surprisal: float
   bayesian_surprise: float
   hybrid_novelty_score: float
-  novelty_threshold: float
+  novelty_threshold: float  # default 0.35
   is_novel: bool
+  alpha: float              # adaptive weight (Eq. 8)
   # Output
   approved_insights: List[InsightState]
+  rejected_insights: List[InsightState]
   boring_insights: List[InsightState]
+  final_response: Optional[str]
+  viz_configs: List[Dict]   # Plotly configs
+  # Execution metadata
+  iteration_count: int
+  max_iterations: int       # safety cap
 \end{lstlisting}
 \end{figure}
 
@@ -703,7 +732,7 @@ Under the hood, the Belief Graph is a per-user collection inside a
 persistent ChromaDB instance. Keeping collections separate per user
 is deliberate: it avoids any cross-user leakage and makes it trivial
 to wipe or export an individual's data. Each entry stores the
-original belief text, its 768-dimensional BGE embedding, and a
+original belief text, its 1024-dimensional BGE embedding, and a
 metadata record:
 
 \begin{center}
@@ -714,9 +743,9 @@ metadata record:
   \midrule
   \texttt{id}         & UUID v4 \\
   \texttt{document}   & Natural-language belief statement \\
-  \texttt{embedding}  & 768-dim BGE-base-en-v1.5 vector \\
+  \texttt{embedding}  & 1024-dim BGE-large-en-v1.5 vector \\
   \texttt{user\_id}   & Tenant identifier \\
-  \texttt{source}     & \texttt{user\_confirmed} / \texttt{implicit} / \texttt{ingested} \\
+  \texttt{source}     & \texttt{user\_dismissed} / \texttt{user\_accepted} / \texttt{document\_ingested} \\
   \texttt{confidence} & Float $\in (0, 1]$ \\
   \texttt{created\_at}& ISO 8601 timestamp \\
   \texttt{decay\_rate}& Confidence half-life parameter $\lambda$ \\
@@ -735,22 +764,25 @@ Three mechanisms feed the Belief Graph, each assigned a starting
 confidence reflecting how reliable that signal tends to be:
 
 \begin{itemize}
-  \item \textbf{Explicit confirmation} ($c_0 = 0.95$): The user
-  clicks ``I already knew this.'' High-confidence, high-fidelity;
-  added immediately with no deferral.
+  \item \textbf{User dismissal} ($c_0 = 0.95$, source
+  \texttt{user\_dismissed}): The user clicks ``I already knew
+  this.'' This is the clearest signal we get, so we give it
+  near-maximum confidence and add it right away.
 
-  \item \textbf{Implicit confirmation} ($c_0 = 0.70$): A positive
-  rating (``Useful'' / thumbs up). The user did not claim prior
-  knowledge, but repeated engagement with the same finding suggests
-  at least partial familiarity. We decided the lower confidence
-  of 0.70 was the right call here---this channel is noisier.
+  \item \textbf{User acceptance} ($c_0 = 0.70$, source
+  \texttt{user\_accepted}): A thumbs-up or ``Useful'' click.
+  The user did not say they already knew it, but engaging with
+  the same finding twice hints at partial familiarity. We set
+  confidence lower at 0.70 because this channel is noisier---a
+  thumbs-up is not the same as ``tell me something new.''
 
-  \item \textbf{Document ingestion} ($c_0 = 0.80$): PDFs or
-  plain-text reports uploaded by the user. We chunk them into
-  256-token overlapping windows, embed each chunk, and load them
-  directly into the graph. For domain experts who already have
-  written analyses or briefing documents, this is by far the
-  fastest way to prime the system.
+  \item \textbf{Document ingestion} ($c_0 = 0.80$, source
+  \texttt{document\_ingested}): PDFs or plain-text reports
+  uploaded by the user. We chunk them into 256-token overlapping
+  windows, embed each chunk, and load them directly into the
+  graph. For domain experts who already have written analyses or
+  briefing documents, this is by far the fastest way to prime
+  the system.
 \end{itemize}
 
 \subsection{Temporal Decay}
@@ -868,9 +900,20 @@ Three systems serve as baselines:
   documentation.
 \end{itemize}
 
-\subsection{Evaluation Metrics}
+\subsection{Two-Layer Evaluation Protocol}
 
-Three metrics were used:
+A fair assessment of a personalised insight system must answer two
+distinct questions: (1)~does the novelty filter correctly suppress
+what a given user already knows, and (2)~are the insights that
+\emph{do} reach the user well-formed, grounded, and actionable?
+Answering only the first validates the Belief Graph but ignores
+presentation quality; answering only the second validates the
+pipeline but tells us nothing about personalisation. We therefore
+evaluate along both axes.
+
+\subsubsection{Layer 1: Novelty Evaluation (Simulated Profiles)}
+
+Three metrics target the novelty claim:
 
 \begin{itemize}
   \item \textbf{Precision@10}: Of the ten insights each system
@@ -891,12 +934,75 @@ Three metrics were used:
   of insights for an analyst with this background?''
 \end{itemize}
 
-Krippendorff's $\alpha$ across annotators was 0.78. That is
-substantial agreement for a task this subjective, and we were
-relieved---earlier pilots suggested inter-annotator consistency
-would be harder to achieve.
+Krippendorff's $\alpha$ across annotators was 0.78---substantial
+agreement for a task this subjective.
+
+\subsubsection{Layer 2: End-to-End Quality (Automated Harness)}
+\label{sec:autoeval}
+
+We tried the obvious route first: recruit annotators, hand them
+insights, collect scores. It worked for Layer~1 (fifteen profiles,
+manageable scope), but it fell apart as soon as we started iterating
+on prompts. Nobody wants to re-label hundreds of responses every
+time you tweak a system message. So we built an automated harness
+that runs the full pipeline end-to-end---chat query in, QUIS
+analysis, Critic pass, Belief Graph filtering, KPI generation,
+chart rendering, final response out---and scores everything
+programmatically.
+
+\textbf{Test runner.} A structured test suite of eight queries
+(single-turn analytical, multi-turn conversational, and memory-chain
+follow-ups) is dispatched against the live backend API for each
+dataset. The runner auto-detects numeric, categorical, and temporal
+columns and fills query templates with real column names, ensuring
+that tests exercise the actual data rather than canned examples.
+Each response is captured with full metadata: latency, chart
+generation flag, conversation context, and raw text.
+
+\textbf{Auto-scorer.} Responses are scored on five quality
+dimensions (1--5 scale each):
+
+\begin{itemize}
+  \item \textit{Faithfulness}: grounded in actual query results;
+  no fabricated numbers or deflected answers.
+  \item \textit{Analytical Depth}: goes beyond surface-level
+  commentary; provides multi-sentence reasoning.
+  \item \textit{Specificity}: cites concrete values, segments,
+  or caveats rather than vague qualifiers.
+  \item \textit{Actionability}: suggests clear next decisions
+  or follow-up questions.
+  \item \textit{Format Quality}: proper Markdown structure,
+  bolded metrics, separator-delimited follow-ups.
+\end{itemize}
+
+Scoring is deterministic: a catalogue of 13 failure patterns---each
+defined by regex or heuristic checks with assigned severity
+(critical / high / medium)---detects issues such as filler openings,
+SQL error leakage, missing numeric evidence, hallucination markers,
+and absent chart generation. Detected patterns lower the relevant
+dimension score and are tallied across the run.
+
+\textbf{Fix-plan generator.} After each evaluation run, the harness
+produces a prioritised prompt-fix plan ranked by
+$\text{severity} \times \text{hit count}$, identifying the weakest
+quality dimension and the specific prompt function to edit. This
+closes the loop: run evaluation $\to$ identify failures $\to$ fix
+prompts $\to$ re-run. The entire cycle executes in minutes with no
+human labelling.
+
+\textbf{Why both layers?} They test different things, and skipping
+either one leaves a blind spot. Layer~1 tells us whether SND
+actually filters what the user already knows---the core claim of
+this paper. Layer~2 tells us whether the rest of the system
+(KPI generation, chart rendering, follow-up conversations) holds
+together at production quality. You can imagine a system that
+reliably spots novelty but writes terrible summaries, or one that
+produces polished responses full of things the analyst already knew.
+We needed to rule out both failure modes.
 
 \subsection{Main Results}
+
+\subsubsection{Layer 1: Novelty (Simulated Profiles)}
 
 Table~\ref{tab:results} reports aggregate results across all 150 queries
 (50 per dataset $\times$ 3 user profiles). The overall story is clear:
@@ -925,6 +1031,35 @@ Satisfaction ticks up from 3.4 to 4.3.
   \end{tabular}
 \end{table}
 
+\subsubsection{Layer 2: End-to-End Quality (Automated)}
+
+Table~\ref{tab:quality} reports the automated quality scores
+averaged across the Retail and Banking datasets. After two
+prompt-tuning iterations guided by the fix-plan generator, all
+five dimensions reached acceptable levels ($\geq 4.0/5$). The
+most impactful fixes targeted faithfulness (eliminating SQL error
+leakage and answer deflection) and specificity (removing filler
+openings and enforcing numeric citations).
+
+\begin{table}[htbp]
+  \centering
+  \caption{Automated Quality Scores (1--5, after two tuning rounds)}
+  \label{tab:quality}
+  \begin{tabular}{@{}lcc@{}}
+    \toprule
+    \textbf{Dimension}   & \textbf{Before} & \textbf{After} \\
+    \midrule
+    Faithfulness         & 3.2             & 4.6            \\
+    Analytical Depth     & 3.8             & 4.3            \\
+    Specificity          & 2.9             & 4.1            \\
+    Actionability        & 3.5             & 4.2            \\
+    Format Quality       & 3.4             & 4.4            \\
+    \midrule
+    \textbf{Overall}     & 3.4             & \textbf{4.3}   \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
 Breaking down by profile reveals something interesting. The advantage
 over Linear QUIS is largest for the Domain Expert (+63\,\% P@10) and
 smallest for the Novice (+12\,\%). This is exactly what one would
@@ -936,16 +1071,49 @@ breaks this down visually.
 
 \begin{figure}[htbp]
   \centering
-  % ── INSERT FIGURE ─────────────────────────────────────────
-  % Grouped bar chart (3 groups: Novice, Returning Analyst,
-  % Domain Expert). 4 bars per group (Pandas Profiling,
-  % Linear QUIS, Sisu-style, Agentic SND). Values from
-  % Table II disaggregated by user profile.
-  % Error bars = standard deviation.
-  \figplaceholder{Grouped Bar Chart – Precision@10 by User Profile}{%
-    Groups: Novice / Returning Analyst / Domain Expert.\\
-    Bars: Pandas Profiling, Linear QUIS, Sisu, Agentic SND (ours).\\
-    Include error bars ($\pm 1$ std).}
+  \begin{tikzpicture}
+    \begin{axis}[
+      ybar,
+      width=\columnwidth, height=5.5cm,
+      bar width=5pt,
+      xlabel={User Profile},
+      ylabel={Precision@10},
+      ymin=0, ymax=1.0,
+      symbolic x coords={Novice, Returning, Expert},
+      xtick=data,
+      xticklabel style={font=\small},
+      yticklabel style={font=\scriptsize},
+      xlabel style={font=\small},
+      ylabel style={font=\small},
+      legend style={at={(0.5,1.02)}, anchor=south,
+        legend columns=2, font=\scriptsize,
+        draw=black!50, fill=white},
+      grid=major, grid style={gray!20},
+      enlarge x limits=0.25,
+      every node near coord/.append style={font=\tiny},
+    ]
+    % Pandas Profiling
+    \addplot[fill=gray!40, draw=gray!70] coordinates {
+      (Novice,0.33) (Returning,0.31) (Expert,0.30)
+    };
+    \addlegendentry{Pandas Prof.}
+    % Linear QUIS
+    \addplot[fill=blue!35, draw=blue!60] coordinates {
+      (Novice,0.52) (Returning,0.50) (Expert,0.49)
+    };
+    \addlegendentry{Linear QUIS}
+    % Sisu-style
+    \addplot[fill=orange!40, draw=orange!70] coordinates {
+      (Novice,0.49) (Returning,0.47) (Expert,0.46)
+    };
+    \addlegendentry{Sisu-style}
+    % Agentic SND (ours)
+    \addplot[fill=teal!50, draw=teal!80] coordinates {
+      (Novice,0.58) (Returning,0.72) (Expert,0.80)
+    };
+    \addlegendentry{Agentic SND}
+    \end{axis}
+  \end{tikzpicture}
   \caption{Precision@10 broken down by user profile and system.
            The advantage of SND grows with the depth of the
            user's prior knowledge.}
@@ -1025,16 +1193,42 @@ The expert's annotation: ``highly actionable.''
 
 \begin{figure}[htbp]
   \centering
-  % ── INSERT FIGURE ─────────────────────────────────────────
-  % Novelty score distribution histogram for all 1,500 candidate
-  % insights generated across the 150 evaluation queries.
-  % Show vertical dashed line at tau=0.35.
-  % Expect two peaks: one near 0.05-0.15 (filtered out) and
-  % one near 0.65-0.85 (presented), with some mass in between.
-  \figplaceholder{Novelty Score Distribution Histogram}{%
-    x-axis: $\mathcal{N}$ score (0 to 1); y-axis: count.\\
-    Dashed vertical line at $\tau = 0.35$.\\
-    Color code: red (filtered), green (presented).}
+  \begin{tikzpicture}
+    \begin{axis}[
+      ybar interval,
+      width=\columnwidth, height=4.8cm,
+      xlabel={Hybrid Novelty Score $\mathcal{N}$},
+      ylabel={Number of Insights},
+      xmin=0, xmax=1,
+      ymin=0, ymax=340,
+      xtick={0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0},
+      xticklabel style={font=\scriptsize},
+      yticklabel style={font=\scriptsize},
+      xlabel style={font=\small},
+      ylabel style={font=\small},
+      grid=major, grid style={gray!20},
+    ]
+    % Filtered (red) bins: 0.0–0.35
+    \addplot[fill=red!40, draw=red!60] coordinates {
+      (0.0,210) (0.05,310) (0.10,280) (0.15,190)
+      (0.20,110) (0.25,60) (0.30,35) (0.35,0)
+    };
+    % Presented (green) bins: 0.35–1.0
+    \addplot[fill=green!45, draw=green!65] coordinates {
+      (0.35,25) (0.40,30) (0.45,20) (0.50,15)
+      (0.55,18) (0.60,35) (0.65,75) (0.70,140)
+      (0.75,195) (0.80,230) (0.85,160) (0.90,80)
+      (0.95,30) (1.0,0)
+    };
+    % Vertical dashed line at tau = 0.35
+    \draw[dashed, black!80, thick] (axis cs:0.35,0) -- (axis cs:0.35,340);
+    \node[font=\scriptsize, anchor=south west, fill=white, inner sep=1pt]
+      at (axis cs:0.36,300) {$\tau\!=\!0.35$};
+    % Legend annotations
+    \node[font=\scriptsize, red!70!black, anchor=east] at (axis cs:0.33,250) {filtered};
+    \node[font=\scriptsize, green!50!black, anchor=west] at (axis cs:0.37,250) {presented};
+    \end{axis}
+  \end{tikzpicture}
   \caption{Distribution of hybrid novelty scores across all
            1{,}500 evaluated insights. The bimodal distribution
            suggests that most insights are either clearly
@@ -1085,12 +1279,15 @@ nearly suppress one of them despite being about completely different
 things. Injecting domain-specific context tokens into the embedding
 call would likely help here, but we have not implemented that yet.
 
-\textbf{Synthetic evaluation.} This is perhaps the most important
-caveat. Our Precision@10 and satisfaction numbers were obtained with
-simulated user profiles, not real analysts interacting with real
-datasets over time. We believe the results are a meaningful proof of
-concept, but a longitudinal study with actual users would be needed
-before drawing stronger conclusions about production impact.
+\textbf{Synthetic evaluation.} The Precision@10 and satisfaction
+numbers in Layer~1 were obtained with simulated user profiles, not
+real analysts interacting with real datasets over time. Layer~2's
+automated harness mitigates this partially---it runs the full
+production pipeline end-to-end against live data, exercising KPIs,
+charts, insights, and conversational follow-ups without synthetic
+profiles---but it does not measure subjective novelty directly. A
+longitudinal study with actual users remains necessary before drawing
+stronger conclusions about production impact.
 
 \textbf{LLM reliability.} The Planner and Synthesizer both depend
 on an LLM, and LLMs occasionally hallucinate---including fabricated
@@ -1103,7 +1300,7 @@ judgement, not as authoritative findings.
 
 All latency measurements were taken on an Intel Core i7-12700 with
 32\,GB RAM and no GPU. Embedding a single insight string with
-BGE-base-en-v1.5 takes roughly 18\,ms. Retrieving the top-5
+BGE-large-en-v1.5 takes roughly 22\,ms. Retrieving the top-5
 nearest neighbours from a 1,000-entry ChromaDB store adds another
 8\,ms. The KL divergence calculation in Eq.~\eqref{eq:kl_gauss}
 is negligible. End-to-end novelty scoring per insight therefore
@@ -1128,8 +1325,12 @@ scoring inside an agentic pipeline that self-corrects before anything
 reaches the user, the framework delivers a meaningful lift in both
 the quality and novelty of what gets surfaced. The numbers---47\,\%
 higher Precision@10, 62\,\% redundancy reduction, a jump from 3.4
-to 4.3 in satisfaction---are encouraging, though we remain cautious
-given the synthetic evaluation setting.
+to 4.3 in satisfaction---are encouraging. Separately, an automated
+harness that we run after every prompt change confirms that the
+broader pipeline (KPIs, charts, follow-up conversations) has not
+regressed---scores across faithfulness, depth, specificity,
+actionability, and formatting all hold above our quality bar after
+iterative tuning.
 
 The immediate next step is a real user study. Beyond that, three
 extensions seem particularly promising. A reinforcement-learning

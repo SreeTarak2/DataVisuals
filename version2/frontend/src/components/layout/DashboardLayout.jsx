@@ -14,6 +14,7 @@ const DashboardLayout = () => {
   const location = useLocation();
   const [chatOpen, setChatOpen] = useState(false);
   const [chartContext, setChartContext] = useState(null);
+  const [initialQuery, setInitialQuery] = useState(null);
 
   useEffect(() => {
     const handler = (e) => {
@@ -24,12 +25,25 @@ const DashboardLayout = () => {
     return () => window.removeEventListener('open-chat-with-context', handler);
   }, []);
 
+  // Listen for investigate / query events from KPI cards & Insights
+  useEffect(() => {
+    const handler = (e) => {
+      setInitialQuery(e.detail?.query || null);
+      setChartContext(null); // clear any chart context
+      setChatOpen(true);
+    };
+    window.addEventListener('open-chat-with-query', handler);
+    return () => window.removeEventListener('open-chat-with-query', handler);
+  }, []);
+
   const handleCloseChat = useCallback(() => {
     setChatOpen(false);
     setChartContext(null);
+    setInitialQuery(null);
   }, []);
 
   const handleClearChartContext = useCallback(() => setChartContext(null), []);
+  const handleClearInitialQuery = useCallback(() => setInitialQuery(null), []);
 
   const showFab = SHOW_FAB_ROUTES.some((r) => location.pathname.startsWith(r));
   const showButton = showFab && !chatOpen;
@@ -54,6 +68,8 @@ const DashboardLayout = () => {
             onClose={handleCloseChat}
             chartContext={chartContext}
             onClearChartContext={handleClearChartContext}
+            initialQuery={initialQuery}
+            onClearInitialQuery={handleClearInitialQuery}
           />
         </div>
       </div>

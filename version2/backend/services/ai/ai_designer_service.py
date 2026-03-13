@@ -309,11 +309,17 @@ class AIDesignerService:
                 )
                 
                 if result.get("success"):
-                    blueprint = result["blueprint"]
+                    raw_blueprint = result["blueprint"]
+                    
+                    # 4. Rigorous validation of the multi-agent blueprint
+                    blueprint = self._validate_and_enhance_design(
+                        raw_blueprint, metadata, pattern
+                    )
+                    
                     ai_metadata = result.get("metadata", {})
                     component_count = len((blueprint or {}).get("components", []))
                     if component_count == 0:
-                        raise RuntimeError("Multi-agent pipeline returned empty blueprint")
+                        raise RuntimeError("Multi-agent pipeline returned empty blueprint after validation")
                     ai_reasoning = f"Multi-agent pipeline: {ai_metadata.get('chart_count', 0)} charts, {ai_metadata.get('kpi_count', 0)} KPIs in {ai_metadata.get('pipeline_duration_seconds', 0):.1f}s"
                     logger.info(f"✅ Multi-agent pipeline completed in {ai_metadata.get('pipeline_duration_seconds', 0):.2f}s")
                     logger.info(
@@ -428,6 +434,11 @@ class AIDesignerService:
     # Blueprint validation / repair
     # ---------------------------------------------------------
     def _validate_and_enhance_design(self, blueprint: Dict, metadata: Dict, pattern: Dict) -> Dict:
+        """
+        Validates the structure of the blueprint and then passes it through
+        a rigorous data-aware validation layer to remove hallucinated columns
+        and enforce cardinality limits.
+        """
         # Handle nested structure (some LLMs return {dashboard: {components: [...]}})
         if blueprint and "dashboard" in blueprint and isinstance(blueprint["dashboard"], dict):
             logger.info("Detected nested 'dashboard' key, extracting inner blueprint")
@@ -435,28 +446,40 @@ class AIDesignerService:
         
         if not blueprint or "components" not in blueprint:
             logger.warning(f"Invalid AI blueprint. Blueprint keys: {list(blueprint.keys()) if blueprint else 'None'}. Using fallback pattern.")
-            return pattern["blueprint"]
+            blueprint = json.loads(json.dumps(pattern["blueprint"]))
 
         components = blueprint.get("components", [])
-        types = [c.get("type") for c in components]
+        
+        # Rigorous Data-Aware Validation Pass
+        valid_components = []
+        for comp in components:
+            validated_comp = self._validate_blueprint_component_with_data_stats(comp, metadata)
+            if validated_comp:
+                valid_components.append(validated_comp)
+                
+        blueprint["components"] = valid_components
+        
+        types = [c.get("type") for c in valid_components]
 
         # ensure KPI exists
         if "kpi" not in types:
-            components.insert(0, {
+            blueprint["components"].insert(0, {
                 "type": "kpi",
                 "title": "Total Records",
                 "span": 1,
-                "config": {"column": "id", "aggregation": "count"}
+                "config": {"column": "id", "aggregation": "count"},
+                "_fallbackReason": "Added fallback KPI because none were found."
             })
 
         # ensure chart exists
         if "chart" not in types:
             first_col = (metadata.get("column_metadata") or [{}])[0].get("name", "value")
-            components.insert(1, {
+            blueprint["components"].insert(1, {
                 "type": "chart",
                 "title": "Overview",
                 "span": 2,
-                "config": {"chart_type": "bar", "columns": [first_col], "aggregation": "sum"}
+                "config": {"chart_type": "bar", "columns": [first_col], "aggregation": "sum"},
+                "_fallbackReason": "Added fallback Chart because none were found."
             })
 
         # ensure layout_grid
@@ -464,6 +487,88 @@ class AIDesignerService:
             blueprint["layout_grid"] = "repeat(4, 1fr)"
 
         return blueprint
+
+    def _validate_blueprint_component_with_data_stats(self, comp: Dict, metadata: Dict) -> Optional[Dict]:
+        """
+        Deep validation for a single dashboard component.
+        - Resolves fuzzy/hallucinated column names to EXACT dataset column names.
+        - Enforces cardinality restrictions (e.g. no pie chart on a highly cardinal column).
+        - Attaches `_fallbackReason` when changing the AI's intent.
+        
+        Returns the validated component, or None if it's completely unrecoverable.
+        """
+        colmeta = metadata.get("column_metadata", [])
+        valid_col_names = [c["name"] for c in colmeta if c.get("name")]
+        valid_col_names_lower = {name.lower().strip(): name for name in valid_col_names}
+        
+        def resolve_column(requested_col: str) -> Optional[str]:
+            if not requested_col: return None
+            req_lower = str(requested_col).lower().strip()
+            # 1. Exact match (case insensitive)
+            if req_lower in valid_col_names_lower:
+                return valid_col_names_lower[req_lower]
+            # 2. Substring match
+            for valid_lower, actual_name in valid_col_names_lower.items():
+                if req_lower in valid_lower or valid_lower in req_lower:
+                    return actual_name
+            return None
+
+        ctype = comp.get("type", "")
+        cfg = comp.get("config", {})
+        
+        fallback_reasons = []
+
+        if ctype == "kpi":
+            req_col = cfg.get("column")
+            actual_col = resolve_column(req_col)
+            if not actual_col:
+                return None  # Drop KPI if the column doesn't exist at all
+            if actual_col != req_col:
+                fallback_reasons.append(f"Mapped hallucinated column '{req_col}' to '{actual_col}'.")
+            cfg["column"] = actual_col
+
+        elif ctype == "chart":
+            chart_type = cfg.get("chart_type", "bar")
+            requested_cols = cfg.get("columns", [])
+            
+            # Resolve all columns
+            actual_cols = []
+            for c in requested_cols:
+                resolved = resolve_column(c)
+                if resolved:
+                    actual_cols.append(resolved)
+                else:
+                    fallback_reasons.append(f"Dropped hallucinated column '{c}'.")
+                    
+            if not actual_cols:
+                return None # Unrecoverable chart
+                
+            cfg["columns"] = actual_cols
+            cfg["x"] = resolve_column(cfg.get("x")) or (actual_cols[0] if len(actual_cols) > 0 else None)
+            cfg["y"] = resolve_column(cfg.get("y")) or (actual_cols[1] if len(actual_cols) > 1 else None)
+            
+            if cfg.get("group_by"):
+                resolved_group = [resolve_column(g) for g in cfg["group_by"]]
+                cfg["group_by"] = [g for g in resolved_group if g]
+
+            # Enforce Cardinality Limits for Pie Charts
+            if chart_type in ["pie", "pie_chart", "donut"]:
+                data_profile = metadata.get("data_profile", {})
+                cardinality_map = data_profile.get("cardinality", {})
+                
+                # Check the grouping column (usually x)
+                group_col = cfg.get("x") or cfg["columns"][0]
+                if group_col in cardinality_map:
+                    unique_count = cardinality_map[group_col].get("unique_count", 0)
+                    if unique_count > 15:
+                        cfg["chart_type"] = "bar"
+                        fallback_reasons.append(f"Pie chart changed to Bar chart because '{group_col}' has high cardinality ({unique_count} > 15).")
+                        
+        comp["config"] = cfg
+        if fallback_reasons:
+            comp["_fallbackReason"] = " | ".join(fallback_reasons)
+            
+        return comp
 
     # ---------------------------------------------------------
     # Context builder (enriched with pre-computed metadata)

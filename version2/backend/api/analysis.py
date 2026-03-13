@@ -64,11 +64,17 @@ async def _hydrate_blueprint(blueprint: Dict[str, Any], dataset_id: str, user_id
 
         try:
             if ctype == "kpi":
+                agg_val = str(cfg.get("aggregation", "count")).lower()
+                if agg_val in ("count_unique", "count unique", "unique"):
+                    agg_val = "nunique"
+                elif agg_val == "average":
+                    agg_val = "mean"
+
                 kpi_cfg = KpiConfig(
                     title=cfg.get("title", comp.get("title", "KPI")),
                     span=comp.get("span", 1),
                     column=cfg.get("column", "__all__"),
-                    aggregation=cfg.get("aggregation", "count"),
+                    aggregation=agg_val,
                     icon=cfg.get("icon"),
                     color=cfg.get("color"),
                 )
@@ -85,14 +91,17 @@ async def _hydrate_blueprint(blueprint: Dict[str, Any], dataset_id: str, user_id
                     comp["value"] = result
 
             elif ctype == "chart":
-                columns = cfg.get("columns", [])
-                if isinstance(columns, str):
-                    columns = [columns]
+                raw_cols = cfg.get("columns", [])
+                if isinstance(raw_cols, str):
+                    raw_cols = [raw_cols]
+                # Safely filter out None values before anything else
+                columns = [str(c) for c in raw_cols if c is not None]
+
                 # Filter to columns that actually exist in the dataframe
                 safe_columns = [c for c in columns if c in df.columns]
                 # Fuzzy fallback: if LLM gave a slightly wrong column name, try to match
                 if len(safe_columns) < len(columns):
-                    df_cols_lower = {c.lower().replace(" ", "_"): c for c in df.columns}
+                    df_cols_lower = {str(c).lower().replace(" ", "_"): c for c in df.columns}
                     for orig_col in columns:
                         if orig_col in df.columns:
                             continue
@@ -214,10 +223,23 @@ async def retry_single_chart(
         df = await load_dataset(dataset_doc["file_path"])
 
         # Same hydration logic as _hydrate_blueprint but for a single chart
-        columns = cfg.get("columns", [])
-        if isinstance(columns, str):
-            columns = [columns]
+        raw_cols = cfg.get("columns", [])
+        if isinstance(raw_cols, str):
+            raw_cols = [raw_cols]
+        columns = [str(c) for c in raw_cols if c is not None]
+
         safe_columns = [c for c in columns if c in df.columns]
+        if len(safe_columns) < len(columns):
+            df_cols_lower = {str(c).lower().replace(" ", "_"): c for c in df.columns}
+            for orig_col in columns:
+                if orig_col in df.columns:
+                    continue
+                normalized = orig_col.lower().replace(" ", "_")
+                if normalized in df_cols_lower:
+                    safe_columns.append(df_cols_lower[normalized])
+        
+        # Dedupe preserving order
+        safe_columns = list(dict.fromkeys(safe_columns))
 
         chart_type_str = cfg.get("chart_type", "bar")
 
@@ -254,6 +276,21 @@ async def retry_single_chart(
             group_by=cfg.get("group_by"),
         )
         traces, rows_used = hydrate_chart(df, chart_cfg)
+
+        # Successfully hydrated, save the fixed config back to the database
+        updated_cfg = dict(cfg)
+        updated_cfg["columns"] = safe_columns
+        updated_cfg["chart_type"] = chart_type_str
+        
+        try:
+            await ai_designer_service.update_dashboard_component(
+                dataset_id=dataset_id,
+                user_id=user_id,
+                component_title=component.get("title"),
+                updated_config=updated_cfg
+            )
+        except Exception as e:
+            logger.warning(f"Failed to update component '{component.get('title')}' config in database: {e}")
 
         return {
             "success": True,
@@ -316,6 +353,13 @@ async def design_intelligent_dashboard(
                     user_id=current_user["id"]
                 )
                 if existing:
+                    # Ensure waiters get fully hydrated components too.
+                    blueprint = existing.get("dashboard_blueprint")
+                    if blueprint and isinstance(blueprint, dict):
+                        logger.info(f"Hydrating cached designer blueprint for waiting request: {dataset_id}...")
+                        existing["dashboard_blueprint"] = await _hydrate_blueprint(
+                            blueprint, dataset_id, current_user["id"]
+                        )
                     return existing
                 # If somehow no cached result, fall through to generate
 

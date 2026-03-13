@@ -13,8 +13,8 @@
   /* Pale Phthalo Blue (Text/Highlight) */
   --color-ocean: #5B88B2;
   /* Legacy Ocean (Keep for safe ref) */
-  --color-granite: #6C6E79;
-  /* Granite Canyon (Muted) */
+  --color-granite: #9CA3AF;
+  /* Granite Canyon (Muted – brightened for readability) */
   --color-gold: #C7BC92;
   /* Morning Tea (Accent) */
   --color-avocado: #39373D;
@@ -95,8 +95,8 @@
 
   --muted: rgba(108, 110, 121, 0.5);
   /* Granite Canyon with transparency */
-  --muted-foreground: #6C6E79;
-  /* Granite Canyon */
+  --muted-foreground: #9CA3AF;
+  /* Granite Canyon – brightened */
 
   --accent: #C7BC92;
   /* Morning Tea */

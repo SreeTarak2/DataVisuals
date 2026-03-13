@@ -187,83 +187,78 @@ class Settings:
         # },
     }
 
-    # -------------------------------------------------------------------------
-    # Role → Model Mapping
-    #
-    # Strategy:
-    #   - ALL user-facing & reasoning → gemini_flash_lite (best formatting)
-    #   - Cheap structured tasks      → mistral_small_32 (fallback/budget)
-    #   - Vision tasks                → qwen3_vl_8b (free, dedicated VL)
-    # -------------------------------------------------------------------------
     OPENROUTER_ROLE_MAPPING: Dict[str, str] = {
-        # Charts & Visualization
-        "chart_recommendation":     "gemini_flash_lite",
-        "chart_explanation":         "mistral_small_32",
-        "visualization_engine":      "gemini_flash_lite",
+    # ─── Chat & Conversational (Gemini only, as you requested) ──────────
+    "chat_engine":               "gemini_flash_lite",
+    "chat_streaming":            "gemini_flash_lite",
+    "conversational":            "gemini_flash_lite",
 
-        # KPIs & Insights
-        "kpi_suggestion":            "gemini_flash_lite",
-        "insight_generation":        "gemini_flash_lite",
-        "narrative_insights":        "gemini_flash_lite",
+    # ─── HIGH‑PRECISION TASKS → DeepSeek V3.2 (power model) ────────────
+    "kpi_suggestion":            "deepseek_v32",
+    "insight_generation":        "deepseek_v32",
+    "narrative_insights":        "deepseek_v32",
+    "sql_generator":             "deepseek_v32",
+    "chart_recommendation":      "deepseek_v32",
+    "complex_analysis":          "deepseek_v32",
+    "system_design":             "deepseek_v32",
+    "pipeline_planner":          "deepseek_v32",
+    "requirements_synthesis":    "deepseek_v32",
+    "layout_designer":           "deepseek_v32",      # complex layout logic
+    "dashboard_design":          "deepseek_v32",
 
-        # SQL Generation
-        "sql_generator":             "gemini_flash_lite",
+    # ─── Medium / Cheap Tasks (Mistral is fine) ─────────────────────────
+    "chart_explanation":         "mistral_small_32",  # simple explanation
+    "visualization_engine":      "mistral_small_32",  # formatting, not heavy reasoning
+    "draft_generation":          "mistral_small_32",
+    "simple_query":              "mistral_small_32",
+    "rewrite_engine":            "mistral_small_32",
+    "validation":                "mistral_small_32",
 
-        # Chat & Conversational — all on Gemini for polished prose
-        "chat_engine":               "gemini_flash_lite",
-        "conversational":            "gemini_flash_lite",
-        "chat_streaming":            "gemini_flash_lite",
+    # ─── Vision Tasks (dedicated VL model) ──────────────────────────────
+    "chart_image_analysis":      "qwen2_5_vl_72b",
+    "visual_extraction":         "qwen2_5_vl_72b",
+    "layout_from_image":         "qwen2_5_vl_72b",
 
-        # Design & Layout
-        "layout_designer":           "gemini_flash_lite",
-        "dashboard_design":          "gemini_flash_lite",
-
-        # Quick Tasks — cheapest model
-        "draft_generation":          "mistral_small_32",
-        "simple_query":              "mistral_small_32",
-        "rewrite_engine":            "mistral_small_32",
-
-        # Refinement & Validation
-        "refinement":                "gemini_flash_lite",
-        "validation":                "mistral_small_32",
-
-        # Vision Tasks — dedicated Qwen3 VL (free)
-        "chart_image_analysis":      "qwen3_vl_8b",
-        "visual_extraction":         "qwen3_vl_8b",
-        "layout_from_image":         "qwen3_vl_8b",
-
-        # High-Level Planning & Complex Reasoning
-        "system_design":             "gemini_flash_lite",
-        "requirements_synthesis":    "gemini_flash_lite",
-        "pipeline_planner":          "gemini_flash_lite",
-        "complex_analysis":          "gemini_flash_lite",
-
-        # Default Fallback
-        "default":                   "mistral_small_32",
+    # ─── Default Fallback ───────────────────────────────────────────────
+    "default":                   "mistral_small_32",    
     }
-
+    
     # -------------------------------------------------------------------------
     # Fallback Chains
     # Primary fails → try next in chain
     # -------------------------------------------------------------------------
     FALLBACKS: Dict[str, List[str]] = {
-        "chat_engine":          ["gemini_flash_lite", "mistral_small_32"],
-        "chat_streaming":       ["gemini_flash_lite", "mistral_small_32"],
-        "conversational":       ["gemini_flash_lite", "mistral_small_32"],
-        "kpi_suggestion":       ["gemini_flash_lite", "mistral_small_32"],
-        "insight_generation":   ["gemini_flash_lite", "mistral_small_32"],
-        "sql_generator":        ["gemini_flash_lite", "mistral_small_32"],
-        "layout_designer":      ["gemini_flash_lite", "mistral_small_32"],
-        "dashboard_design":     ["gemini_flash_lite", "mistral_small_32"],
-        "chart_recommendation": ["gemini_flash_lite", "mistral_small_32"],
-        "complex_analysis":     ["gemini_flash_lite", "mistral_small_32"],
-        "chart_image_analysis": ["qwen3_vl_8b", "mistral_small_32"],
-        "visual_extraction":    ["qwen3_vl_8b", "mistral_small_32"],
-        "layout_from_image":    ["qwen3_vl_8b", "mistral_small_32"],
-        "simple_query":         ["mistral_small_32", "gemini_flash_lite"],
-        "default":              ["mistral_small_32", "gemini_flash_lite"],
-    }
+        # Chat roles → Gemini only
+        "chat_engine":          ["gemini_flash_lite", "deepseek_v32", "openrouter_auto"],
+        "chat_streaming":       ["gemini_flash_lite", "deepseek_v32", "openrouter_auto"],
+        "conversational":       ["gemini_flash_lite", "deepseek_v32", "openrouter_auto"],
 
+        # High‑precision tasks → DeepSeek primary, Gemini secondary, Mistral last
+        "kpi_suggestion":       ["deepseek_v32", "gemini_flash_lite", "mistral_small_32"],
+        "insight_generation":   ["deepseek_v32", "gemini_flash_lite", "mistral_small_32"],
+        "sql_generator":        ["deepseek_v32", "gemini_flash_lite", "mistral_small_32"],
+        "chart_recommendation": ["deepseek_v32", "gemini_flash_lite", "mistral_small_32"],
+        "complex_analysis":     ["deepseek_v32", "gemini_flash_lite", "mistral_small_32"],
+        "system_design":        ["deepseek_v32", "gemini_flash_lite", "mistral_small_32"],
+        "pipeline_planner":     ["deepseek_v32", "gemini_flash_lite", "mistral_small_32"],
+        "layout_designer":      ["deepseek_v32", "gemini_flash_lite", "mistral_small_32"],
+        "dashboard_design":     ["deepseek_v32", "gemini_flash_lite", "mistral_small_32"],
+
+        # Medium tasks → Mistral primary, Gemini fallback
+        "chart_explanation":    ["mistral_small_32", "gemini_flash_lite"],
+        "draft_generation":     ["mistral_small_32", "gemini_flash_lite"],
+        "simple_query":         ["mistral_small_32", "gemini_flash_lite"],
+        "rewrite_engine":       ["mistral_small_32", "gemini_flash_lite"],
+        "validation":           ["mistral_small_32", "gemini_flash_lite"],
+
+        # Vision → Qwen primary, Gemini fallback (if Gemini gains vision)
+        "chart_image_analysis": ["qwen2_5_vl_72b", "gemini_flash_lite", "mistral_small_32"],
+        "visual_extraction":    ["qwen2_5_vl_72b", "gemini_flash_lite", "mistral_small_32"],
+        "layout_from_image":    ["qwen2_5_vl_72b", "gemini_flash_lite", "mistral_small_32"],
+
+        # Default
+        "default":              ["mistral_small_32", "gemini_flash_lite", "openrouter_auto"],
+    }
     # -------------------------------------------------------------------------
     # Health / Timeouts
     # -------------------------------------------------------------------------
@@ -280,11 +275,7 @@ class Settings:
     # -------------------------------------------------------------------------
     # CORS Configuration
     # -------------------------------------------------------------------------
-    DEV_ORIGINS = [
-        "http://127.0.0.1:3000", "http://127.0.0.1:5173", "http://127.0.0.1:5174",
-        "http://localhost:3000",  "http://localhost:5173",  "http://localhost:5174",
-    ]
-    ALLOWED_ORIGINS: List[str] = os.getenv("ALLOWED_ORIGINS", ",".join(DEV_ORIGINS)).split(",")
+    ALLOWED_ORIGINS: List[str] = os.getenv("ALLOWED_ORIGINS", "").split(",")
 
     # -------------------------------------------------------------------------
     # File Upload Configuration

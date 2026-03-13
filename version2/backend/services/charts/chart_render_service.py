@@ -10,13 +10,15 @@ Features:
 - Theme support (light/dark)
 - Caching support
 - Performance monitoring
+- Per-point statistical intelligence
 
 Author: DataSage AI Team
-Version: 2.0 (Production)
+Version: 2.1 (Production + Intelligence)
 """
 
 import logging
 import asyncio
+import math
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import polars as pl
@@ -44,6 +46,210 @@ class ChartRenderService:
         self._cache = {}  # Simple in-memory cache
         self._render_count = 0
         self._error_count = 0
+
+    def _compute_point_intelligence(
+        self,
+        traces: List[Dict[str, Any]],
+        df: pl.DataFrame,
+        chart_config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Compute per-data-point statistical intelligence from the actual
+        DataFrame and rendered traces. Pure math — no LLM, no latency.
+
+        Returns a dict that the frontend can look up by category/x-value
+        to show meaningful insights in the tooltip.
+
+        Structure:
+        {
+            "y_label": "price",
+            "x_label": "packaging_type",
+            "total_records": 13000,
+            "stats": {
+                "mean": 120.5,
+                "median": 115.0,
+                "std": 34.2,
+                "min": 10.0,
+                "max": 450.0,
+                "q1": 95.0,
+                "q3": 145.0,
+                "iqr": 50.0,
+            },
+            "points": {
+                "Bottle": {
+                    "value": 449400,
+                    "rank": 1,
+                    "percentile": 100,
+                    "z_score": 1.82,
+                    "vs_avg_pct": 23.5,
+                    "is_outlier": false,
+                    "record_count": 2100,
+                    "insight": "Highest value — 23.5% above average"
+                },
+                ...
+            }
+        }
+        """
+        try:
+            columns = chart_config.get("columns", [])
+            if len(columns) < 2:
+                return {}
+
+            x_col, y_col = columns[0], columns[1]
+
+            # Get trace data (the aggregated values actually shown in the chart)
+            trace = traces[0] if traces else {}
+            trace_type = trace.get("type", "bar")
+
+            # For pie charts, labels/values instead of x/y
+            if trace_type == "pie":
+                x_values = trace.get("labels", [])
+                y_values = trace.get("values", [])
+            else:
+                x_values = trace.get("x", [])
+                y_values = trace.get("y", [])
+
+            if not x_values or not y_values or len(x_values) != len(y_values):
+                return {}
+
+            # Convert to float safely
+            numeric_values = []
+            for v in y_values:
+                try:
+                    numeric_values.append(float(v))
+                except (TypeError, ValueError):
+                    numeric_values.append(0.0)
+
+            n = len(numeric_values)
+            if n == 0:
+                return {}
+
+            # ── Core statistics ──
+            sorted_vals = sorted(numeric_values)
+            total = sum(numeric_values)
+            mean = total / n
+            median = sorted_vals[n // 2] if n % 2 else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
+            variance = sum((v - mean) ** 2 for v in numeric_values) / max(n - 1, 1)
+            std = math.sqrt(variance) if variance > 0 else 0.0
+            min_val = sorted_vals[0]
+            max_val = sorted_vals[-1]
+            q1 = sorted_vals[max(n // 4 - 1, 0)]
+            q3 = sorted_vals[min(3 * n // 4, n - 1)]
+            iqr = q3 - q1
+            lower_fence = q1 - 1.5 * iqr
+            upper_fence = q3 + 1.5 * iqr
+
+            # ── Per-category record counts (from raw DataFrame) ──
+            record_counts = {}
+            try:
+                if x_col in df.columns:
+                    counts = df.group_by(x_col).len()
+                    for row in counts.iter_rows():
+                        record_counts[str(row[0])] = row[1]
+            except Exception:
+                pass
+
+            total_records = len(df)
+
+            # ── Rank: sorted descending (1 = highest) ──
+            rank_sorted = sorted(range(n), key=lambda i: numeric_values[i], reverse=True)
+            rank_map = {}
+            for rank_pos, idx in enumerate(rank_sorted):
+                rank_map[idx] = rank_pos + 1
+
+            # ── Build per-point intelligence ──
+            points = {}
+            for i, x_val in enumerate(x_values):
+                val = numeric_values[i]
+                x_key = str(x_val)
+                rank = rank_map.get(i, i + 1)
+                z_score = (val - mean) / std if std > 0 else 0.0
+                vs_avg_pct = ((val - mean) / mean * 100) if mean != 0 else 0.0
+                is_outlier = val < lower_fence or val > upper_fence
+                percentile = round((1 - (rank - 1) / max(n - 1, 1)) * 100)
+                rec_count = record_counts.get(x_key, None)
+
+                # ── Generate a meaningful insight sentence ──
+                insight = self._generate_point_insight(
+                    val, mean, std, rank, n, vs_avg_pct, is_outlier, percentile, x_key, y_col
+                )
+
+                points[x_key] = {
+                    "value": val,
+                    "rank": rank,
+                    "percentile": percentile,
+                    "z_score": round(z_score, 2),
+                    "vs_avg_pct": round(vs_avg_pct, 1),
+                    "is_outlier": is_outlier,
+                    "record_count": rec_count,
+                    "insight": insight,
+                }
+
+            return {
+                "y_label": y_col,
+                "x_label": x_col,
+                "total_records": total_records,
+                "stats": {
+                    "mean": round(mean, 2),
+                    "median": round(median, 2),
+                    "std": round(std, 2),
+                    "min": round(min_val, 2),
+                    "max": round(max_val, 2),
+                    "q1": round(q1, 2),
+                    "q3": round(q3, 2),
+                    "iqr": round(iqr, 2),
+                },
+                "points": points,
+            }
+
+        except Exception as e:
+            logger.warning(f"Point intelligence computation failed (non-fatal): {e}")
+            return {}
+
+    def _generate_point_insight(
+        self, val, mean, std, rank, total, vs_avg_pct, is_outlier, percentile, x_key, y_col
+    ) -> str:
+        """Generate a concise, meaningful insight sentence for a single data point."""
+
+        parts = []
+
+        # Outlier flag — highest signal
+        if is_outlier and val > mean:
+            parts.append(f"Statistical outlier — unusually high {y_col}")
+        elif is_outlier and val < mean:
+            parts.append(f"Statistical outlier — unusually low {y_col}")
+
+        # Rank-based insight
+        if rank == 1:
+            parts.append(f"Highest {y_col} across all {total} categories")
+        elif rank == 2 and total > 3:
+            parts.append(f"2nd highest — in the top tier")
+        elif rank == total:
+            parts.append(f"Lowest {y_col} across all {total} categories")
+        elif rank == total - 1 and total > 3:
+            parts.append(f"2nd lowest — near the bottom")
+
+        # Deviation-based insight (only if not already covered by outlier/rank)
+        if not parts:
+            if vs_avg_pct > 40:
+                parts.append(f"{vs_avg_pct:+.1f}% above average — a significant leader")
+            elif vs_avg_pct > 15:
+                parts.append(f"{vs_avg_pct:+.1f}% above average — a solid performer")
+            elif vs_avg_pct > 0:
+                parts.append(f"Slightly above average ({vs_avg_pct:+.1f}%)")
+            elif vs_avg_pct > -15:
+                parts.append(f"Slightly below average ({vs_avg_pct:+.1f}%)")
+            elif vs_avg_pct > -40:
+                parts.append(f"{vs_avg_pct:+.1f}% below average — underperforming")
+            else:
+                parts.append(f"{vs_avg_pct:+.1f}% below average — significantly trailing")
+
+        # Add std context for outliers
+        if is_outlier and std > 0:
+            z = abs(val - mean) / std
+            parts.append(f"{z:.1f}σ from the mean")
+
+        return " · ".join(parts)
     
     async def render_chart(
         self,
@@ -107,6 +313,18 @@ class ChartRenderService:
                 "chart_type": chart_type_str,
                 "render_time_ms": (datetime.utcnow() - start_time).total_seconds() * 1000
             }
+
+            # ── Compute per-point statistical intelligence ──
+            try:
+                point_intel = self._compute_point_intelligence(
+                    traces=chart_payload.get("traces", traces),
+                    df=df,
+                    chart_config=chart_config,
+                )
+                if point_intel:
+                    chart_payload["point_intelligence"] = point_intel
+            except Exception as e:
+                logger.warning(f"Point intelligence skipped: {e}")
             
             self._render_count += 1
             logger.info(f"✓ Chart rendered successfully ({chart_payload['metadata']['render_time_ms']:.0f}ms)")
