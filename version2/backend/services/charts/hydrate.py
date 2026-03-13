@@ -74,7 +74,13 @@ def validate_config(df: pl.DataFrame, config: ChartConfig) -> None:
         logger.warning("Not enough numeric columns for chart type.")
 
 
-def _safe_aggregate(df: pl.DataFrame, group_col: str, value_col: str, agg: AggregationType) -> pl.DataFrame:
+def _safe_aggregate(
+    df: pl.DataFrame,
+    group_col: str,
+    value_col: str,
+    agg: AggregationType,
+    sort_mode: str = "y_desc",
+) -> pl.DataFrame:
     if group_col not in df.columns or value_col not in df.columns:
         raise HydrationError(f"Missing agg cols: {group_col}, {value_col}")
 
@@ -99,7 +105,12 @@ def _safe_aggregate(df: pl.DataFrame, group_col: str, value_col: str, agg: Aggre
 
     agg_df = data.group_by(group_col).agg(expr)
     agg_df = agg_df.rename({group_col: "x", agg_df.columns[-1]: "y"})
-    agg_df = agg_df.sort("y", descending=True)
+    if sort_mode == "x_asc":
+        agg_df = agg_df.sort("x", descending=False)
+    elif sort_mode == "x_desc":
+        agg_df = agg_df.sort("x", descending=True)
+    else:
+        agg_df = agg_df.sort("y", descending=True)
     return agg_df
 
 
@@ -125,8 +136,13 @@ def hydrate_kpi(df: pl.DataFrame, config: KpiConfig) -> Dict[str, Any]:
             agg = AggregationType.COUNT
         else:
             agg_str = agg.value if hasattr(agg, 'value') else agg
-            value = df.select(getattr(pl, agg_str)(col)).item()
+            if agg_str == "nunique":
+                agg_str = "n_unique"
+            
+            if df[col].dtype in (pl.Utf8, pl.Categorical) and agg_str in ("sum", "mean", "median"):
+                agg_str = "n_unique" if agg_str == "sum" else "count"
 
+            value = df.select(getattr(pl, agg_str)(col)).item()
         result: Dict[str, Any] = {"value": value, "label": config.title}
 
         # --- Only enrich if we have a real numeric column ---
@@ -146,14 +162,40 @@ def hydrate_kpi(df: pl.DataFrame, config: KpiConfig) -> Dict[str, Any]:
             else:
                 result["format"] = "number"
 
-            # Min / Max / Record count
+            # Min / Max / Record count / Definitions
+            col_mean = series.mean()
+            col_std = series.std() if n > 1 else 0
+            
             result["min_value"] = float(series.min()) if n > 0 else 0
             result["max_value"] = float(series.max()) if n > 0 else 0
             result["record_count"] = n
+            
+            # --- Generate Enterprise Context (Tooltips & Anomalies) ---
+            agg_name = agg.value if hasattr(agg, 'value') else str(agg).upper()
+            result["definition"] = f"Calculated as the {agg_name.lower()} of '{col}' across {n:,} records."
+            
+            # Simple Outlier Detection (Is the current value > 2 std dev from mean?)
+            if col_std > 0 and abs(value - col_mean) > (2 * col_std):
+                result["isOutlier"] = True
+                result["benchmarkText"] = "Significant deviation from mean"
+            else:
+                result["benchmarkText"] = f"Dataset Average: {round(col_mean, 2) if col_mean else 0}"
 
-            # Sparkline — bucket into 16 points (rolling trend)
-            if n >= 8:
-                vals = series.to_list()
+            # ─── TIME-AWARE SORTING & TRENDING ───
+            # Locate a temporal column for meaningful splitting
+            date_col = None
+            for col_name in df.columns:
+                if df[col_name].dtype in (pl.Date, pl.Datetime):
+                    date_col = col_name
+                    break
+            
+            if date_col and n >= 8:
+                # Sort by time for true chronological trend
+                df_sorted = df.sort(date_col)
+                time_series = df_sorted[col].drop_nulls()
+                
+                # Sparkline — bucket into 16 points (rolling chronological trend)
+                vals = time_series.to_list()
                 bucket_count = min(16, n)
                 bucket_size = n // bucket_count
                 sparkline = []
@@ -162,12 +204,11 @@ def hydrate_kpi(df: pl.DataFrame, config: KpiConfig) -> Dict[str, Any]:
                     if chunk:
                         sparkline.append(round(sum(chunk) / len(chunk), 2))
                 result["sparkline_data"] = sparkline
-
-            # Comparison — first half vs second half (with proper label)
-            if n >= 10:
+                
+                # Comparison — earlier period vs later period
                 mid = n // 2
-                first_vals = series.slice(0, mid)
-                second_vals = series.slice(mid)
+                first_vals = time_series.slice(0, mid)
+                second_vals = time_series.slice(mid)
 
                 if agg == AggregationType.SUM:
                     prev = float(first_vals.sum())
@@ -180,11 +221,32 @@ def hydrate_kpi(df: pl.DataFrame, config: KpiConfig) -> Dict[str, Any]:
                     curr = float(second_vals.sum())
 
                 result["comparison_value"] = round(prev, 2)
-                result["comparison_label"] = "vs first half"
+                result["comparison_label"] = "vs earlier period (time-sorted)"
 
                 if prev != 0:
                     delta = ((curr - prev) / abs(prev)) * 100
                     result["delta_percent"] = round(delta, 1)
+                    
+                    # AI Suggestion based on chronological polarity
+                    polarity = "expense" if any(k in col_lower for k in ["cost", "discount", "loss", "tax"]) else "revenue"
+                    if delta <= -15:
+                        result["aiSuggestion"] = f"Sharp over-time drop in {col}. Review contributing segments." if polarity == "revenue" else f"Great cost reduction in {col}."
+                    elif delta >= 15:
+                        result["aiSuggestion"] = f"Strong growth in {col} recently!" if polarity == "revenue" else f"Warning: {col} is surging over time. Investigate root causes."
+                    else:
+                        result["aiSuggestion"] = f"{col} is stable compared to the earlier period."
+
+            else:
+                # ─── NO TIME COLUMN FALLBACK ───
+                # Omit strictly chronological comparisons (delta / sparkline) 
+                logger.info(f"No date column found for {col} – skipping time-based delta, relying on benchmarkText.")
+                
+                # But we can still offer a non-temporal AI Context
+                polarity = "expense" if any(k in col_lower for k in ["cost", "discount", "loss", "tax"]) else "revenue"
+                if result.get("isOutlier"):
+                    result["aiSuggestion"] = f"The overall {col} shows extreme variance. Investigate top drivers."
+                else:
+                    result["aiSuggestion"] = f"Overall {col} is relatively distributed around {round(col_mean, 1)}."
 
         elif col in df.columns and df[col].dtype in (CATEGORICAL_DTYPES | {pl.Utf8}):
             # For categorical KPIs (count/nunique) — provide top value distribution
@@ -327,7 +389,8 @@ def _hydrate_line(df, config):
     x, y = config.columns[0], config.columns[1]
     if df[x].dtype in TEMPORAL_DTYPES:
         df = df.sort(x)
-    agg_df = _safe_aggregate(df, x, y, config.aggregation)
+    # Critical: line charts must be ordered on x-axis, not by y magnitude.
+    agg_df = _safe_aggregate(df, x, y, config.aggregation, sort_mode="x_asc")
     
     # Downsample line charts: take evenly spaced points to preserve shape
     total_points = len(agg_df)
@@ -462,14 +525,75 @@ def _hydrate_scatter(df, config):
 
 
 def _hydrate_heatmap(df, config):
-    if len(config.columns) < 3:
+    # Supports:
+    # 1) x + y + z (numeric z) -> aggregated matrix
+    # 2) x + y only -> frequency/count matrix
+    # 3) fallback -> numeric correlation heatmap
+    if not config.columns:
         return _hydrate_correlation_heatmap(df)
-    x, y, z = config.columns
-    pivot = df.pivot(index=y, columns=x, values=z, aggregate_function="mean").fill_null(0)
-    x_vals = [c for c in pivot.columns if c != y]
-    y_vals = pivot[y].to_list()
-    z_vals = pivot.select(pl.exclude(y)).to_numpy().tolist()
-    return [{"type": "heatmap", "x": x_vals, "y": y_vals, "z": z_vals, "colorscale": "Viridis"}]
+
+    x = config.columns[0] if len(config.columns) >= 1 else None
+    y = config.columns[1] if len(config.columns) >= 2 else None
+    z = config.columns[2] if len(config.columns) >= 3 else None
+
+    if not x or not y or x not in df.columns or y not in df.columns:
+        return _hydrate_correlation_heatmap(df)
+
+    # Keep matrix size bounded for readability/performance.
+    MAX_X_CATEGORIES = 35
+    MAX_Y_CATEGORIES = 35
+
+    try:
+        base = df.select([c for c in [x, y, z] if c in df.columns]).drop_nulls(subset=[x, y])
+        if base.is_empty():
+            return []
+
+        # Trim very high-cardinality dimensions to top categories by frequency.
+        x_counts = base.group_by(x).agg(pl.count().alias("cnt")).sort("cnt", descending=True)
+        y_counts = base.group_by(y).agg(pl.count().alias("cnt")).sort("cnt", descending=True)
+        top_x = x_counts.head(MAX_X_CATEGORIES)[x].to_list()
+        top_y = y_counts.head(MAX_Y_CATEGORIES)[y].to_list()
+        base = base.filter(pl.col(x).is_in(top_x) & pl.col(y).is_in(top_y))
+        if base.is_empty():
+            return []
+
+        use_numeric_z = bool(z and z in base.columns and base[z].dtype in NUMERIC_DTYPES)
+        if use_numeric_z:
+            if config.aggregation == AggregationType.COUNT:
+                agg_expr = pl.count().alias("value")
+            elif config.aggregation == AggregationType.MEAN:
+                agg_expr = pl.mean(z).alias("value")
+            elif config.aggregation == AggregationType.NUNIQUE:
+                agg_expr = pl.n_unique(z).alias("value")
+            elif config.aggregation == AggregationType.FIRST:
+                agg_expr = pl.first(z).alias("value")
+            else:
+                agg_expr = pl.sum(z).alias("value")
+        else:
+            # Common AI output: heatmap with only x/y categories (no numeric z).
+            agg_expr = pl.count().alias("value")
+
+        grouped = base.group_by([y, x]).agg(agg_expr)
+        if grouped.is_empty():
+            return []
+
+        pivot = grouped.pivot(index=y, columns=x, values="value", aggregate_function="first").fill_null(0)
+        x_vals = [str(c) for c in pivot.columns if c != y]
+        y_vals = [str(v) for v in pivot[y].to_list()]
+        z_vals = pivot.select(pl.exclude(y)).to_numpy().tolist()
+        if not x_vals or not y_vals or not z_vals:
+            return []
+
+        return [{
+            "type": "heatmap",
+            "x": x_vals,
+            "y": y_vals,
+            "z": z_vals,
+            "colorscale": "Viridis",
+        }]
+    except Exception as e:
+        logger.warning(f"Heatmap matrix generation failed; trying correlation fallback: {e}")
+        return _hydrate_correlation_heatmap(df)
 
 
 def _hydrate_correlation_heatmap(df):

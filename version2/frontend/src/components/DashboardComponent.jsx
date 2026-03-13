@@ -142,7 +142,14 @@ const DashboardComponent = ({ component: initialComponent, datasetData, variant 
         const result = await res.json();
         if (result.success && result.chart_data) {
           setComponent(prev => ({ ...prev, chart_data: result.chart_data }));
-          toast.success('Chart loaded successfully', { duration: 2000, style: { background: '#1e293b', color: '#e2e8f0', border: '1px solid rgba(52, 211, 153, 0.3)', fontSize: '13px' } });
+          // Save chart to dashboard after retry
+          try {
+            const { chartAPI } = await import('../services/api');
+            await chartAPI.saveChart(selectedDataset.id, component.config, component.title);
+            toast.success('Chart loaded and saved!', { duration: 2000, style: { background: '#1e293b', color: '#e2e8f0', border: '1px solid rgba(52, 211, 153, 0.3)', fontSize: '13px' } });
+          } catch (saveErr) {
+            toast.error('Chart loaded, but failed to save.', { duration: 3000 });
+          }
         } else {
           toast.error('Chart data still unavailable', { duration: 3000 });
         }
@@ -202,7 +209,20 @@ const DashboardComponent = ({ component: initialComponent, datasetData, variant 
 
     case 'chart': {
       const chartData = component.chart_data || { data: [], layout: {} };
-      const hasData = chartData.data && chartData.data.length > 0;
+      const hasData = Array.isArray(chartData.data) && chartData.data.some((trace) => {
+        if (!trace || trace.error) return false;
+        const traceType = (trace.type || '').toLowerCase();
+        if (traceType === 'heatmap') {
+          return Array.isArray(trace.z) && trace.z.length > 0 && Array.isArray(trace.z[0]) && trace.z[0].length > 0;
+        }
+        if (traceType === 'pie') {
+          return Array.isArray(trace.values) && trace.values.length > 0;
+        }
+        if (traceType === 'box' || traceType === 'violin') {
+          return Array.isArray(trace.y) && trace.y.length > 0;
+        }
+        return (Array.isArray(trace.x) && trace.x.length > 0) || (Array.isArray(trace.y) && trace.y.length > 0);
+      });
       const noveltyScore = component.config?.novelty_score;
       const explanation = component.metadata?.explanation;
       const keyInsights = component.metadata?.key_insights || [];
@@ -402,14 +422,14 @@ const DashboardComponent = ({ component: initialComponent, datasetData, variant 
                         <div className="p-1.5 rounded-lg bg-amber-500/15 shrink-0 mt-0.5">
                           <Lightbulb className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
                         </div>
-                        <p className="text-[13px] text-slate-300 leading-relaxed">{explanation}</p>
+                        <p className="text-[15px] text-slate-300 font-semibold leading-relaxed">{explanation}</p>
                       </div>
                     )}
 
                     {/* Key Insights as mini-cards */}
                     {keyInsights.length > 0 && (
                       <div className="space-y-2">
-                        <h4 className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Key Findings</h4>
+                        <h4 className="text-[13px] font-bold text-slate-500 uppercase tracking-wider">Key Findings</h4>
                         <div className="grid gap-2">
                           {keyInsights.map((insight, idx) => (
                             <div
@@ -417,7 +437,7 @@ const DashboardComponent = ({ component: initialComponent, datasetData, variant 
                               className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg bg-slate-800/40 border border-slate-700/30"
                             >
                               <span className={`w-1.5 h-1.5 rounded-full ${accent.dot} mt-1.5 shrink-0`} />
-                              <p className="text-[12px] text-slate-300 leading-relaxed">
+                              <p className="text-[14px] text-slate-300 leading-relaxed">
                                 {getInsightText(insight)}
                               </p>
                             </div>

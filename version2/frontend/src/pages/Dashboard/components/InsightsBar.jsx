@@ -11,7 +11,6 @@
 
 import React, { useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
 import {
     Zap,
     TrendingUp,
@@ -146,7 +145,6 @@ const humanizeDescription = (desc) => {
 const InsightsBar = ({ insights = [], loading = false }) => {
     const [expanded, setExpanded] = useState(false);
     const [copiedId, setCopiedId] = useState(null);
-    const navigate = useNavigate();
 
     const { startNewConversation, sendMessageStreaming } = useChatStore();
     const { selectedDataset } = useDatasetStore();
@@ -163,8 +161,8 @@ const InsightsBar = ({ insights = [], loading = false }) => {
         if (!selectedDataset?.id) return;
 
         const query = `Investigate this insight in detail: "${insight.title}". ${insight.description || ''} — provide deeper analysis, possible causes, and recommended actions.`;
-        navigate('/app/chat', { state: { prefillQuery: query } });
-    }, [selectedDataset, navigate]);
+        window.dispatchEvent(new CustomEvent('open-chat-with-query', { detail: { query } }));
+    }, [selectedDataset]);
 
     // ── Copy insight text to clipboard ──
     const handleCopy = useCallback((insight) => {

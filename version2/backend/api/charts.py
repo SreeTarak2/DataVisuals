@@ -121,7 +121,8 @@ async def render_chart(
             fields=request.fields,
             explanation=insights.get("summary", ""),
             confidence=insights.get("confidence", 0.0),
-            metadata=chart_payload.get("metadata", {})
+            metadata=chart_payload.get("metadata", {}),
+            point_intelligence=chart_payload.get("point_intelligence"),
         )
         
         logger.info(f"✓ Chart rendered successfully: {chart_id}")
@@ -280,17 +281,34 @@ async def save_chart_to_dashboard(
                 detail="dataset_id and chart_config are required"
             )
         
-        # TODO: Implement dashboard storage in database
-        # For now, return success
+        from db.database import get_database
+        import datetime
+        db = get_database()
         chart_id = str(uuid.uuid4())
-        
-        logger.info(f"Saved chart {chart_id} to dashboard for user {current_user['id']}")
-        
-        return {
-            "success": True,
-            "chart_id": chart_id,
-            "message": "Chart saved to dashboard"
+        user_id = current_user["id"]
+        chart_doc = {
+            "_id": chart_id,
+            "user_id": user_id,
+            "dataset_id": dataset_id,
+            "chart_config": chart_config,
+            "title": request.get("title", chart_config.get("title", "Chart")),
+            "created_at": datetime.datetime.utcnow(),
+            "updated_at": datetime.datetime.utcnow()
         }
+        try:
+            await db.charts.insert_one(chart_doc)
+            logger.info(f"Saved chart {chart_id} to dashboard for user {user_id}")
+            return {
+                "success": True,
+                "chart_id": chart_id,
+                "message": "Chart saved to dashboard"
+            }
+        except Exception as db_err:
+            logger.error(f"Failed to save chart to dashboard: {db_err}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save chart: {str(db_err)}"
+            )
         
     except Exception as e:
         logger.error(f"Error saving chart: {e}", exc_info=True)

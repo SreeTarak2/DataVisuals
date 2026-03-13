@@ -489,6 +489,7 @@ const ChartsStudio = () => {
                         chartData={chartData}
                         chartConfig={chartConfig}
                         loading={loading}
+                        pointIntelligence={chartData?.point_intelligence || null}
                         onAskAI={async () => {
                             let chartImage = null;
                             try {

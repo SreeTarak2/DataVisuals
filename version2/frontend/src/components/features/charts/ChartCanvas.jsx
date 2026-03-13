@@ -7,12 +7,12 @@ const CHART_THEME = {
     bg: '#020203',
     surface: '#1A191C',
     textPrimary: '#CAD2FD',
-    textSecondary: '#6C6E79',
+    textSecondary: '#9CA3AF',
     border: 'rgba(202,210,253,0.06)',
     gridline: 'rgba(202,210,253,0.04)',
 };
 
-const ChartCanvas = ({ chartData, chartConfig, loading, onAskAI }) => {
+const ChartCanvas = ({ chartData, chartConfig, loading, onAskAI, pointIntelligence }) => {
     // Empty state
     if (!chartConfig.encoding.x.field || !chartConfig.encoding.y.field) {
         return (
@@ -102,6 +102,7 @@ const ChartCanvas = ({ chartData, chartConfig, loading, onAskAI }) => {
                             width: 2,
                         },
                     }))}
+                    pointIntelligence={pointIntelligence}
                     layout={{
                         ...chartData.layout,
                         autosize: true,
