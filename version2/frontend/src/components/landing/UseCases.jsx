@@ -46,29 +46,29 @@ const UseCases = () => {
     };
 
     return (
-        <section id="use-cases" className="py-32 bg-[#020617] border-b border-slate-900">
+        <section id="use-cases" className="py-32 bg-[#0A0A0A] border-b border-white/[0.03]">
             <div className="container mx-auto px-6">
                 <div className="text-center mb-20">
-                    <h2 className="text-3xl md:text-5xl font-bold text-slate-50 mb-6 tracking-tight text-balance">
+                    <h2 className="text-3xl md:text-5xl font-bold text-white mb-6 tracking-tight text-balance">
                         Built for everyone.
                     </h2>
-                    <p className="text-lg text-slate-400">
+                    <p className="text-lg text-neutral-400">
                         Purpose-built tools for every skill level in the data chain.
                     </p>
                 </div>
 
                 <div className="max-w-5xl mx-auto">
                     {/* Tabs */}
-                    <div className="flex flex-col md:flex-row justify-center gap-2 mb-12">
+                    <div className="flex flex-col md:flex-row justify-center gap-4 mb-12">
                         {tabs.map((tab) => {
                             const Icon = tab.icon;
                             return (
                                 <button
                                     key={tab.id}
                                     onClick={() => setActiveTab(tab.id)}
-                                    className={`px-6 py-4 flex items-center justify-center gap-3 text-sm font-semibold transition-all duration-200 focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:outline-none border ${activeTab === tab.id
-                                        ? 'bg-slate-50 text-slate-950 border-slate-50'
-                                        : 'bg-transparent text-slate-400 hover:text-slate-50 border-slate-800 hover:border-slate-600'
+                                    className={`px-8 py-4 flex items-center justify-center gap-3 text-sm font-semibold transition-all duration-300 rounded-2xl border ${activeTab === tab.id
+                                        ? 'bg-blue-500 text-white border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.2)]'
+                                        : 'bg-white/[0.03] text-neutral-400 hover:text-white border-white/[0.05] hover:border-white/10'
                                         }`}
                                     aria-selected={activeTab === tab.id}
                                     role="tab"
@@ -81,38 +81,38 @@ const UseCases = () => {
                     </div>
 
                     {/* Content Area */}
-                    <div className="min-h-[400px] monochrome-card p-1">
+                    <div className="min-h-[450px] bg-[#0D0D0F] border border-white/[0.05] rounded-[2rem] overflow-hidden p-1 shadow-2xl">
                         <AnimatePresence mode='wait'>
                             <motion.div
                                 key={activeTab}
-                                initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: prefersReducedMotion ? 0 : -10 }}
-                                transition={{ duration: 0.2, ease: 'easeOut' }}
-                                className="bg-[#020617] p-8 md:p-16 h-full"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                transition={{ duration: 0.3 }}
+                                className="p-8 md:p-16 h-full"
                                 role="tabpanel"
                             >
                                 <div className="grid md:grid-cols-2 gap-16 items-center">
-                                    <div>
-                                        <h3 className="text-3xl font-bold text-slate-50 mb-4 tracking-tight">{content[activeTab].title}</h3>
-                                        <p className="text-slate-400 mb-10 text-lg leading-relaxed">{content[activeTab].description}</p>
+                                    <div className="text-left">
+                                        <h3 className="text-3xl font-bold text-white mb-4 tracking-tight">{content[activeTab].title}</h3>
+                                        <p className="text-neutral-400 mb-10 text-lg leading-relaxed">{content[activeTab].description}</p>
                                         <ul className="space-y-4">
                                             {content[activeTab].features.map((feature, idx) => (
-                                                <li key={idx} className="flex items-start text-slate-300">
-                                                    <CheckCircle2 className="w-5 h-5 text-slate-500 mr-4 flex-shrink-0" aria-hidden="true" />
+                                                <li key={idx} className="flex items-start text-neutral-300">
+                                                    <CheckCircle2 className="w-5 h-5 text-blue-500 mr-4 flex-shrink-0" aria-hidden="true" />
                                                     <span>{feature}</span>
                                                 </li>
                                             ))}
                                         </ul>
                                     </div>
-                                    <div className="hidden md:flex flex-col items-center justify-center p-12 bg-slate-900/50 border border-slate-800 h-full">
-                                        <div className="w-16 h-16 bg-slate-800 border border-slate-700 flex items-center justify-center mb-6">
-                                            {activeTab === 'analysts' && <LayoutDashboard className="w-8 h-8 text-sky-400" />}
-                                            {activeTab === 'business' && <Brain className="w-8 h-8 text-sky-400" />}
-                                            {activeTab === 'students' && <GraduationCap className="w-8 h-8 text-sky-400" />}
+                                    <div className="hidden md:flex flex-col items-center justify-center p-12 bg-white/[0.02] border border-white/[0.05] rounded-3xl h-full">
+                                        <div className="w-20 h-20 bg-blue-500/10 border border-blue-500/20 rounded-2xl flex items-center justify-center mb-6">
+                                            {activeTab === 'analysts' && <LayoutDashboard className="w-10 h-10 text-blue-500" />}
+                                            {activeTab === 'business' && <Brain className="w-10 h-10 text-blue-500" />}
+                                            {activeTab === 'students' && <GraduationCap className="w-10 h-10 text-blue-500" />}
                                         </div>
-                                        <p className="text-slate-500 font-mono text-sm tracking-widest uppercase">
-                                            {activeTab}
+                                        <p className="text-neutral-500 font-mono text-xs tracking-widest uppercase">
+                                            {activeTab} module
                                         </p>
                                     </div>
                                 </div>

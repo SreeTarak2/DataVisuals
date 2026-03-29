@@ -56,8 +56,12 @@ const normalizeComponent = (component = {}, availableColumns = []) => {
     else c.type = 'chart';
   }
 
-  // Ensure title
-  c.title = c.title || (c.type === 'kpi' ? 'KPI' : c.type === 'table' ? 'Table' : 'Chart');
+  // Ensure title for non-chart types (charts get a smart title after columns are resolved)
+  if (!c.title) {
+    if (c.type === 'kpi') c.title = 'KPI';
+    else if (c.type === 'table') c.title = 'Table';
+    // chart title is set below after column normalization
+  }
 
   // Default span
   if (typeof c.span === 'undefined' || c.span === null) {
@@ -128,6 +132,20 @@ const normalizeComponent = (component = {}, availableColumns = []) => {
   if (c.type === 'table') {
     c.config.columns = ensureArray(c.config.columns || c.columns || c.table?.columns || []);
     if (c.config.columns.length === 0) c.config.columns = ['col1', 'col2'];
+  }
+
+  // Smart chart title: generate from columns now that they're resolved
+  if (c.type === 'chart' && !c.title) {
+    const toLabel = (col) => (col || '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    const cols = c.config?.columns || [];
+    const chartType = (c.config?.chart_type || 'bar').replace(/_chart$/, '').replace(/_/g, ' ');
+    if (cols.length >= 2) {
+      c.title = `${toLabel(cols[1])} by ${toLabel(cols[0])}`;
+    } else if (cols.length === 1) {
+      c.title = `${toLabel(cols[0])} Distribution`;
+    } else {
+      c.title = toLabel(chartType) + ' Chart';
+    }
   }
 
   return c;

@@ -72,7 +72,7 @@ const TestimonialsCarousel = () => {
     }, [currentIndex]);
 
     return (
-        <section id="testimonials" className="py-32 relative">
+        <section id="testimonials" className="py-32 relative bg-[#0A0A0A]">
             <div className="container mx-auto px-6 max-w-4xl relative z-10">
                 <div className="text-center mb-16">
                     <motion.h2
@@ -80,13 +80,13 @@ const TestimonialsCarousel = () => {
                         whileInView={{ opacity: 1, y: 0 }}
                         viewport={{ once: true }}
                         transition={{ duration: 0.5 }}
-                        className="text-3xl md:text-5xl font-bold tracking-tight mb-6"
+                        className="text-3xl md:text-5xl font-bold tracking-tight mb-6 text-white"
                     >
-                        Loved by Data Teams
+                        Loved by data teams.
                     </motion.h2>
                 </div>
 
-                <div className="relative h-[300px] md:h-[250px] flex items-center justify-center overflow-hidden">
+                <div className="relative h-[350px] md:h-[300px] flex items-center justify-center overflow-hidden">
                     <AnimatePresence initial={false} custom={direction}>
                         <motion.div
                             key={currentIndex}
@@ -113,17 +113,17 @@ const TestimonialsCarousel = () => {
                             className="absolute w-full px-4 md:px-12"
                         >
                             <div className="flex flex-col items-center text-center">
-                                <Quote className="w-10 h-10 text-sky-400/50 mb-6" />
-                                <p className="text-xl md:text-3xl font-medium text-slate-100 mb-8 leading-tight text-balance">
+                                <Quote className="w-12 h-12 text-blue-500/20 mb-8" />
+                                <p className="text-xl md:text-3xl font-medium text-white mb-10 leading-tight tracking-tight text-balance">
                                     "{testimonials[currentIndex].quote}"
                                 </p>
-                                <div className="flex items-center gap-4">
-                                    <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-sky-500 to-purple-500 flex items-center justify-center text-white font-bold text-lg">
+                                <div className="flex items-center gap-5">
+                                    <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 font-bold text-xl shadow-[0_0_20px_rgba(59,130,246,0.1)]">
                                         {testimonials[currentIndex].name.charAt(0)}
                                     </div>
                                     <div className="text-left">
-                                        <div className="font-semibold text-slate-50">{testimonials[currentIndex].name}</div>
-                                        <div className="text-sm text-slate-400">{testimonials[currentIndex].role}, {testimonials[currentIndex].company}</div>
+                                        <div className="font-bold text-white text-lg">{testimonials[currentIndex].name}</div>
+                                        <div className="text-sm text-neutral-500 uppercase tracking-widest font-semibold">{testimonials[currentIndex].role} @ {testimonials[currentIndex].company}</div>
                                     </div>
                                 </div>
                             </div>
@@ -132,23 +132,23 @@ const TestimonialsCarousel = () => {
 
                     {/* Controls */}
                     <button
-                        className="absolute left-0 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-slate-900/80 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 transition-colors z-20"
+                        className="absolute left-0 top-1/2 -translate-y-1/2 w-12 h-12 rounded-2xl bg-white/[0.02] border border-white/[0.05] flex items-center justify-center text-neutral-500 hover:text-white hover:bg-white/[0.05] transition-all z-20 group"
                         onClick={() => paginate(-1)}
                         aria-label="Previous testimonial"
                     >
-                        <ChevronLeft className="w-5 h-5" />
+                        <ChevronLeft className="w-6 h-6 group-hover:-translate-x-0.5 transition-transform" />
                     </button>
                     <button
-                        className="absolute right-0 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-slate-900/80 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 transition-colors z-20"
+                        className="absolute right-0 top-1/2 -translate-y-1/2 w-12 h-12 rounded-2xl bg-white/[0.02] border border-white/[0.05] flex items-center justify-center text-neutral-500 hover:text-white hover:bg-white/[0.05] transition-all z-20 group"
                         onClick={() => paginate(1)}
                         aria-label="Next testimonial"
                     >
-                        <ChevronRight className="w-5 h-5" />
+                        <ChevronRight className="w-6 h-6 group-hover:translate-x-0.5 transition-transform" />
                     </button>
                 </div>
 
                 {/* Dots */}
-                <div className="flex justify-center gap-2 mt-8">
+                <div className="flex justify-center gap-3 mt-12">
                     {testimonials.map((_, idx) => (
                         <button
                             key={idx}
@@ -156,7 +156,7 @@ const TestimonialsCarousel = () => {
                                 setDirection(idx > currentIndex ? 1 : -1);
                                 setCurrentIndex(idx);
                             }}
-                            className={`w-2 h-2 rounded-full transition-all ${idx === currentIndex ? 'bg-sky-400 w-6' : 'bg-slate-700'}`}
+                            className={`h-1.5 rounded-full transition-all duration-300 ${idx === currentIndex ? 'bg-blue-500 w-10 shadow-[0_0_10px_rgba(59,130,246,0.5)]' : 'bg-white/[0.1] w-4 hover:bg-white/20'}`}
                             aria-label={`Go to slide ${idx + 1}`}
                         />
                     ))}

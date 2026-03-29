@@ -15,24 +15,24 @@ import FormatPanel from '../../components/features/charts/FormatPanel';
 import EncodingBar from '../../components/features/charts/EncodingBar';
 import ChartInsightsCard from '../../components/features/charts/ChartInsightsCard';
 
-// Chart type definitions - all 16 backend-supported types with images
+// Chart type definitions - all 16 backend-supported types with icons
 const CHART_TYPES = [
-    { id: 'bar', label: 'Bar Chart', image: '/src/assets/bar.webp', enabled: true },
-    { id: 'line', label: 'Line Chart', image: '/src/assets/line.webp', enabled: true },
-    { id: 'area', label: 'Area Chart', image: '/src/assets/area.webp', enabled: true },
-    { id: 'scatter', label: 'Scatter Plot', image: '/src/assets/scatter.webp', enabled: true },
-    { id: 'pie', label: 'Pie Chart', image: '/src/assets/pie.webp', enabled: true },
-    { id: 'treemap', label: 'Treemap', image: '/src/assets/logchart.webp', enabled: true },
-    { id: 'sunburst', label: 'Sunburst', image: '/src/assets/radar.webp', enabled: true },
-    { id: 'funnel', label: 'Funnel Chart', image: '/src/assets/waterfall.webp', enabled: true },
-    { id: 'histogram', label: 'Histogram', image: '/src/assets/histogram.webp', enabled: true },
-    { id: 'box_plot', label: 'Box Plot', image: '/src/assets/boxplot.webp', enabled: true },
-    { id: 'violin', label: 'Violin Plot', image: '/src/assets/boxplot.webp', enabled: true },
-    { id: 'heatmap', label: 'Heatmap', image: '/src/assets/heatmap.webp', enabled: true },
-    { id: 'radar', label: 'Radar Chart', image: '/src/assets/radar.webp', enabled: true },
-    { id: 'bubble', label: 'Bubble Chart', image: '/src/assets/bubble.webp', enabled: true },
-    { id: 'waterfall', label: 'Waterfall', image: '/src/assets/waterfall.webp', enabled: true },
-    { id: 'gauge', label: 'Gauge', image: '/src/assets/pie.webp', enabled: true },
+    { id: 'bar', label: 'Bar Chart', enabled: true },
+    { id: 'line', label: 'Line Chart', enabled: true },
+    { id: 'area', label: 'Area Chart', enabled: true },
+    { id: 'scatter', label: 'Scatter Plot', enabled: true },
+    { id: 'pie', label: 'Pie Chart', enabled: true },
+    { id: 'treemap', label: 'Treemap', enabled: true },
+    { id: 'sunburst', label: 'Sunburst', enabled: true },
+    { id: 'funnel', label: 'Funnel Chart', enabled: true },
+    { id: 'histogram', label: 'Histogram', enabled: true },
+    { id: 'box_plot', label: 'Box Plot', enabled: true },
+    { id: 'violin', label: 'Violin Plot', enabled: true },
+    { id: 'heatmap', label: 'Heatmap', enabled: true },
+    { id: 'radar', label: 'Radar Chart', enabled: true },
+    { id: 'bubble', label: 'Bubble Chart', enabled: true },
+    { id: 'waterfall', label: 'Waterfall', enabled: true },
+    { id: 'gauge', label: 'Gauge', enabled: true },
 ];
 
 const MotionDiv = motion.div;
@@ -108,10 +108,10 @@ const generateNextViews = (columns, currentEncoding, currentChartType) => {
 const ChartsStudio = () => {
     const { selectedDataset } = useDatasetStore();
 
-    // Panel states
-    const [showDataPanel, setShowDataPanel] = useState(true);
-    const [showFormatPanel, setShowFormatPanel] = useState(true);
-    const [showInsightsPanel, setShowInsightsPanel] = useState(false);
+    // Panel states — collapsed by default on small screens
+    const isMobile = typeof window !== 'undefined' && window.innerWidth < 900;
+    const [showDataPanel, setShowDataPanel] = useState(!isMobile);
+    const [showFormatPanel, setShowFormatPanel] = useState(!isMobile);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
     // Data
@@ -119,23 +119,19 @@ const ChartsStudio = () => {
     const [loading, setLoading] = useState(false);
     const [chartData, setChartData] = useState(null);
 
-    // AI
-    const [insights, setInsights] = useState(null);
-    const [insightsLoading, setInsightsLoading] = useState(false);
-    const [nlQuery, setNlQuery] = useState('');
-    const [nlProcessing, setNlProcessing] = useState(false);
-
     // Export
     const [showExportMenu, setShowExportMenu] = useState(false);
 
-    // Data quality
-    const [dataQuality, setDataQuality] = useState(null);
+
+    // Insights
+    const [insights, setInsights] = useState(null);
 
     const [chartConfig, setChartConfig] = useState({
         chartType: 'bar',
         encoding: {
             x: { field: '', type: '' },
             y: { field: '', type: '', aggregate: 'sum' },
+            group_by: '',
             color: null,
             size: null,
         },
@@ -143,9 +139,11 @@ const ChartsStudio = () => {
             showLegend: true,
             showLabels: false,
             showGrid: false,
-            colorPalette: ['#5B88B2', '#10b981', '#f59e0b', '#ef4444', '#a78bfa'],
+            colorPalette: ['#7C3AED', '#0891B2', '#F59E0B', '#EF4444', '#8B5CF6'],
         },
     });
+
+    const [rowLimit, setRowLimit] = useState(10000);
 
     // ── Load columns ──
     useEffect(() => {
@@ -159,36 +157,7 @@ const ChartsStudio = () => {
         if (chartConfig.encoding.x.field && chartConfig.encoding.y.field) {
             generateChart();
         }
-    }, [chartConfig.chartType, chartConfig.encoding]);
-
-    // ── Keyboard: Esc exits fullscreen ──
-    useEffect(() => {
-        const handleKey = (e) => {
-            if (e.key === 'Escape' && isFullscreen) setIsFullscreen(false);
-        };
-        window.addEventListener('keydown', handleKey);
-        return () => window.removeEventListener('keydown', handleKey);
-    }, [isFullscreen]);
-
-    // ── Data quality from metadata ──
-    useEffect(() => {
-        if (selectedDataset?.metadata) {
-            const meta = selectedDataset.metadata;
-            const nullCols = meta.column_metadata?.filter(c => c.null_count > 0) || [];
-            const totalRows = meta.row_count || 0;
-            const colCount = meta.column_metadata?.length || 1;
-            const nullRatio = totalRows > 0
-                ? nullCols.reduce((sum, c) => sum + (c.null_count / totalRows), 0) / Math.max(colCount, 1)
-                : 0;
-
-            setDataQuality({
-                score: Math.round((1 - nullRatio) * 100),
-                nullColumns: nullCols.length,
-                totalRows,
-                totalColumns: colCount,
-            });
-        }
-    }, [selectedDataset]);
+    }, [chartConfig.chartType, chartConfig.encoding, rowLimit]);
 
     const loadColumns = async () => {
         if (!selectedDataset) return;
@@ -211,17 +180,27 @@ const ChartsStudio = () => {
     const generateChart = async () => {
         if (!selectedDataset || !chartConfig.encoding.x.field || !chartConfig.encoding.y.field) return;
         setLoading(true);
+        setInsights(null);
         try {
-            const response = await chartAPI.generateChart(
+            const response = await chartAPI.renderChart(
                 selectedDataset.id,
                 chartConfig.chartType,
-                chartConfig.encoding.x.field,
-                chartConfig.encoding.y.field,
-                chartConfig.encoding.y.aggregate
+                [chartConfig.encoding.x.field, chartConfig.encoding.y.field],
+                chartConfig.encoding.y.aggregate,
+                {
+                    include_insights: true,
+                    limit: rowLimit,
+                    groupBy: chartConfig.encoding.group_by,
+                }
             );
             if (response.data?.traces?.length > 0) {
                 setChartData(response.data);
-                setInsights(null); // Clear old insights on new chart
+                if (response.data.explanation || response.data.confidence > 0) {
+                    setInsights({
+                        summary: response.data.explanation,
+                        confidence: response.data.confidence,
+                    });
+                }
             } else {
                 setChartData(null);
                 toast.error('No data for this configuration');
@@ -235,116 +214,45 @@ const ChartsStudio = () => {
         }
     };
 
-    // ── AI Insights ──
-    const fetchInsights = async () => {
-        if (!chartData || !selectedDataset) return;
+    // AI deep analysis via /charts/explain
+    const [insightsLoading, setInsightsLoading] = useState(false);
+    const [showInsights, setShowInsights] = useState(false);
+
+    const handleDeepAnalysis = async () => {
+        if (!selectedDataset || !chartData) return;
         setInsightsLoading(true);
-        setShowInsightsPanel(true);
+        setShowInsights(true);
         try {
-            const response = await chartAPI.getInsights(
+            const chartKey = `${chartConfig.chartType}_${chartConfig.encoding.x.field}_${chartConfig.encoding.y.field}`;
+            const response = await chartAPI.explainChart(
+                selectedDataset.id,
+                chartKey,
                 {
                     chart_type: chartConfig.chartType,
-                    x_field: chartConfig.encoding.x.field,
-                    y_field: chartConfig.encoding.y.field,
+                    columns: [chartConfig.encoding.x.field, chartConfig.encoding.y.field],
                     aggregation: chartConfig.encoding.y.aggregate,
-                },
-                chartData.traces || [],
-                selectedDataset.id,
+                }
             );
-            setInsights(response.data);
-        } catch (error) {
-            console.error('Failed to fetch insights:', error);
-            setInsights({
-                summary: 'Could not generate insights for this chart.',
-                patterns: [],
-                recommendations: ['Try a different chart type or fields.'],
-                confidence: 0.3,
-            });
+            if (response.data) {
+                setInsights(prev => ({
+                    ...prev,
+                    summary: response.data.explanation || prev?.summary || '',
+                    enhanced_insight: response.data.explanation || '',
+                    patterns: response.data.key_insights?.map((k, i) => ({ type: 'trend', description: k })) || [],
+                    recommendations: response.data.reading_guide
+                        ? [{ action: response.data.reading_guide }]
+                        : [],
+                    confidence: prev?.confidence || 0.8,
+                }));
+            }
+        } catch (err) {
+            console.error('Deep analysis failed:', err);
+            toast.error('Failed to generate analysis');
         } finally {
             setInsightsLoading(false);
         }
     };
 
-    // ── NL Refinement ──
-    const handleNlQuery = async (e) => {
-        e?.preventDefault();
-        if (!nlQuery.trim() || nlProcessing) return;
-        setNlProcessing(true);
-
-        try {
-            const q = nlQuery.toLowerCase().trim();
-
-            // Chart type changes
-            const typeMap = { 'bar': 'bar', 'line': 'line', 'scatter': 'scatter', 'pie': 'pie', 'area': 'area', 'heatmap': 'heatmap', 'box': 'box_plot', 'histogram': 'histogram', 'treemap': 'treemap', 'bubble': 'bubble', 'radar': 'radar', 'funnel': 'funnel', 'waterfall': 'waterfall', 'violin': 'violin' };
-            for (const [keyword, type] of Object.entries(typeMap)) {
-                if (q.includes(keyword)) {
-                    updateChartType(type);
-                    setNlQuery('');
-                    toast.success(`Switched to ${keyword} chart`);
-                    return;
-                }
-            }
-
-            // Aggregation changes
-            const aggMap = { 'average': 'avg', 'mean': 'avg', 'sum': 'sum', 'count': 'count', 'minimum': 'min', 'maximum': 'max', 'min': 'min', 'max': 'max' };
-            for (const [keyword, agg] of Object.entries(aggMap)) {
-                if (q.includes(keyword)) {
-                    updateEncoding('y', { ...chartConfig.encoding.y, aggregate: agg });
-                    setNlQuery('');
-                    toast.success(`Changed aggregation to ${keyword}`);
-                    return;
-                }
-            }
-
-            // Field changes
-            const allColNames = columns.map(c => typeof c === 'string' ? c : c.name);
-            for (const col of allColNames) {
-                if (q.includes(col.toLowerCase())) {
-                    if (q.includes('x') || q.includes('horizontal') || q.includes('category')) {
-                        updateEncoding('x', { field: col, type: '' });
-                        setNlQuery('');
-                        toast.success(`Set X axis to ${col}`);
-                        return;
-                    }
-                    if (q.includes('y') || q.includes('vertical') || q.includes('value') || q.includes('measure')) {
-                        updateEncoding('y', { field: col, type: '' });
-                        setNlQuery('');
-                        toast.success(`Set Y axis to ${col}`);
-                        return;
-                    }
-                }
-            }
-
-            // Toggle changes
-            if (q.includes('legend')) {
-                updateFormat('showLegend', !chartConfig.format.showLegend);
-                setNlQuery('');
-                toast.success(`${chartConfig.format.showLegend ? 'Hid' : 'Showed'} legend`);
-                return;
-            }
-            if (q.includes('grid')) {
-                updateFormat('showGrid', !chartConfig.format.showGrid);
-                setNlQuery('');
-                toast.success(`${chartConfig.format.showGrid ? 'Hid' : 'Showed'} grid`);
-                return;
-            }
-            if (q.includes('label')) {
-                updateFormat('showLabels', !chartConfig.format.showLabels);
-                setNlQuery('');
-                toast.success(`${chartConfig.format.showLabels ? 'Hid' : 'Showed'} labels`);
-                return;
-            }
-
-            toast('Try: "show as line chart", "average", or a column name', { icon: '💡' });
-        } catch {
-            toast.error('Could not parse that request');
-        } finally {
-            setNlProcessing(false);
-            setNlQuery('');
-        }
-    };
-
-    // ── Export ──
     const handleExportPNG = async () => {
         setShowExportMenu(false);
         const plotEl = document.querySelector('.js-plotly-plot');
@@ -375,39 +283,64 @@ const ChartsStudio = () => {
         setShowExportMenu(false);
         if (!chartData?.traces?.length) { toast.error('No data to export'); return; }
         try {
-            const trace = chartData.traces[0];
             const xField = chartConfig.encoding.x.field || 'x';
-            const yField = chartConfig.encoding.y.field || 'y';
-            const rows = [[xField, yField].join(',')];
-            const xVals = trace.x || [];
-            const yVals = trace.y || trace.values || [];
-            for (let i = 0; i < Math.max(xVals.length, yVals.length); i++) {
-                rows.push([`"${xVals[i] ?? ''}"`, `"${yVals[i] ?? ''}"`].join(','));
+
+            // Collect all series — skip fill/area ghost traces (no name, fill=tozeroy)
+            const dataTraces = chartData.traces.filter(t =>
+                t.name !== undefined || (t.x && t.y) || (t.labels && t.values)
+            ).filter(t => t.fill !== 'tozeroy');
+
+            if (dataTraces.length === 0) { toast.error('No data to export'); return; }
+
+            const isPieType = dataTraces[0].labels && dataTraces[0].values;
+
+            let rows;
+            if (isPieType) {
+                // Pie / donut: label, value
+                rows = [['"Label"', '"Value"'].join(',')];
+                const labels = dataTraces[0].labels || [];
+                const values = dataTraces[0].values || [];
+                for (let i = 0; i < labels.length; i++) {
+                    rows.push([`"${labels[i] ?? ''}"`, `"${values[i] ?? ''}"`].join(','));
+                }
+            } else if (dataTraces.length === 1) {
+                // Single series: x, y
+                const trace = dataTraces[0];
+                const yField = trace.name || chartConfig.encoding.y.field || 'y';
+                rows = [[`"${xField}"`, `"${yField}"`].join(',')];
+                const xVals = trace.x || [];
+                const yVals = trace.y || [];
+                for (let i = 0; i < Math.max(xVals.length, yVals.length); i++) {
+                    rows.push([`"${xVals[i] ?? ''}"`, `"${yVals[i] ?? ''}"`].join(','));
+                }
+            } else {
+                // Multi-series: x, series1, series2, …
+                const header = [`"${xField}"`, ...dataTraces.map(t => `"${t.name || 'series'}"`)].join(',');
+                rows = [header];
+                // Use the x values from the first trace as the index
+                const xVals = dataTraces[0].x || [];
+                for (let i = 0; i < xVals.length; i++) {
+                    const rowVals = [`"${xVals[i] ?? ''}"`];
+                    for (const trace of dataTraces) {
+                        rowVals.push(`"${(trace.y || [])[i] ?? ''}"`);
+                    }
+                    rows.push(rowVals.join(','));
+                }
             }
-            const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+
+            const filename = `${chartConfig.encoding.y.field || 'chart'}_by_${xField}`;
+            const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${yField}_by_${xField}.csv`;
+            a.download = `${filename}.csv`;
             a.click();
             URL.revokeObjectURL(url);
             toast.success('CSV exported!');
-        } catch { toast.error('CSV export failed'); }
-    };
-
-    // ── Apply next-view suggestion ──
-    const applyNextView = (view) => {
-        if (view.action.chartType) updateChartType(view.action.chartType);
-        if (view.action.x) updateEncoding('x', { field: view.action.x, type: '' });
-        if (view.action.y) updateEncoding('y', { field: view.action.y, type: '' });
-    };
-
-    // ── Fullscreen ──
-    const toggleFullscreen = () => {
-        setIsFullscreen(prev => {
-            if (!prev) { setShowDataPanel(false); setShowFormatPanel(false); }
-            return !prev;
-        });
+        } catch (err) {
+            console.error('CSV export failed:', err);
+            toast.error('CSV export failed');
+        }
     };
 
     const updateEncoding = useCallback((channel, value) => {
@@ -436,20 +369,20 @@ const ChartsStudio = () => {
     /* ── No dataset ── */
     if (!selectedDataset) {
         return (
-            <div className="h-full flex items-center justify-center bg-noir">
-                <div className="text-center max-w-sm">
-                    <div className="w-12 h-12 rounded-xl bg-ocean/10 flex items-center justify-center mx-auto mb-4">
-                        <Database className="w-5 h-5 text-ocean" />
+            <div className="h-full flex items-center justify-center bg-primary">
+                <div className="text-center max-w-sm px-10 py-12 rounded-3xl bg-surface border border-border shadow-soft">
+                    <div className="w-20 h-20 rounded-2xl bg-accent-primary-light flex items-center justify-center mx-auto mb-8">
+                        <Database className="w-10 h-10 text-accent-primary" />
                     </div>
-                    <h2 className="text-base font-semibold mb-2 text-pearl">
-                        No dataset selected
+                    <h2 className="text-xl font-bold mb-3 text-header">
+                        No Dataset Selected
                     </h2>
-                    <p className="mb-6 text-[13px] text-granite leading-relaxed">
-                        Select a dataset from the Dashboard to start building charts.
+                    <p className="mb-10 text-[14px] text-secondary leading-relaxed font-medium">
+                        Select a processed dataset from your dashboard to begin building visualizations.
                     </p>
                     <button
                         onClick={() => window.location.href = '/app/dashboard'}
-                        className="px-4 py-2 rounded-lg bg-ocean text-white text-sm font-medium hover:bg-ocean/90 transition-colors"
+                        className="w-full px-8 py-3.5 rounded-xl bg-accent-primary text-white text-sm font-black uppercase tracking-widest hover:bg-accent-primary-hover shadow-lg shadow-accent-primary/20 transition-all hover:translate-y-[-1px] active:translate-y-[0px]"
                     >
                         Go to Dashboard
                     </button>
@@ -459,59 +392,140 @@ const ChartsStudio = () => {
     }
 
     return (
-        <div className="h-full flex flex-col bg-noir overflow-hidden">
+        <div className="h-full flex flex-col bg-primary overflow-hidden">
             {/* ── Main Workspace ── */}
             <div className="flex-1 flex overflow-hidden">
-                {/* Left: Data Panel */}
-                <AnimatePresence mode="popLayout">
+                {/* Left: Data Panel — side column on desktop, overlay drawer on mobile */}
+                <AnimatePresence mode="popLayout" initial={false}>
                     {showDataPanel && (
-                        <MotionDiv
-                            initial={{ width: 0, opacity: 0 }}
-                            animate={{ width: 240, opacity: 1 }}
-                            exit={{ width: 0, opacity: 0 }}
-                            transition={{ duration: 0.2, ease: "easeInOut" }}
-                            className="bg-midnight overflow-hidden flex flex-col"
-                        >
-                            <div className="w-[240px] h-full">
-                                <DataPanel
-                                    columns={columns}
-                                    encoding={chartConfig.encoding}
-                                    onUpdateEncoding={updateEncoding}
-                                />
-                            </div>
-                        </MotionDiv>
+                        <>
+                            {/* Mobile backdrop */}
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                onClick={() => setShowDataPanel(false)}
+                                className="fixed inset-0 z-30 bg-black/40 md:hidden"
+                            />
+                            <MotionDiv
+                                initial={{ x: -240, opacity: 0 }}
+                                animate={{ x: 0, opacity: 1 }}
+                                exit={{ x: -240, opacity: 0 }}
+                                transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                                className="fixed md:relative inset-y-0 left-0 z-40 md:z-20 w-[240px] flex flex-col shadow-xl md:shadow-none"
+                            >
+                                <div className="w-[240px] h-full">
+                                    <DataPanel
+                                        columns={columns}
+                                        encoding={chartConfig.encoding}
+                                        onUpdateEncoding={updateEncoding}
+                                    />
+                                </div>
+                            </MotionDiv>
+                        </>
                     )}
                 </AnimatePresence>
 
-                {/* Center: Canvas */}
-                <div className="flex-1 flex flex-col min-w-0 bg-noir relative">
-                    <ChartCanvas
-                        chartData={chartData}
-                        chartConfig={chartConfig}
-                        loading={loading}
-                        pointIntelligence={chartData?.point_intelligence || null}
-                        onAskAI={async () => {
-                            let chartImage = null;
-                            try {
-                                const plotEl = document.querySelector('.js-plotly-plot');
-                                if (plotEl) {
-                                    chartImage = await Plotly.toImage(plotEl, {
-                                        format: 'png', width: 480, height: 280, scale: 2,
-                                    });
+                {/* Center: Canvas Area */}
+                <div className="flex-1 flex flex-col min-w-0 bg-secondary relative">
+
+                    <div className="flex-1 min-h-0 flex flex-col relative z-10 overflow-hidden">
+                        {/* Status / Precision Bar (Zen Style) */}
+                        {selectedDataset?.row_count > 10000 && (
+                            <div className="absolute top-5 right-5 z-50 flex items-center gap-4 animate-in fade-in slide-in-from-top-2 duration-500">
+                                <div className="flex gap-1.5 p-1 bg-surface/60 backdrop-blur-xl border border-border shadow-2xl rounded-full">
+                                    {[
+                                        { label: 'Draft', value: 10000 },
+                                        { label: 'Deep', value: 1000000 },
+                                    ].map(mode => (
+                                        <button
+                                            key={mode.label}
+                                            onClick={() => setRowLimit(mode.value)}
+                                            className={cn(
+                                                "px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all",
+                                                rowLimit === mode.value
+                                                    ? "bg-accent-primary text-white shadow-lg shadow-accent-primary/20"
+                                                    : "text-muted hover:text-header hover:bg-elevated"
+                                            )}
+                                        >
+                                            {mode.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="hidden lg:flex flex-col items-end">
+                                    <span className="text-[10px] font-black text-header/40 uppercase tracking-widest leading-none">Dataset Scale</span>
+                                    <span className="text-[11px] font-black text-accent-primary leading-tight mt-0.5">
+                                        {rowLimit > 100000 ? 'Full Precision' : '10K Samples'}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+
+                        <ChartCanvas
+                            chartData={chartData}
+                            chartConfig={chartConfig}
+                            loading={loading}
+                            onReset={() => {
+                                setChartData(null);
+                                setInsights(null);
+                                setShowInsights(false);
+                                setChartConfig(prev => ({
+                                    ...prev,
+                                    encoding: { x: { field: '', type: '' }, y: { field: '', type: '', aggregate: 'sum' }, group_by: '', color: null, size: null },
+                                }));
+                            }}
+                            onAskAI={async (chip) => {
+                                // If a chip string was passed, use chat context
+                                if (typeof chip === 'string') {
+                                    window.dispatchEvent(new CustomEvent('open-chat-with-context', {
+                                        detail: { prompt: chip, datasetName: selectedDataset?.name || 'dataset' }
+                                    }));
+                                    return;
                                 }
-                            } catch (e) { /* silent */ }
-                            const ctx = {
-                                chartType: chartConfig.chartType,
-                                xField: chartConfig.encoding.x.field,
-                                yField: chartConfig.encoding.y.field,
-                                aggregation: chartConfig.encoding.y.aggregate,
-                                datasetName: selectedDataset?.name || 'dataset',
-                                chartImage,
-                            };
-                            window.dispatchEvent(new CustomEvent('open-chat-with-context', { detail: ctx }));
-                        }}
-                    />
-                    <div className="flex-shrink-0">
+                                // Otherwise trigger deep analysis
+                                await handleDeepAnalysis();
+                            }}
+                        />
+
+                        {/* AI Insights Panel */}
+                        <AnimatePresence>
+                            {showInsights && (
+                                <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    className="shrink-0 border-t border-border overflow-hidden"
+                                >
+                                    <div className="p-5">
+                                        {insightsLoading ? (
+                                            <div className="flex items-center gap-3 text-accent-primary">
+                                                <motion.div
+                                                    animate={{ rotate: 360 }}
+                                                    transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
+                                                    className="w-4 h-4 border-2 border-accent-primary/20 border-t-accent-primary rounded-full"
+                                                />
+                                                <span className="text-[12px] font-bold">Generating deep analysis…</span>
+                                            </div>
+                                        ) : insights ? (
+                                            <div className="relative">
+                                                <button
+                                                    onClick={() => setShowInsights(false)}
+                                                    className="absolute top-0 right-0 p-1.5 rounded-lg text-muted hover:text-header transition-colors"
+                                                    title="Close insights"
+                                                >
+                                                    <X size={14} />
+                                                </button>
+                                                <ChartInsightsCard insights={insights} />
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </div>
+
+                    {/* Integrated Encoding Toolbar */}
+                    <div className="shrink-0 p-3 mt-auto relative z-20">
                         <EncodingBar
                             columns={columns}
                             encoding={chartConfig.encoding}
@@ -522,35 +536,108 @@ const ChartsStudio = () => {
                             showFormatPanel={showFormatPanel}
                             onToggleFormatPanel={() => setShowFormatPanel(!showFormatPanel)}
                             chartData={chartData}
-                            onSave={() => toast.success('Chart saved!')}
-                            onExport={() => toast.success('Exported!')}
+                            onSave={() => toast.success('Workspace saved')}
+                            onExport={() => setShowExportMenu(true)}
                         />
                     </div>
                 </div>
 
-                {/* Right: Format Panel */}
-                <AnimatePresence mode="popLayout">
+                {/* Right: Format Panel — side column on desktop, overlay drawer on mobile */}
+                <AnimatePresence mode="popLayout" initial={false}>
                     {showFormatPanel && (
-                        <MotionDiv
-                            initial={{ width: 0, opacity: 0 }}
-                            animate={{ width: 280, opacity: 1 }}
-                            exit={{ width: 0, opacity: 0 }}
-                            transition={{ duration: 0.2, ease: "easeInOut" }}
-                            className="bg-midnight overflow-hidden flex flex-col"
-                        >
-                            <div className="w-[280px] h-full">
-                                <FormatPanel
-                                    format={chartConfig.format}
-                                    chartType={chartConfig.chartType}
-                                    chartTypes={CHART_TYPES}
-                                    onUpdateFormat={updateFormat}
-                                    onUpdateChartType={updateChartType}
-                                />
-                            </div>
-                        </MotionDiv>
+                        <>
+                            {/* Mobile backdrop */}
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                onClick={() => setShowFormatPanel(false)}
+                                className="fixed inset-0 z-30 bg-black/40 md:hidden"
+                            />
+                            <MotionDiv
+                                initial={{ x: 280, opacity: 0 }}
+                                animate={{ x: 0, opacity: 1 }}
+                                exit={{ x: 280, opacity: 0 }}
+                                transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                                className="fixed md:relative inset-y-0 right-0 z-40 md:z-20 w-[280px] flex flex-col shadow-xl md:shadow-none"
+                            >
+                                <div className="w-[280px] h-full">
+                                    <FormatPanel
+                                        format={chartConfig.format}
+                                        chartType={chartConfig.chartType}
+                                        chartTypes={CHART_TYPES}
+                                        onUpdateFormat={updateFormat}
+                                        onUpdateChartType={updateChartType}
+                                    />
+                                </div>
+                            </MotionDiv>
+                        </>
                     )}
                 </AnimatePresence>
             </div>
+
+            {/* Export Menu Overlay */}
+            <AnimatePresence>
+                {showExportMenu && (
+                    <>
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setShowExportMenu(false)}
+                            className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-md"
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                            className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[101] w-full max-w-sm p-10 rounded-2xl bg-surface shadow-[0_48px_96px_-12px_rgba(0,0,0,0.5)]"
+                        >
+                            <div className="flex items-center justify-between mb-8">
+                                <h3 className="text-lg font-black text-header tracking-tight uppercase">Export Workflow</h3>
+                                <button onClick={() => setShowExportMenu(false)} className="text-muted hover:text-header transition-colors cursor-pointer">
+                                    <X size={20} />
+                                </button>
+                            </div>
+
+                            <div className="grid gap-4">
+                                <button onClick={handleExportPNG} className="flex items-center gap-5 p-5 rounded-xl bg-secondary/30 hover:bg-accent-primary hover:text-white transition-all group cursor-pointer">
+                                    <div className="w-12 h-12 flex items-center justify-center rounded-xl bg-surface shadow-inner">
+                                        <Image size={24} className="text-accent-primary group-hover:text-white transition-colors" />
+                                    </div>
+                                    <div className="text-left">
+                                        <div className="text-[12px] font-black uppercase tracking-wider">Raster (PNG)</div>
+                                        <div className="text-[11px] opacity-40 font-bold mt-0.5 group-hover:opacity-80 transition-opacity">Presentation ready image</div>
+                                    </div>
+                                    <ArrowRight size={16} className="ml-auto opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0" />
+                                </button>
+
+                                <button onClick={handleExportSVG} className="flex items-center gap-5 p-5 rounded-xl bg-secondary/30 hover:bg-accent-purple hover:text-white transition-all group cursor-pointer">
+                                    <div className="w-12 h-12 flex items-center justify-center rounded-xl bg-surface shadow-inner">
+                                        <Maximize2 size={24} className="text-accent-purple group-hover:text-white transition-colors" />
+                                    </div>
+                                    <div className="text-left">
+                                        <div className="text-[12px] font-black uppercase tracking-wider">Vector (SVG)</div>
+                                        <div className="text-[11px] opacity-40 font-bold mt-0.5 group-hover:opacity-80 transition-opacity">Scalable graphics node</div>
+                                    </div>
+                                    <ArrowRight size={16} className="ml-auto opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0" />
+                                </button>
+
+                                <button onClick={handleExportCSV} className="flex items-center gap-5 p-5 rounded-xl bg-secondary/30 hover:bg-accent-secondary hover:text-white transition-all group cursor-pointer">
+                                    <div className="w-12 h-12 flex items-center justify-center rounded-xl bg-surface shadow-inner">
+                                        <FileSpreadsheet size={24} className="text-accent-secondary group-hover:text-white transition-colors" />
+                                    </div>
+                                    <div className="text-left">
+                                        <div className="text-[12px] font-black uppercase tracking-wider">Dataset (CSV)</div>
+                                        <div className="text-[11px] opacity-40 font-bold mt-0.5 group-hover:opacity-80 transition-opacity">Raw computed results</div>
+                                    </div>
+                                    <ArrowRight size={16} className="ml-auto opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0" />
+                                </button>
+                            </div>
+                        </motion.div>
+                    </>
+                )}
+            </AnimatePresence>
         </div>
     );
 };

@@ -18,7 +18,12 @@ import polars as pl
 import json
 
 from services.llm_router import llm_router
-from core.prompts import PromptFactory, PromptType, extract_and_validate, KPIGeneratorResponse
+from core.prompts import (
+    PromptFactory,
+    PromptType,
+    extract_and_validate,
+    KPIGeneratorResponseV2,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +53,7 @@ class IntelligentKPIGenerator:
             max_kpis: Maximum number of KPIs to generate
             dataset_metadata: Full metadata dict from MongoDB (contains domain_intelligence,
                             data_profile, deep_analysis, statistical_findings, etc.)
-        
+
         Returns:
             List of KPI configurations with real data
         """
@@ -60,9 +65,17 @@ class IntelligentKPIGenerator:
             for col in df.columns:
                 dtype = str(df[col].dtype)
                 sample_value = df[col][0] if len(df) > 0 else ""
+                is_numeric = df[col].dtype in pl.NUMERIC_DTYPES
+                valid_aggs = (
+                    ["sum", "mean", "min", "max", "median"]
+                    if is_numeric
+                    else ["count_unique", "first"]
+                )
                 col_info = {
                     "name": col,
                     "type": dtype,
+                    "is_numeric": is_numeric,
+                    "valid_aggs": valid_aggs,
                     "sample_value": sample_value,
                 }
                 column_metadata.append(col_info)
@@ -97,8 +110,12 @@ class IntelligentKPIGenerator:
             if data_profile:
                 prompt_metadata["data_profile"] = {
                     "id_columns": data_profile.get("id_columns", []),
-                    "low_cardinality_dims": data_profile.get("low_cardinality_dims", []),
-                    "high_cardinality_dims": data_profile.get("high_cardinality_dims", []),
+                    "low_cardinality_dims": data_profile.get(
+                        "low_cardinality_dims", []
+                    ),
+                    "high_cardinality_dims": data_profile.get(
+                        "high_cardinality_dims", []
+                    ),
                 }
 
             # Inject deep analysis highlights if available
@@ -121,7 +138,7 @@ class IntelligentKPIGenerator:
                 skewed = [
                     d.get("column", "")
                     for d in enhanced.get("distributions", [])
-                    if abs(d.get("skewness", 0)) > 1.5
+                    if d.get("skewness") is not None and abs(d["skewness"]) > 1.5
                 ]
                 if skewed:
                     prompt_metadata["skewed_columns"] = skewed[:5]
@@ -139,8 +156,9 @@ class IntelligentKPIGenerator:
             )
 
             # Validate and extract
-            result = extract_and_validate(response, KPIGeneratorResponse)
-            kpis = result.kpis[:max_kpis]
+            result = extract_and_validate(response, KPIGeneratorResponseV2)
+            # CRITICAL: Convert Pydantic objects to dicts immediately to avoid '.get()' attribute errors later
+            kpis = [k.model_dump() for k in result.kpis[:max_kpis]]
 
             # Validate columns exist before any Polars access
             kpis = self._validate_kpi_columns(df, kpis)
@@ -148,7 +166,9 @@ class IntelligentKPIGenerator:
             # Compute actual values and real enrichment data
             for kpi in kpis:
                 kpi["value"] = self._calculate_kpi_value(
-                    df, kpi["column"], kpi["aggregation"],
+                    df,
+                    kpi["column"],
+                    kpi["aggregation"],
                     secondary=kpi.get("secondary_column"),
                 )
                 self._enrich_with_real_data(kpi, df, metadata)
@@ -160,7 +180,9 @@ class IntelligentKPIGenerator:
             return kpis
 
         except Exception as e:
-            logger.error(f"Dynamic KPI generation failed: {e} — falling back to domain-aware generic")
+            logger.error(
+                f"Dynamic KPI generation failed: {e} — falling back to domain-aware generic"
+            )
             return self._generate_domain_aware_kpis(df, max_kpis, metadata)
 
     # =========================================================================
@@ -173,6 +195,8 @@ class IntelligentKPIGenerator:
         """
         Validate that LLM-suggested columns exist in the DataFrame.
         Skips KPIs with hallucinated columns, clears invalid secondary columns.
+        Also filters out meaningless KPIs: count_unique on low-cardinality columns
+        (e.g. "Unique Gender: 3") are data-quality stats, not business metrics.
         """
         valid_columns = set(df.columns)
         valid_kpis = []
@@ -185,6 +209,20 @@ class IntelligentKPIGenerator:
                     f"Available: {sorted(valid_columns)[:10]}..."
                 )
                 continue
+
+            # Drop count_unique KPIs on non-numeric columns with very few unique values.
+            # "Unique Gender: 3" tells the user nothing actionable.
+            agg = kpi.get("aggregation", "")
+            if agg in ("count_unique", "nunique") and col in df.columns:
+                if df[col].dtype not in pl.NUMERIC_DTYPES:
+                    n_unique = df[col].n_unique()
+                    if n_unique <= 20:
+                        logger.info(
+                            f"Dropping low-cardinality count_unique KPI: '{kpi.get('title', '?')}' "
+                            f"(column='{col}', n_unique={n_unique})"
+                        )
+                        continue
+
             sec = kpi.get("secondary_column")
             if sec and sec not in valid_columns:
                 logger.warning(
@@ -226,12 +264,25 @@ class IntelligentKPIGenerator:
             kpi["delta_percent"] = comparison["delta_percent"]
             kpi["delta_direction"] = comparison["delta_direction"]
             kpi["context"] = comparison["context"]
+            # Calculate semantic accent color
+            importance = kpi.get("importance", "medium")
+            delta_direction = comparison.get("delta_direction")
+            is_positive = comparison.get("is_positive", True)
+            kpi["is_delta_positive"] = is_positive
+            kpi["accent_color"] = self._calculate_semantic_color(
+                importance, delta_direction, is_positive
+            )
         else:
             kpi["comparison_value"] = None
             kpi["comparison_label"] = ""
             kpi["delta_percent"] = None
             kpi["delta_direction"] = None
-            kpi["context"] = self._calculate_percentile_context(df, column, value, aggregation)
+            kpi["context"] = self._calculate_percentile_context(
+                df, column, value, aggregation
+            )
+            kpi["accent_color"] = self._calculate_semantic_color(
+                kpi.get("importance", "medium"), None, True
+            )
 
         # Percentile position instead of fabricated target
         kpi["target_value"] = None
@@ -280,14 +331,39 @@ class IntelligentKPIGenerator:
             delta_pct = round(((val_second - val_first) / abs(val_first)) * 100, 2)
             direction = "↑" if delta_pct >= 0 else "↓"
             is_meaningful = date_col is not None
-            label = "vs first half (time-sorted)" if is_meaningful else "vs first half (row order)"
+            label = (
+                "vs first half (time-sorted)"
+                if is_meaningful
+                else "vs first half (row order)"
+            )
+            # Determine polarity: cost-like columns have down=good
+            col_lower = column.lower()
+            is_cost_like = any(
+                term in col_lower
+                for term in [
+                    "cost",
+                    "expense",
+                    "loss",
+                    "tax",
+                    "discount",
+                    "defect",
+                    "error",
+                    "fail",
+                ]
+            )
+            is_positive = not is_cost_like  # down is good for costs
 
             return {
                 "previous": round(val_first, 2),
                 "label": label,
                 "delta_percent": delta_pct,
-                "delta_direction": "up" if delta_pct > 0 else "down" if delta_pct < 0 else "neutral",
+                "delta_direction": "up"
+                if delta_pct > 0
+                else "down"
+                if delta_pct < 0
+                else "neutral",
                 "is_meaningful": is_meaningful,
+                "is_positive": is_positive,
                 "context": f"{direction}{abs(delta_pct):.1f}% {label}",
             }
         except Exception as e:
@@ -331,7 +407,9 @@ class IntelligentKPIGenerator:
         except Exception:
             return ""
 
-    def _compute_agg(self, df: pl.DataFrame, column: str, aggregation: str) -> Optional[float]:
+    def _compute_agg(
+        self, df: pl.DataFrame, column: str, aggregation: str
+    ) -> Optional[float]:
         """Compute a single aggregation safely."""
         try:
             if column not in df.columns:
@@ -396,17 +474,19 @@ class IntelligentKPIGenerator:
                 try:
                     binned = (
                         df.sort(date_col)
-                          .with_columns(pl.col(date_col).cast(pl.Date).alias("_spark_date"))
-                          .group_by_dynamic("_spark_date", every="1mo")
-                          .agg(pl.col(column).mean().alias("_spark_val"))
-                          .sort("_spark_date")
-                          .tail(max_points)
+                        .with_columns(
+                            pl.col(date_col).cast(pl.Date).alias("_spark_date")
+                        )
+                        .group_by_dynamic("_spark_date", every="1mo")
+                        .agg(pl.col(column).mean().alias("_spark_val"))
+                        .sort("_spark_date")
+                        .tail(max_points)
                     )
                     values = binned["_spark_val"].drop_nulls().to_list()
                     if len(values) >= 3:
                         return {
                             "data": [round(v, 2) for v in values],
-                            "type": "time_series"
+                            "type": "time_series",
                         }
                 except Exception:
                     pass  # fall through to row sampling
@@ -414,8 +494,10 @@ class IntelligentKPIGenerator:
             # Fallback: row sampling (existing logic)
             values = df[column].to_list()
             numeric_values = [
-                v for v in values
-                if isinstance(v, (int, float)) and v is not None
+                v
+                for v in values
+                if isinstance(v, (int, float))
+                and v is not None
                 and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
             ]
 
@@ -423,11 +505,23 @@ class IntelligentKPIGenerator:
                 return []
 
             step = max(1, len(numeric_values) // max_points)
-            sampled = [numeric_values[i] for i in range(0, len(numeric_values), step)][:max_points]
+            sampled = [numeric_values[i] for i in range(0, len(numeric_values), step)][
+                :max_points
+            ]
+
+            # Enterprise smoothing: 3-point moving average to reduce noise
+            if len(sampled) >= 5:
+                smoothed = []
+                for i in range(len(sampled)):
+                    start_idx = max(0, i - 1)
+                    end_idx = min(len(sampled), i + 2)
+                    window = sampled[start_idx:end_idx]
+                    smoothed.append(sum(window) / len(window))
+                sampled = smoothed
 
             return {
                 "data": [round(v, 2) if isinstance(v, float) else v for v in sampled],
-                "type": "distribution"
+                "type": "distribution",
             }
 
         except Exception as e:
@@ -438,24 +532,91 @@ class IntelligentKPIGenerator:
     # FORMAT INFERENCE (kept — was already working correctly)
     # =========================================================================
 
+    def _calculate_semantic_color(
+        self,
+        importance: str,
+        delta_direction: Optional[str],
+        is_positive: bool,
+    ) -> str:
+        """
+        Calculate semantic accent color based on enterprise color decision tree.
+
+        Logic:
+        - hero = "teal" always
+        - neutral delta = "neutral"
+        - up + positive = "green" (revenue up = good)
+        - down + positive = "red" (revenue down = bad)
+        - up + negative = "red" (cost up = bad)
+        - down + negative = "green" (cost down = good)
+        """
+        if importance == "hero":
+            return "teal"
+
+        if delta_direction is None or delta_direction == "neutral":
+            return "neutral"
+
+        if is_positive:
+            # Higher = better (revenue, efficiency, volume)
+            return "green" if delta_direction == "up" else "red"
+        else:
+            # Lower = better (cost, defects, tax)
+            return "green" if delta_direction == "down" else "red"
+
     def _infer_format(self, column: str, value: Any) -> str:
         """Infer the appropriate display format for a KPI."""
+        import re
+
         col_lower = (column or "").lower()
 
-        if any(term in col_lower for term in [
-            "price", "revenue", "sales", "cost", "amount", "total",
-            "profit", "income", "expense", "budget", "salary", "fee",
-        ]):
+        if any(
+            term in col_lower
+            for term in [
+                "price",
+                "revenue",
+                "sales",
+                "cost",
+                "amount",
+                "total",
+                "profit",
+                "income",
+                "expense",
+                "budget",
+                "salary",
+                "fee",
+            ]
+        ):
             return "currency"
 
-        if any(term in col_lower for term in [
-            "rate", "ratio", "percent", "pct", "growth", "change", "margin",
-        ]):
+        # Fix: Use regex word boundaries to prevent matching "duration" as "ratio"
+        if re.search(
+            r"\b(rate|ratio|percent|pct|growth|change|margin|efficiency)\b", col_lower
+        ):
             return "percentage"
 
-        if any(term in col_lower for term in [
-            "count", "quantity", "qty", "units", "number", "num",
-        ]):
+        if any(
+            term in col_lower
+            for term in [
+                "duration",
+                "ms",
+                "seconds",
+                "sec",
+                "time_spent",
+            ]
+        ):
+            # Use 'number' or 'integer' for raw ms, frontend formatting handles human-readability
+            return "integer"
+
+        if any(
+            term in col_lower
+            for term in [
+                "count",
+                "quantity",
+                "qty",
+                "units",
+                "number",
+                "num",
+            ]
+        ):
             return "integer"
 
         if isinstance(value, float) and 0 <= value <= 1:
@@ -482,7 +643,16 @@ class IntelligentKPIGenerator:
             is_numeric = df[column].dtype in pl.NUMERIC_DTYPES
 
             # Guard: redirect non-numeric columns to count-based aggregations
-            if not is_numeric and aggregation in ("sum", "mean", "avg", "max", "min", "std", "range", "pct_change"):
+            if not is_numeric and aggregation in (
+                "sum",
+                "mean",
+                "avg",
+                "max",
+                "min",
+                "std",
+                "range",
+                "pct_change",
+            ):
                 logger.warning(
                     f"Aggregation '{aggregation}' invalid for non-numeric column '{column}' "
                     f"(dtype={df[column].dtype}) — falling back to count_unique"
@@ -507,7 +677,7 @@ class IntelligentKPIGenerator:
                 # Return structured data — frontend formats as "min – max"
                 return {
                     "min": round(float(df[column].min()), 2),
-                    "max": round(float(df[column].max()), 2)
+                    "max": round(float(df[column].max()), 2),
                 }
             elif aggregation == "pct_change":
                 if not secondary:
@@ -526,11 +696,19 @@ class IntelligentKPIGenerator:
             elif aggregation == "std":
                 return round(float(df[column].std()), 2)
             elif aggregation in ("ratio", "percentage") and secondary:
-                # Unified: always compute as percentage (value * 100)
-                # Eliminates ambiguity — frontend always shows as X%
-                denom = df[secondary].count()
-                if denom > 0:
-                    return round((df[column].sum() / denom) * 100, 1)
+                # Enterprise Fix: Correct ratio logic (Sum/Sum for numeric, Sum/Count for categorical)
+                num = df[column].sum()
+                if df[secondary].dtype in pl.NUMERIC_DTYPES:
+                    denom = df[secondary].sum()
+                else:
+                    denom = df[secondary].count()
+
+                if denom and denom != 0:
+                    val = num / denom
+                    # If it's very small, don't multiply by 100 arbitrarily unless specified
+                    if aggregation == "percentage":
+                        return round(val * 100, 2)
+                    return round(val, 4)
                 return 0
             else:
                 return df[column].sum()
@@ -571,7 +749,8 @@ class IntelligentKPIGenerator:
 
         # Fall back to numeric columns if no domain info
         numeric_cols = [
-            col for col in df.select(pl.col(pl.NUMERIC_DTYPES)).columns
+            col
+            for col in df.select(pl.col(pl.NUMERIC_DTYPES)).columns
             if col not in skip_cols
         ]
         if not preferred_cols:
@@ -589,34 +768,14 @@ class IntelligentKPIGenerator:
                     "value": value,
                     "column": col,
                     "aggregation": aggregation,
-                    "importance": "high" if col in domain_intel.get("key_metrics", []) else "medium",
+                    "importance": "high"
+                    if col in domain_intel.get("key_metrics", [])
+                    else "medium",
                 }
                 self._enrich_with_real_data(kpi, df, metadata)
                 kpis.append(kpi)
             except Exception:
                 continue
-
-        # Add a count-based KPI if we have room
-        if len(kpis) < max_kpis:
-            dims = domain_intel.get("dimensions", [])
-            low_card = data_profile.get("low_cardinality_dims", [])
-            cat_cols = dims or low_card
-
-            for col in cat_cols:
-                if col in df.columns and len(kpis) < max_kpis:
-                    try:
-                        unique_count = int(df[col].n_unique())
-                        kpi = {
-                            "title": f"Unique {self._humanize_column_name(col, 'count_unique')}",
-                            "value": unique_count,
-                            "column": col,
-                            "aggregation": "count_unique",
-                            "importance": "medium",
-                        }
-                        self._enrich_with_real_data(kpi, df, metadata)
-                        kpis.append(kpi)
-                    except Exception:
-                        continue
 
         return kpis[:max_kpis]
 
@@ -625,30 +784,64 @@ class IntelligentKPIGenerator:
         col_lower = column.lower()
 
         # Revenue/sales/cost → sum
-        if any(term in col_lower for term in [
-            "revenue", "sales", "cost", "total", "amount", "income", "profit",
-            "expense", "budget", "fee", "salary",
-        ]):
+        if any(
+            term in col_lower
+            for term in [
+                "revenue",
+                "sales",
+                "cost",
+                "total",
+                "amount",
+                "income",
+                "profit",
+                "expense",
+                "budget",
+                "fee",
+                "salary",
+            ]
+        ):
             return "sum"
 
         # Rate/ratio/percentage → mean
-        if any(term in col_lower for term in [
-            "rate", "ratio", "percent", "pct", "average", "avg", "score",
-            "rating", "index", "margin",
-        ]):
+        if any(
+            term in col_lower
+            for term in [
+                "rate",
+                "ratio",
+                "percent",
+                "pct",
+                "average",
+                "avg",
+                "score",
+                "rating",
+                "index",
+                "margin",
+            ]
+        ):
             return "mean"
 
         # Count-like → count_unique
-        if any(term in col_lower for term in [
-            "id", "name", "category", "type", "status",
-        ]):
+        if any(
+            term in col_lower
+            for term in [
+                "id",
+                "name",
+                "category",
+                "type",
+                "status",
+            ]
+        ):
             return "count_unique"
 
         # Default: check value range — if all similar values, use mean; if varied, use sum
         try:
             col_data = df[column].drop_nulls()
             if len(col_data) > 0:
-                cv = float(col_data.std()) / float(col_data.mean()) if float(col_data.mean()) != 0 else 0
+                cv = (
+                    float(col_data.std()) / float(col_data.mean())
+                    if float(col_data.mean()) != 0
+                    else 0
+                )
                 if cv < 0.3:
                     return "mean"  # Low variance → average is meaningful
                 return "sum"

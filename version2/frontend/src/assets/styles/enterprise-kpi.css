@@ -1,8 +1,8 @@
 /**
- * Enterprise KPI Design System
+ * Enterprise KPI Design System v2
  * 
- * Professional design tokens for B2B analytics dashboards.
- * Inspired by Power BI, Tableau, and Looker design patterns.
+ * Clean, readable design tokens for analytics dashboards.
+ * Based on reference color scheme with improved typography.
  */
 
 /* ============================================
@@ -11,67 +11,68 @@
 
 :root {
   /* Primary Backgrounds */
-  --kpi-bg-primary: rgb(15, 23, 42);           /* Slate 900 */
-  --kpi-bg-secondary: rgb(30, 41, 59);         /* Slate 800 */
-  --kpi-bg-elevated: rgb(51, 65, 85);          /* Slate 700 */
+  --kpi-bg-primary: #161618;
+  --kpi-bg-secondary: #1F1F23;
+  --kpi-bg-elevated: #252529;
   
   /* Borders */
-  --kpi-border-default: rgb(51, 65, 85);       /* Slate 700 */
-  --kpi-border-hover: rgb(71, 85, 105);        /* Slate 600 */
-  --kpi-border-accent: rgb(100, 116, 139);     /* Slate 500 */
+  --kpi-border-default: #2E2E30;
+  --kpi-border-hover: #3E3E42;
+  --kpi-border-accent: rgba(139, 92, 246, 0.3);
   
-  /* Text Hierarchy */
-  --kpi-text-primary: rgb(248, 250, 252);      /* Slate 50 */
-  --kpi-text-secondary: rgb(203, 213, 225);    /* Slate 300 */
-  --kpi-text-muted: rgb(148, 163, 184);        /* Slate 400 */
-  --kpi-text-disabled: rgb(100, 116, 139);     /* Slate 500 */
+  /* Text Hierarchy - Improved for readability */
+  --kpi-text-primary: #FFFFFF;
+  --kpi-text-secondary: #E5E5E5;
+  --kpi-text-muted: #98989F;
+  --kpi-text-disabled: #6B6B70;
   
-  /* Status Colors - Power BI Inspired */
-  --status-success: rgb(16, 185, 129);         /* Emerald 500 */
-  --status-success-bg: rgba(16, 185, 129, 0.1);
-  --status-success-border: rgba(16, 185, 129, 0.3);
+  /* Status Colors */
+  --status-success: #10B981;
+  --status-success-bg: rgba(16, 185, 129, 0.12);
+  --status-success-border: rgba(16, 185, 129, 0.25);
   
-  --status-warning: rgb(245, 158, 11);         /* Amber 500 */
-  --status-warning-bg: rgba(245, 158, 11, 0.1);
-  --status-warning-border: rgba(245, 158, 11, 0.3);
+  --status-warning: #F59E0B;
+  --status-warning-bg: rgba(245, 158, 11, 0.12);
+  --status-warning-border: rgba(245, 158, 11, 0.25);
   
-  --status-critical: rgb(239, 68, 68);         /* Red 500 */
-  --status-critical-bg: rgba(239, 68, 68, 0.1);
-  --status-critical-border: rgba(239, 68, 68, 0.3);
+  --status-critical: #EF4444;
+  --status-critical-bg: rgba(239, 68, 68, 0.12);
+  --status-critical-border: rgba(239, 68, 68, 0.25);
   
-  --status-neutral: rgb(100, 116, 139);        /* Slate 500 */
-  --status-neutral-bg: rgba(100, 116, 139, 0.1);
-  --status-neutral-border: rgba(100, 116, 139, 0.3);
+  --status-neutral: #98989F;
+  --status-neutral-bg: rgba(152, 152, 159, 0.12);
+  --status-neutral-border: rgba(152, 152, 159, 0.25);
   
-  /* Information Colors */
-  --info-primary: rgb(59, 130, 246);           /* Blue 500 */
-  --info-bg: rgba(59, 130, 246, 0.1);
+  /* Primary Accent - Purple */
+  --accent-primary: #8B5CF6;
+  --accent-primary-bg: rgba(139, 92, 246, 0.12);
+  --accent-primary-border: rgba(139, 92, 246, 0.25);
   
-  /* Typography Scale */
-  --kpi-font-display: 2.25rem;                 /* 36px - Hero metrics */
-  --kpi-font-headline: 1.5rem;                 /* 24px - Section titles */
-  --kpi-font-title: 1rem;                      /* 16px - Card titles */
-  --kpi-font-body: 0.875rem;                   /* 14px - Body text */
-  --kpi-font-label: 0.75rem;                   /* 12px - Labels */
-  --kpi-font-caption: 0.6875rem;               /* 11px - Captions */
+  /* Typography Scale - Improved for visibility */
+  --kpi-font-display: 2.5rem;
+  --kpi-font-headline: 1.5rem;
+  --kpi-font-title: 1.125rem;
+  --kpi-font-body: 0.9375rem;
+  --kpi-font-label: 0.8125rem;
+  --kpi-font-caption: 0.75rem;
   
   /* Spacing Scale */
-  --kpi-space-xs: 0.25rem;                     /* 4px */
-  --kpi-space-sm: 0.5rem;                      /* 8px */
-  --kpi-space-md: 1rem;                        /* 16px */
-  --kpi-space-lg: 1.5rem;                      /* 24px */
-  --kpi-space-xl: 2rem;                        /* 32px */
+  --kpi-space-xs: 0.25rem;
+  --kpi-space-sm: 0.5rem;
+  --kpi-space-md: 1rem;
+  --kpi-space-lg: 1.5rem;
+  --kpi-space-xl: 2rem;
   
   /* Border Radius */
-  --kpi-radius-sm: 0.375rem;                   /* 6px */
-  --kpi-radius-md: 0.5rem;                     /* 8px */
-  --kpi-radius-lg: 0.75rem;                    /* 12px */
-  --kpi-radius-xl: 1rem;                       /* 16px */
+  --kpi-radius-sm: 0.375rem;
+  --kpi-radius-md: 0.5rem;
+  --kpi-radius-lg: 0.75rem;
+  --kpi-radius-xl: 1rem;
   
-  /* Shadows - Professional, subtle */
-  --kpi-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --kpi-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
-  --kpi-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  /* Shadows */
+  --kpi-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --kpi-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --kpi-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
   
   /* Transitions */
   --kpi-transition-fast: 150ms ease;
@@ -115,7 +116,7 @@
 }
 
 /* ============================================
-   TYPOGRAPHY UTILITIES
+   TYPOGRAPHY UTILITIES - Improved sizes
    ============================================ */
 
 .kpi-label {
@@ -129,7 +130,7 @@
 .kpi-value {
   font-size: var(--kpi-font-display);
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.02em;
   color: var(--kpi-text-primary);
   line-height: 1.1;
 }
@@ -164,15 +165,15 @@
    ============================================ */
 
 .kpi-progress-track {
-  height: 6px;
+  height: 8px;
   background: var(--kpi-bg-secondary);
-  border-radius: 3px;
+  border-radius: 4px;
   overflow: hidden;
 }
 
 .kpi-progress-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 4px;
   transition: width var(--kpi-transition-slow);
 }
 
@@ -202,8 +203,8 @@
    ============================================ */
 
 .kpi-status-icon {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: var(--kpi-radius-md);
   display: flex;
   align-items: center;
@@ -244,7 +245,7 @@
   font-size: var(--kpi-font-headline);
   font-weight: 700;
   color: var(--kpi-text-primary);
-  letter-spacing: -0.025em;
+  letter-spacing: -0.02em;
 }
 
 .dashboard-header__subtitle {
@@ -322,3 +323,104 @@
   height: 1px;
   background: var(--kpi-border-default);
 }
+
+/* ============================================
+   IMPROVED BADGE STYLES
+   ============================================ */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.badge-success {
+  background: var(--status-success-bg);
+  color: var(--status-success);
+  border: 1px solid var(--status-success-border);
+}
+
+.badge-warning {
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
+  border: 1px solid var(--status-warning-border);
+}
+
+.badge-critical {
+  background: var(--status-critical-bg);
+  color: var(--status-critical);
+  border: 1px solid var(--status-critical-border);
+}
+
+.badge-accent {
+  background: var(--accent-primary-bg);
+  color: var(--accent-primary);
+  border: 1px solid var(--accent-primary-border);
+}
+
+/* ============================================
+   CHART CARD BASE
+   ============================================ */
+
+.chart-card {
+  background: var(--kpi-bg-primary);
+  border: 1px solid var(--kpi-border-default);
+  border-radius: var(--kpi-radius-lg);
+  overflow: hidden;
+  transition: all var(--kpi-transition-normal);
+}
+
+.chart-card:hover {
+  border-color: var(--kpi-border-hover);
+  box-shadow: var(--kpi-shadow-md);
+}
+
+.chart-card__header {
+  padding: var(--kpi-space-md) var(--kpi-space-lg);
+  border-bottom: 1px solid var(--kpi-border-default);
+}
+
+.chart-card__title {
+  font-size: var(--kpi-font-title);
+  font-weight: 600;
+  color: var(--kpi-text-primary);
+  letter-spacing: -0.01em;
+}
+
+.chart-card__body {
+  padding: var(--kpi-space-md);
+}
+
+/* ============================================
+   TABLE STYLES
+   ============================================ */
+/* 
+.data-table {
+  width: 100%;
+  font-size: var(--kpi-font-body);
+}
+
+.data-table th {
+  font-size: var(--kpi-font-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--kpi-text-muted);
+  padding: var(--kpi-space-sm) var(--kpi-space-md);
+  text-align: left;
+  border-bottom: 1px solid var(--kpi-border-default);
+}
+
+.data-table td {
+  color: var(--kpi-text-secondary);
+  padding: var(--kpi-space-sm) var(--kpi-space-md);
+  border-bottom: 1px solid var(--kpi-border-default);
+}
+
+.data-table tr:hover td {
+  background: var(--kpi-bg-secondary);
+} */

@@ -87,7 +87,7 @@ const ERROR_CONFIGS = {
 const detectErrorType = (error) => {
   const errorStr = typeof error === 'string' ? error : error?.message || error?.detail || '';
   const errorLower = errorStr.toLowerCase();
-  
+
   if (errorLower.includes('429') || errorLower.includes('rate') || errorLower.includes('limit') || errorLower.includes('high demand')) {
     return 'rate_limit';
   }
@@ -106,20 +106,20 @@ const detectErrorType = (error) => {
 /**
  * ChatErrorDisplay Component
  */
-export const ChatErrorDisplay = ({ 
-  error, 
-  onRetry, 
+export const ChatErrorDisplay = ({
+  error,
+  onRetry,
   onDismiss,
-  className 
+  className
 }) => {
   const errorType = detectErrorType(error);
   const config = ERROR_CONFIGS[errorType];
   const Icon = config.icon;
-  
-  const errorMessage = typeof error === 'string' 
-    ? error 
+
+  const errorMessage = typeof error === 'string'
+    ? error
     : error?.message || error?.detail || 'An unexpected error occurred';
-  
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -139,47 +139,47 @@ export const ChatErrorDisplay = ({
         <div className="flex items-start gap-3">
           <div className={cn(
             "w-10 h-10 rounded-lg flex items-center justify-center",
-            "bg-black/20"
+            "bg-surface/40"
           )}>
             <Icon className={cn("w-5 h-5", config.iconColor)} />
           </div>
-          
+
           <div className="flex-1 min-w-0">
-            <h4 className="font-semibold text-white text-sm mb-1">
+            <h4 className="font-semibold text-header text-sm mb-1">
               {config.title}
             </h4>
-            <p className="text-slate-300 text-sm leading-relaxed">
+            <p className="text-secondary text-sm leading-relaxed">
               {errorMessage}
             </p>
           </div>
-          
+
           {onDismiss && (
-            <button 
+            <button
               onClick={onDismiss}
               aria-label="Dismiss error"
-              className="p-1 hover:bg-white/10 rounded-lg transition-colors"
+              className="p-1 hover:bg-elevated/40 rounded-lg transition-colors"
             >
-              <XCircle className="w-4 h-4 text-slate-400" />
+              <XCircle className="w-4 h-4 text-muted" />
             </button>
           )}
         </div>
-        
+
         {/* Suggestions */}
-        <div className="mt-4 pt-3 border-t border-white/10">
-          <p className="text-xs text-slate-400 mb-2 flex items-center gap-1.5">
+        <div className="mt-4 pt-3 border-t border-border/10">
+          <p className="text-xs text-muted mb-2 flex items-center gap-1.5">
             <Info className="w-3 h-3" />
             What you can do:
           </p>
           <ul className="space-y-1.5">
             {config.suggestions.map((suggestion, i) => (
-              <li key={i} className="text-sm text-slate-300 flex items-start gap-2">
-                <span className="text-slate-500 mt-0.5">•</span>
+              <li key={i} className="text-sm text-secondary flex items-start gap-2">
+                <span className="text-muted mt-0.5">•</span>
                 {suggestion}
               </li>
             ))}
           </ul>
         </div>
-        
+
         {/* Action buttons */}
         {onRetry && (
           <div className="mt-4 flex gap-2">
@@ -187,7 +187,7 @@ export const ChatErrorDisplay = ({
               onClick={onRetry}
               className={cn(
                 "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium",
-                "bg-white/10 hover:bg-white/20 text-white transition-colors"
+                "bg-elevated/40 hover:bg-elevated/60 text-header transition-colors border border-border"
               )}
             >
               <RefreshCw className="w-4 h-4" />
@@ -203,18 +203,18 @@ export const ChatErrorDisplay = ({
 /**
  * RateLimitBanner - Shows when approaching rate limit
  */
-export const RateLimitBanner = ({ 
-  remaining, 
+export const RateLimitBanner = ({
+  remaining,
   total = 30,
-  onClose 
+  onClose
 }) => {
   if (!total) return null; // Avoid division by zero
   const percentage = (remaining / total) * 100;
   const isLow = percentage <= 20;
   const isCritical = percentage <= 10;
-  
+
   if (percentage > 50) return null; // Don't show if plenty remaining
-  
+
   return (
     <motion.div
       initial={{ opacity: 0, y: -10 }}
@@ -223,9 +223,9 @@ export const RateLimitBanner = ({
       className={cn(
         "mx-4 mb-2 px-4 py-2.5 rounded-lg flex items-center justify-between",
         "border",
-        isCritical 
-          ? "bg-red-500/10 border-red-500/30" 
-          : isLow 
+        isCritical
+          ? "bg-red-500/10 border-red-500/30"
+          : isLow
             ? "bg-amber-500/10 border-amber-500/30"
             : "bg-blue-500/10 border-blue-500/30"
       )}
@@ -235,8 +235,8 @@ export const RateLimitBanner = ({
           "w-4 h-4",
           isCritical ? "text-red-400" : isLow ? "text-amber-400" : "text-blue-400"
         )} />
-        <span className="text-sm text-slate-300">
-          {isCritical 
+        <span className="text-sm text-secondary">
+          {isCritical
             ? `Only ${remaining} requests left! AI may become unavailable.`
             : isLow
               ? `${remaining} requests remaining. Consider spacing out queries.`
@@ -244,14 +244,14 @@ export const RateLimitBanner = ({
           }
         </span>
       </div>
-      
+
       {onClose && (
-        <button 
+        <button
           onClick={onClose}
           aria-label="Close"
-          className="p-1 hover:bg-white/10 rounded transition-colors"
+          className="p-1 hover:bg-elevated/10 rounded transition-colors"
         >
-          <XCircle className="w-4 h-4 text-slate-400" />
+          <XCircle className="w-4 h-4 text-muted" />
         </button>
       )}
     </motion.div>
@@ -261,10 +261,10 @@ export const RateLimitBanner = ({
 /**
  * ConnectionStatus - Shows WebSocket connection state
  */
-export const ConnectionStatus = ({ 
-  isConnected, 
+export const ConnectionStatus = ({
+  isConnected,
   isReconnecting,
-  className 
+  className
 }) => {
   return (
     <div className={cn(
@@ -292,38 +292,49 @@ export const ConnectionStatus = ({
 };
 
 /**
- * TypingIndicator - Shows when AI is thinking/typing
+ * Professional ThinkingDots - GitHub Copilot-style smooth animation
+ * Replaces TypingIndicator for a more professional look
  */
-export const TypingIndicator = ({ 
-  stage = 'thinking', // 'thinking' | 'generating' | 'chart'
-  className 
+export const ThinkingDots = ({
+  stage = 'analyzing', // 'analyzing' | 'processing' | 'generating' | 'reanalyzing'
+  className
 }) => {
   const stages = {
-    thinking: { text: 'Analyzing your question...', icon: '🤔' },
-    generating: { text: 'Generating response...', icon: '✨' },
-    chart: { text: 'Creating visualization...', icon: '📊' }
+    analyzing: 'Analyzing your question',
+    processing: 'Processing data',
+    generating: 'Generating insights',
+    reanalyzing: 'Reanalyzing'
   };
-  
-  const current = stages[stage] || stages.thinking;
-  
+
+  const text = stages[stage] || stages.analyzing;
+
   return (
-    <div className={cn(
-      "flex items-center gap-2 text-sm text-slate-400",
-      className
-    )}>
-      <span>{current.icon}</span>
-      <span>{current.text}</span>
-      <div className="flex gap-1">
-        {[0, 1, 2].map(i => (
-          <span 
-            key={i}
-            className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce"
-            style={{ animationDelay: `${i * 150}ms` }}
-          />
-        ))}
+    <div className={cn("thinking-indicator", className)}>
+      <div className="thinking-dots">
+        <span className="dot" />
+        <span className="dot" />
+        <span className="dot" />
       </div>
+      <span className="thinking-text">{text}...</span>
     </div>
   );
+};
+
+/**
+ * TypingIndicator - Legacy component, now uses ThinkingDots internally
+ */
+export const TypingIndicator = ({
+  stage = 'thinking', // 'thinking' | 'generating' | 'chart'
+  className
+}) => {
+  // Map old stages to new stages
+  const stageMap = {
+    thinking: 'analyzing',
+    generating: 'generating',
+    chart: 'processing'
+  };
+
+  return <ThinkingDots stage={stageMap[stage] || 'analyzing'} className={className} />;
 };
 
 /**
@@ -345,16 +356,16 @@ export const ThinkingSteps = ({ steps, isStreaming = false, className }) => {
       <button
         type="button"
         onClick={() => setIsOpen(v => !v)}
-        className="flex items-center gap-1 text-slate-400 hover:text-slate-300 transition-colors group"
+        className="flex items-center gap-1 text-muted hover:text-secondary transition-colors group"
       >
         <ChevronRight
           size={13}
           className={cn(
-            'transition-transform duration-200 text-slate-500 group-hover:text-slate-400',
+            'transition-transform duration-200 text-muted group-hover:text-secondary',
             isOpen && 'rotate-90'
           )}
         />
-        <span className="text-xs text-slate-400 font-medium">
+        <span className="text-xs text-muted font-medium">
           {isStreaming ? `Used ${steps.length} steps` : 'Thinking...'}
         </span>
       </button>
@@ -375,13 +386,13 @@ export const ThinkingSteps = ({ steps, isStreaming = false, className }) => {
                 return (
                   <div key={i} className="flex items-center gap-2">
                     {isActive ? (
-                      <Loader2 size={11} className="text-blue-400 animate-spin shrink-0" />
+                      <Loader2 size={11} className="text-accent-primary animate-spin shrink-0" />
                     ) : (
-                      <CheckCircle2 size={11} className="text-slate-600 shrink-0" />
+                      <CheckCircle2 size={11} className="text-muted shrink-0" />
                     )}
                     <span className={cn(
                       'text-xs',
-                      isActive ? 'text-slate-300' : 'text-slate-500'
+                      isActive ? 'text-secondary' : 'text-muted'
                     )}>
                       {step}
                     </span>

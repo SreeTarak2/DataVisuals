@@ -33,12 +33,12 @@ const CodeBlock = ({ language, children }) => {
     const langLabel = LANG_LABELS[language?.toLowerCase()] || language?.toUpperCase() || 'CODE';
 
     return (
-        <div className="my-4 rounded-xl overflow-hidden border border-slate-700/60 bg-[#0d1117] shadow-lg">
+        <div className="my-4 rounded-xl overflow-hidden border border-border bg-surface shadow-lg">
             {/* Header bar */}
-            <div className="flex items-center justify-between px-4 py-2.5 bg-[#161b22] border-b border-slate-700/60">
+            <div className="flex items-center justify-between px-4 py-2.5 bg-elevated/50 border-b border-border">
                 <div className="flex items-center gap-2">
-                    <FileCode size={14} className="text-slate-400" />
-                    <span className="text-xs font-medium text-slate-400 tracking-wide">{langLabel}</span>
+                    <FileCode size={14} className="text-muted" />
+                    <span className="text-xs font-medium text-muted tracking-wide">{langLabel}</span>
                 </div>
                 <button
                     onClick={handleCopy}
@@ -46,7 +46,7 @@ const CodeBlock = ({ language, children }) => {
                         "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all duration-200",
                         copied
                             ? "bg-green-500/15 text-green-400"
-                            : "hover:bg-slate-700/50 text-slate-400 hover:text-slate-200"
+                            : "hover:bg-elevated/80 text-muted hover:text-secondary"
                     )}
                 >
                     {copied ? <Check size={13} /> : <Copy size={13} />}
@@ -54,7 +54,7 @@ const CodeBlock = ({ language, children }) => {
                 </button>
             </div>
             {/* Code content */}
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto bg-[#0d1117]">
                 <SyntaxHighlighter
                     language={language || 'text'}
                     style={oneDark}
@@ -87,7 +87,7 @@ const CodeBlock = ({ language, children }) => {
 // Inline Code
 // ─────────────────────────────────────────────
 const InlineCode = ({ children }) => (
-    <code className="bg-slate-700/50 text-emerald-300 px-1.5 py-0.5 rounded-md text-[13px] font-semibold border border-slate-600/30">
+    <code className="bg-elevated/60 text-emerald-400 px-1.5 py-0.5 rounded-md text-[13px] font-semibold border border-border/40">
         {children}
     </code>
 );
@@ -96,12 +96,12 @@ const InlineCode = ({ children }) => (
 // Table (Premium with scroll container)
 // ─────────────────────────────────────────────
 const TableBlock = ({ children }) => (
-    <div className="my-4 rounded-xl overflow-hidden border border-slate-700/60 shadow-lg">
-        <div className="flex items-center gap-2 px-4 py-2.5 bg-[#161b22] border-b border-slate-700/60">
-            <Table2 size={14} className="text-slate-400" />
-            <span className="text-xs font-medium text-slate-400 tracking-wide">TABLE</span>
+    <div className="my-4 rounded-xl overflow-hidden border border-border shadow-lg">
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-elevated/50 border-b border-border">
+            <Table2 size={14} className="text-muted" />
+            <span className="text-xs font-medium text-muted tracking-wide">TABLE</span>
         </div>
-        <div className="overflow-x-auto bg-[#0d1117]">
+        <div className="overflow-x-auto bg-surface">
             <table className="w-full text-sm border-collapse">
                 {children}
             </table>
@@ -110,28 +110,28 @@ const TableBlock = ({ children }) => (
 );
 
 const TableHead = ({ children }) => (
-    <thead className="bg-[#161b22]">
+    <thead className="bg-elevated/30">
         {children}
     </thead>
 );
 
 const TableRow = ({ children, isHeader }) => (
     <tr className={cn(
-        "border-b border-slate-700/40 transition-colors",
-        !isHeader && "hover:bg-slate-800/40"
+        "border-b border-border/40 transition-colors",
+        !isHeader && "hover:bg-elevated/40"
     )}>
         {children}
     </tr>
 );
 
 const TableHeader = ({ children }) => (
-    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap">
+    <th className="px-4 py-3 text-left text-xs font-semibold text-secondary uppercase tracking-wider whitespace-nowrap">
         {children}
     </th>
 );
 
 const TableCell = ({ children }) => (
-    <td className="px-4 py-3 text-slate-300 whitespace-nowrap text-[13.5px]">
+    <td className="px-4 py-3 text-secondary whitespace-nowrap text-[13.5px]">
         {children}
     </td>
 );
@@ -140,9 +140,9 @@ const TableCell = ({ children }) => (
 // Blockquote / Callout
 // ─────────────────────────────────────────────
 const BlockquoteBlock = ({ children }) => (
-    <div className="my-4 flex rounded-xl overflow-hidden border border-blue-500/20 bg-blue-500/5">
-        <div className="w-1 bg-blue-500/60 flex-shrink-0" />
-        <div className="px-4 py-3 text-[15px] text-blue-200/90 leading-relaxed [&>p]:mb-0">
+    <div className="my-4 flex rounded-xl overflow-hidden border border-accent-primary/20 bg-accent-primary/5">
+        <div className="w-1 bg-accent-primary/60 flex-shrink-0" />
+        <div className="px-4 py-3 text-[15px] text-secondary leading-relaxed [&>p]:mb-0">
             {children}
         </div>
     </div>
@@ -152,19 +152,19 @@ const BlockquoteBlock = ({ children }) => (
 // Headings
 // ─────────────────────────────────────────────
 const H1 = ({ children }) => (
-    <h1 className="text-xl font-bold text-white mt-6 mb-3 pb-2 border-b border-slate-700/50">
+    <h1 className="text-xl font-bold text-header mt-6 mb-3 pb-2 border-b border-border">
         {children}
     </h1>
 );
 
 const H2 = ({ children }) => (
-    <h2 className="text-lg font-semibold text-white mt-5 mb-2.5">
+    <h2 className="text-lg font-semibold text-header mt-5 mb-2.5">
         {children}
     </h2>
 );
 
 const H3 = ({ children }) => (
-    <h3 className="text-base font-semibold text-slate-200 mt-4 mb-2">
+    <h3 className="text-base font-semibold text-secondary mt-4 mb-2">
         {children}
     </h3>
 );
@@ -173,19 +173,19 @@ const H3 = ({ children }) => (
 // Text Elements
 // ─────────────────────────────────────────────
 const Paragraph = ({ children }) => (
-    <p className="mb-3 last:mb-0 leading-[1.65] text-[16px] text-slate-100 break-words">
+    <p className="mb-3 last:mb-0 leading-[1.65] text-[16px] text-primary break-words">
         {children}
     </p>
 );
 
 const Strong = ({ children }) => (
-    <strong className="font-semibold text-white">
+    <strong className="font-semibold text-header">
         {children}
     </strong>
 );
 
 const Emphasis = ({ children }) => (
-    <em className="italic text-slate-300">
+    <em className="italic text-secondary">
         {children}
     </em>
 );
@@ -217,8 +217,8 @@ const OrderedList = ({ children }) => (
 );
 
 const ListItem = ({ children, ordered, index }) => (
-    <li className="flex gap-2.5 text-[15px] leading-[1.75] text-slate-200">
-        <span className="flex-shrink-0 mt-[3px] text-slate-500 select-none">
+    <li className="flex gap-2.5 text-[15px] leading-[1.75] text-secondary">
+        <span className="flex-shrink-0 mt-[3px] text-muted select-none">
             {ordered ? `${index + 1}.` : '•'}
         </span>
         <span className="flex-1 break-words">{children}</span>
@@ -229,7 +229,7 @@ const ListItem = ({ children, ordered, index }) => (
 // Horizontal Rule
 // ─────────────────────────────────────────────
 const HorizontalRule = () => (
-    <hr className="my-6 border-none h-px bg-gradient-to-r from-transparent via-slate-600/50 to-transparent" />
+    <hr className="my-6 border-none h-px bg-gradient-to-r from-transparent via-border to-transparent" />
 );
 
 // ─────────────────────────────────────────────
@@ -264,7 +264,7 @@ export const markdownComponents = {
     h1({ children }) { return <H1>{children}</H1>; },
     h2({ children }) { return <H2>{children}</H2>; },
     h3({ children }) { return <H3>{children}</H3>; },
-    h4({ children }) { return <h4 className="text-sm font-semibold text-slate-200 mt-3 mb-1.5">{children}</h4>; },
+    h4({ children }) { return <h4 className="text-sm font-semibold text-secondary mt-3 mb-1.5">{children}</h4>; },
 
     // Text
     p({ children }) { return <Paragraph>{children}</Paragraph>; },
@@ -286,7 +286,7 @@ export const markdownComponents = {
             <img
                 src={src}
                 alt={alt || 'Image'}
-                className="max-w-full max-h-[400px] rounded-xl mt-2 mb-2 border border-slate-700/50 shadow-md"
+                className="max-w-full max-h-[400px] rounded-xl mt-2 mb-2 border border-border shadow-md"
                 loading="lazy"
             />
         );

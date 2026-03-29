@@ -327,10 +327,12 @@ const getPalette = (type) => {
 };
 
 // Apply colors to pre-built Plotly traces that have no color set
-const applyTraceColors = (traces, chartType) => {
+// colorOffset rotates the palette starting color so each chart card on the dashboard
+// gets a visually distinct primary color even when it has only one trace.
+const applyTraceColors = (traces, chartType, colorOffset = 0) => {
   const palette = getPalette(chartType);
   return traces.map((trace, idx) => {
-    const color = palette[idx % palette.length];
+    const color = palette[(idx + colorOffset) % palette.length];
     const traceType = (trace.type || '').toLowerCase();
     const enhanced = { ...trace };
 
@@ -358,7 +360,10 @@ const applyTraceColors = (traces, chartType) => {
       // Line: colored line
       enhanced.line = { ...(trace.line || {}), color: color };
     } else if (traceType === 'pie') {
-      // Pie: full palette rotation
+      // Pie: full palette rotation + enforce modern donut styling
+      enhanced.hole = trace.hole ?? 0.65;
+      enhanced.textinfo = 'none';
+      enhanced.hovertemplate = '<b>%{label}</b><br>Count: %{value}<br>%{percent}<extra></extra>';
       enhanced.marker = {
         ...(trace.marker || {}),
         colors: palette,
@@ -551,15 +556,27 @@ const CustomTooltip = ({ visible, x, y, data }) => {
                 <div style={{
                   display: 'inline-flex', alignItems: 'center', gap: 4,
                   padding: '3px 8px', borderRadius: 6,
-                  background: 'rgba(202,210,253,0.06)',
-                  border: '1px solid rgba(202,210,253,0.08)',
+                  background: rank <= 3 ? 'rgba(251,191,36,0.10)' : 'rgba(202,210,253,0.06)',
+                  border: `1px solid ${rank <= 3 ? 'rgba(251,191,36,0.22)' : 'rgba(202,210,253,0.08)'}`,
                 }}>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: '#9CA3AF', fontVariantNumeric: 'tabular-nums' }}>
-                    #{rank} of {totalCategories}
+                  <span style={{ fontSize: 10, fontWeight: 600, color: rank <= 3 ? '#fbbf24' : '#9CA3AF', fontVariantNumeric: 'tabular-nums' }}>
+                    {rank <= 3 ? ['🥇','🥈','🥉'][rank - 1] + ' ' : ''}#{rank} of {totalCategories}
                   </span>
                 </div>
               )}
-              {totalRecords && (
+              {typeof percentile === 'number' && (
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '3px 8px', borderRadius: 6,
+                  background: percentile >= 75 ? 'rgba(16,185,129,0.10)' : percentile <= 25 ? 'rgba(239,68,68,0.08)' : 'rgba(202,210,253,0.06)',
+                  border: `1px solid ${percentile >= 75 ? 'rgba(16,185,129,0.20)' : percentile <= 25 ? 'rgba(239,68,68,0.15)' : 'rgba(202,210,253,0.08)'}`,
+                }}>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: percentile >= 75 ? '#34d399' : percentile <= 25 ? '#f87171' : '#9CA3AF', fontVariantNumeric: 'tabular-nums' }}>
+                    P{Math.round(percentile)}
+                  </span>
+                </div>
+              )}
+              {typeof totalRecords === 'number' && totalRecords > 0 && (
                 <div style={{
                   display: 'inline-flex', alignItems: 'center', gap: 4,
                   padding: '3px 8px', borderRadius: 6,
@@ -594,10 +611,12 @@ const CustomTooltip = ({ visible, x, y, data }) => {
   );
 };
 
-const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartType = 'bar', onPointClick, pointIntelligence }) => {
+const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartType = 'bar', onPointClick, pointIntelligence, chartTitle, colorOffset = 0 }) => {
   const plotRef = useRef(null);
   const dataHashRef = useRef(null);
   const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, data: null });
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   // Helper to format numbers
   const formatValue = (val) => {
@@ -619,8 +638,22 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
     dataHashRef.current = dataHash;
 
     const loadPlotly = async () => {
+      setIsLoading(true);
+      setError(null);
+      
       try {
         const Plotly = (await import('plotly.js-dist-min')).default;
+        if (!plotRef.current || !data) {
+          setIsLoading(false);
+          return;
+        }
+        
+        if (data && data.length === 0) {
+          setError('No data available for chart');
+          setIsLoading(false);
+          return;
+        }
+        
         if (plotRef.current && data) {
           let processedData = data;
           let xKey = 'x', yKey = 'y';
@@ -637,7 +670,15 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             processedData = data.map(trace => {
               const enhanced = { ...trace, hoverinfo: 'none' };
               const traceType = (trace.type || '').toLowerCase();
-              const isScatterLine = traceType === 'scatter' && 
+
+              // Enforce modern donut styling for pie traces regardless of stored state
+              if (traceType === 'pie') {
+                enhanced.hole = trace.hole ?? 0.65;
+                enhanced.textinfo = 'none';
+                enhanced.hovertemplate = '<b>%{label}</b><br>Count: %{value}<br>%{percent}<extra></extra>';
+              }
+
+              const isScatterLine = traceType === 'scatter' &&
                 (trace.mode === 'lines' || trace.mode === 'lines+markers' || trace.mode === 'lines+text');
               
               if (isScatterLine && Array.isArray(trace.x) && Array.isArray(trace.y)) {
@@ -704,7 +745,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             }
 
             // Apply chart-type-specific colors to all traces that lack colors
-            processedData = applyTraceColors(processedData, chartType);
+            processedData = applyTraceColors(processedData, chartType, colorOffset);
           }
           // Handle histogram data (bin/count format)
           else if (chartType === 'histogram' && Array.isArray(data) && data.length > 0) {
@@ -1105,8 +1146,10 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
               total += rawValue;
               // Use yAxisLabel as item name for single-series, trace name for multi-series
               const traceName = pt.data.name || pt.fullData.name || '';
+              // Prefer axis label, then chart title, then trace name — avoids "Chart" as metric label
+              const metricLabel = yAxisLabel || (chartTitle && chartTitle !== 'Chart' ? chartTitle : null) || traceName || 'Value';
               return {
-                name: yAxisLabel || traceName || 'Value',
+                name: metricLabel,
                 value: formatValue(rawValue),
                 rawValue,
                 color: resolvePointColor(pt)
@@ -1218,53 +1261,62 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
         }
       } catch (error) {
         console.error("Plotly load error:", error);
-        // Chart failed to render - show fallback UI
-        if (plotRef.current) {
-          plotRef.current.innerHTML = `
-            <div style="
-              display: flex; 
-              align-items: center; 
-              justify-content: center; 
-              height: 100%; 
-              color: #64748b; 
-              font-size: 14px;
-              text-align: center;
-              padding: 20px;
-            ">
-              <div>
-                <div style="margin-bottom: 8px;">📊</div>
-                <div>Chart visualization</div>
-                <div style="font-size: 12px; margin-top: 4px; opacity: 0.7;">
-                  Interactive chart would appear here
-                </div>
-              </div>
-            </div>
-          `;
-        }
+        setError(error.message || 'Failed to render chart');
       }
+      setIsLoading(false);
     };
     loadPlotly();
     const cleanupPlotElement = plotRef.current;
     return () => {
-      if (cleanupPlotElement) {
-        // Plotly.purge(plotRef.current); // Ideally purge, but might need to import Plotly again
-        cleanupPlotElement.innerHTML = '';
+      if (cleanupPlotElement && window.Plotly) {
+        try {
+          window.Plotly.purge(cleanupPlotElement);
+        } catch (err) {
+          console.error('Failed to purge Plotly:', err);
+        }
       }
     };
   }, [data, layout, config, chartType, pointIntelligence]);
 
+  // Single stable container — plotRef never gets React children so Plotly owns its DOM freely.
+  // Loading and error states are sibling overlays, not replacements for the plotRef div.
   return (
     <>
-      <div
-        ref={plotRef}
-        style={{
-          width: '100%',
-          height: '100%',
-          minHeight: '200px',
-          ...style
-        }}
-      />
-      <CustomTooltip {...tooltip} />
+      <div style={{ position: 'relative', width: '100%', height: '100%', minHeight: '200px', ...style }}>
+        {/* Plotly renders here exclusively — React never adds JSX children to this div */}
+        <div
+          ref={plotRef}
+          style={{ width: '100%', height: '100%', minHeight: '200px', visibility: isLoading ? 'hidden' : 'visible' }}
+        />
+
+        {isLoading && (
+          <div style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#6C6E79', pointerEvents: 'none',
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ marginBottom: '8px', fontSize: '24px' }}>📊</div>
+              <div style={{ fontSize: '14px', opacity: 0.7 }}>Loading chart...</div>
+            </div>
+          </div>
+        )}
+
+        {error && !isLoading && (
+          <div style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#ef4444',
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ marginBottom: '8px', fontSize: '24px' }}>⚠️</div>
+              <div style={{ fontSize: '14px', marginBottom: '4px' }}>Chart Error</div>
+              <div style={{ fontSize: '12px', opacity: 0.7 }}>{error}</div>
+            </div>
+          </div>
+        )}
+      </div>
+      {!isLoading && !error && <CustomTooltip {...tooltip} />}
     </>
   );
 }, (prevProps, nextProps) => {

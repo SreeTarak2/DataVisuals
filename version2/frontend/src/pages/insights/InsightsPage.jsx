@@ -1,21 +1,28 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, useScroll, useSpring, AnimatePresence } from 'framer-motion';
 import {
     RefreshCw, AlertCircle, Database, MessageSquare, Clock, ChevronRight,
-    FileText, Calendar, ShieldCheck, TrendingUp, TrendingDown, Minus,
-    CheckCircle2, ArrowRight, Zap, GitBranch, AlertTriangle, Layers,
+    FileText, Calendar, ShieldCheck, TrendingUp,
+    ArrowRight, Zap, AlertTriangle, Layers,
     Cpu, Shield, Users, Link2, ChevronDown, ChevronUp, Info, Sparkles,
-    BarChart3, Target, Eye, BookOpen, Printer, Download,
+    BarChart3, Target, Eye, BookOpen, Download, Loader2,
 } from 'lucide-react';
+import { reportsAPI, getAuthToken } from '../../services/api';
 import {
     AreaChart, Area, ResponsiveContainer, ScatterChart, Scatter,
     XAxis, YAxis, ZAxis, Tooltip, BarChart, Bar, Cell,
 } from 'recharts';
 import useDatasetStore from '../../store/datasetStore';
+import useDashboardActionStore from '../../store/dashboardActionStore';
 import { useInsightsData } from './hooks/useInsightsData';
 import { cn } from '../../lib/utils';
+import { renderBold } from '../../lib/renderBold';
+import ExecutiveSummary from './components/ExecutiveSummary';
+import { StoryReader, StoryPlaceholder } from './components/story';
 import './insights-editorial.css';
+
+const MotionDiv = motion.div;
 
 
 // ═══════════════════════════════════════════════════════════
@@ -35,14 +42,6 @@ const CHART_COLORS = {
     red: '#F87171',
     purple: '#A78BFA',
 };
-
-const makeSparkline = (seed = 0, points = 12) =>
-    Array.from({ length: points }, (_, i) => ({
-        x: i,
-        y: Math.max(5, 35 + (seed % 7) * 4 + Math.sin((i + seed) * 0.6) * 12 + i * 1.2),
-    }));
-
-const formatPct = (n) => (Number.isFinite(n) ? Number(Math.abs(n).toFixed(1)) : 0);
 
 const toScatter = (arr = []) =>
     arr.slice(0, 16).map((v, i) => ({
@@ -68,17 +67,16 @@ const stripMarkdown = (text) => {
 // ═══════════════════════════════════════════════════════════
 
 const EmptyState = ({ onUpload }) => (
-    <div className="insights-editorial-page min-h-[70vh] flex items-center justify-center">
+    <div className="insights-editorial-page min-h-[70vh] flex items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
         <div className="text-center max-w-md mx-auto px-6">
             <div className="relative w-20 h-20 mx-auto mb-6">
                 <div className="absolute inset-0 rounded-3xl bg-blue-500/10 animate-pulse" />
-                <div className="relative w-full h-full rounded-3xl flex items-center justify-center border border-blue-500/20"
-                     style={{ background: 'var(--surface-1)' }}>
+                <div className="relative w-full h-full rounded-3xl flex items-center justify-center border border-blue-500/20 bg-slate-900">
                     <Database className="w-10 h-10 text-blue-400" />
                 </div>
             </div>
-            <h2 className="text-2xl font-bold mb-3">No Dataset Selected</h2>
-            <p className="text-sm leading-relaxed mb-8" style={{ color: 'var(--ink-muted)' }}>
+            <h2 className="text-2xl font-bold mb-3 text-slate-100">No Dataset Selected</h2>
+            <p className="text-sm leading-relaxed mb-8 text-slate-400">
                 Select a dataset to generate the narrative intelligence report.
             </p>
             <button onClick={onUpload}
@@ -89,13 +87,17 @@ const EmptyState = ({ onUpload }) => (
     </div>
 );
 
-const LoadingSkeleton = () => (
-    <div className="insights-editorial-page min-h-screen" style={{ background: 'var(--surface-0)' }}>
+const LoadingSkeleton = ({ title = 'Preparing Narrative Intelligence', description = 'We are assembling the latest story, evidence, and action plan for this dataset.' }) => (
+    <div className="insights-editorial-page min-h-screen" style={{ backgroundColor: 'var(--bg-primary)' }}>
         <div className="report-container py-16 space-y-8 animate-pulse">
             <div className="space-y-4">
                 <div className="h-4 w-32 rounded-lg" style={{ background: 'var(--surface-2)' }} />
                 <div className="h-16 w-3/4 rounded-2xl" style={{ background: 'var(--surface-2)' }} />
                 <div className="h-6 w-2/3 rounded-lg" style={{ background: 'var(--surface-2)' }} />
+            </div>
+            <div className="space-y-2 max-w-2xl">
+                <h2 className="text-2xl font-semibold" style={{ color: 'var(--ink)' }}>{title}</h2>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--ink-soft)' }}>{description}</p>
             </div>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
                 {[...Array(4)].map((_, i) => (
@@ -129,6 +131,80 @@ const ErrorState = ({ error, onRetry }) => (
     </div>
 );
 
+const ArtifactBanner = ({ selectedDataset, artifactStatus, reportStatus, onRefresh }) => {
+    const processingProgress = selectedDataset?.processing_progress || 0;
+    const processingStatus = selectedDataset?.processing_status || 'processing';
+    const insightsError = selectedDataset?.artifact_status?.insights_error;
+
+    if (selectedDataset?.is_processed === false) {
+        return (
+            <div className="report-container pt-6">
+                <div className="surface-card p-4 flex items-center justify-between gap-4">
+                    <div>
+                        <div className="text-sm font-semibold">Dataset analysis in progress</div>
+                        <div className="text-xs" style={{ color: 'var(--ink-soft)' }}>
+                            {processingStatus.replace(/_/g, ' ')} · {processingProgress}%
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (artifactStatus === 'pending' || artifactStatus === 'generating') {
+        return (
+            <div className="report-container pt-6">
+                <div className="surface-card p-4 flex items-center justify-between gap-4">
+                    <div>
+                        <div className="text-sm font-semibold">Preparing intelligence brief</div>
+                        <div className="text-xs" style={{ color: 'var(--ink-soft)' }}>
+                            Your dataset is processed. The executive story and action plan are being assembled now.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (artifactStatus === 'failed') {
+        return (
+            <div className="report-container pt-6">
+                <div className="surface-card p-4 flex items-center justify-between gap-4">
+                    <div>
+                        <div className="text-sm font-semibold text-red-400">Insights preparation failed</div>
+                        <div className="text-xs" style={{ color: 'var(--ink-soft)' }}>
+                            {insightsError || 'The background report generation failed. You can retry now.'}
+                        </div>
+                    </div>
+                    <button onClick={onRefresh} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: 'var(--surface-2)' }}>
+                        Retry
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    if (reportStatus === 'cached') {
+        return (
+            <div className="report-container pt-6">
+                <div className="surface-card p-4 flex items-center justify-between gap-4">
+                    <div>
+                        <div className="text-sm font-semibold">Showing ready report</div>
+                        <div className="text-xs" style={{ color: 'var(--ink-soft)' }}>
+                            This narrative brief was prepared in the background and loaded from cache for speed.
+                        </div>
+                    </div>
+                    <button onClick={onRefresh} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: 'var(--surface-2)' }}>
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    return null;
+};
+
 
 // ═══════════════════════════════════════════════════════════
 //  ① THE HOOK — Report Header
@@ -137,7 +213,7 @@ const ErrorState = ({ error, onRetry }) => (
 const ReportHeader = ({ datasetName, reportId, headline, summary, qualityScore, generatedAt, domain, totalRows, totalCols }) => (
     <header className="pt-20 pb-16 ambient-glow" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="report-container relative z-10">
-            <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }} className="space-y-10">
+            <MotionDiv initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }} className="space-y-10">
                 {/* Meta Row */}
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div className="flex items-center gap-5">
@@ -200,7 +276,7 @@ const ReportHeader = ({ datasetName, reportId, headline, summary, qualityScore, 
                         </div>
                     )}
                 </div>
-            </motion.div>
+            </MotionDiv>
         </div>
     </header>
 );
@@ -223,25 +299,13 @@ const MetricGrid = ({ kpis }) => (
                         className="surface-card glow-hover p-5 space-y-3">
                         <div className="flex items-center justify-between">
                             <span className="label-caps">{kpi.label}</span>
-                            <div className={cn('flex items-center gap-1 text-[10px] font-bold',
-                                kpi.trend === 'up' ? 'text-emerald-400' : kpi.trend === 'down' ? 'text-red-400' : 'text-slate-500')}>
-                                {kpi.trend === 'up' ? <TrendingUp className="w-3 h-3" /> : kpi.trend === 'down' ? <TrendingDown className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
-                                {kpi.change > 0 ? '+' : ''}{kpi.change}%
-                            </div>
+                            {kpi.badge && (
+                                <span className={cn('text-[10px] font-bold uppercase tracking-wider', kpi.badgeTone)}>
+                                    {kpi.badge}
+                                </span>
+                            )}
                         </div>
-                        <div className="flex items-end justify-between gap-3">
-                            <div className="text-3xl font-light tracking-tight stat-value">{kpi.value}</div>
-                            <div className="h-10 w-24 flex-shrink-0 sparkline-wrap">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={kpi.sparkline}>
-                                        <Area type="monotone" dataKey="y"
-                                            stroke={kpi.trend === 'up' ? '#34D399' : kpi.trend === 'down' ? '#F87171' : '#64748B'}
-                                            fill={kpi.trend === 'up' ? '#34D399' : kpi.trend === 'down' ? '#F87171' : '#64748B'}
-                                            fillOpacity={0.1} strokeWidth={1.5} />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
+                        <div className="text-3xl font-light tracking-tight stat-value">{kpi.value}</div>
                         <p className="text-[11px] font-light leading-relaxed" style={{ color: 'var(--ink-dim)' }}>{kpi.description}</p>
                     </motion.div>
                 ))}
@@ -322,12 +386,12 @@ const ChapterSection = ({ chapterNum, title, narrative, findingCount, children }
 //  INSIGHT CARD — Dark Narrative Card
 // ═══════════════════════════════════════════════════════════
 
-const InsightCard = ({ insight, onInvestigate }) => {
+const InsightCard = ({ insight, onInvestigate, investigateContext = {} }) => {
     const [showProof, setShowProof] = useState(false);
     const Icon = ICON_BY_TYPE[insight.type] || Info;
 
     const hasTrendData = insight.type === 'trend' && Array.isArray(insight.data) && insight.data.length > 1;
-    const hasScatterData = ['correlation', 'distribution'].includes(insight.type) && Array.isArray(insight.data) && insight.data.length > 1;
+    const hasScatterData = ['correlation', 'distribution', 'anomaly'].includes(insight.type) && Array.isArray(insight.data) && insight.data.length > 1;
     const hasBarData = insight.type === 'driver' && Array.isArray(insight.data) && insight.data.length > 0;
 
     return (
@@ -354,7 +418,7 @@ const InsightCard = ({ insight, onInvestigate }) => {
                     <div className="space-y-3">
                         <h3 className="serif text-2xl md:text-3xl font-medium leading-tight">{stripMarkdown(insight.title)}</h3>
                         <p className="font-light leading-relaxed text-[15px]" style={{ color: 'var(--ink-soft)' }}>
-                            {stripMarkdown(insight.description)}
+                            {renderBold(insight.description)}
                         </p>
                     </div>
 
@@ -372,7 +436,7 @@ const InsightCard = ({ insight, onInvestigate }) => {
                             </button>
                         )}
                         {onInvestigate && (
-                            <button onClick={() => onInvestigate(`Explain this insight in detail: ${insight.title}`)}
+                            <button onClick={() => onInvestigate(insight, investigateContext)}
                                 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest transition-colors"
                                 style={{ color: 'var(--ink-dim)' }}>
                                 <MessageSquare className="w-3 h-3" /> Ask AI
@@ -471,7 +535,7 @@ const InsightCard = ({ insight, onInvestigate }) => {
 //  ⑦ STRATEGIC ACTION PLAN
 // ═══════════════════════════════════════════════════════════
 
-const ActionPlan = ({ recommendations, onInvestigate }) => (
+const ActionPlan = ({ recommendations, onInvestigate, investigateContext = {} }) => (
     <section className="py-24" style={{ background: 'var(--surface-1)', borderBottom: '1px solid var(--border)' }}>
         <div className="report-container">
             <div className="grid lg:grid-cols-12 gap-16">
@@ -525,9 +589,9 @@ const ActionPlan = ({ recommendations, onInvestigate }) => (
                                             {stripMarkdown(rec.title || rec.text || rec.recommendation || 'Recommended action')}
                                         </p>
                                         <p className="text-sm font-light leading-relaxed" style={{ color: 'var(--ink-soft)' }}>
-                                            {stripMarkdown(rec.description || rec.rationale || '')}
+                                            {renderBold(rec.description || rec.rationale || '')}
                                         </p>
-                                        <button onClick={() => onInvestigate(rec.title || rec.text || 'Explain this recommendation')}
+                                        <button onClick={() => onInvestigate({ title: rec.title || rec.text, description: rec.description || rec.rationale }, { ...investigateContext, type: 'recommendation', title: rec.title })}
                                             className="text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--accent)' }}>
                                             Investigate in chat →
                                         </button>
@@ -546,52 +610,12 @@ const ActionPlan = ({ recommendations, onInvestigate }) => (
 
 
 // ═══════════════════════════════════════════════════════════
-//  ⑧ METHODOLOGY APPENDIX
+//  ⑧ METHODOLOGY APPENDIX (REMOVED)
 // ═══════════════════════════════════════════════════════════
+// const MethodologyFooter = ({ data, quality }) => (
+//     ... component removed ...
+// );
 
-const MethodologyFooter = ({ data, quality }) => (
-    <footer className="py-20" style={{ background: 'var(--surface-1)' }}>
-        <div className="report-container">
-            <div className="grid lg:grid-cols-12 gap-12">
-                <div className="lg:col-span-4 space-y-4">
-                    <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 rounded" style={{ background: 'var(--accent)' }} />
-                        <h3 className="serif text-2xl font-medium italic">DataSage Intelligence</h3>
-                    </div>
-                    <p className="text-sm leading-relaxed" style={{ color: 'var(--ink-dim)' }}>
-                        This report was auto-generated using DataSage analytical engine. All statistical significance tests
-                        were performed at a 95% confidence level unless otherwise noted.
-                    </p>
-                </div>
-                <div className="lg:col-span-8">
-                    <div className="analyst-panel grid sm:grid-cols-2 md:grid-cols-4 gap-6">
-                        <div className="space-y-1">
-                            <div className="label-caps" style={{ fontSize: '9px' }}>Engine</div>
-                            <div className="font-bold text-sm">DataSage v2</div>
-                        </div>
-                        <div className="space-y-1">
-                            <div className="label-caps" style={{ fontSize: '9px' }}>Generated</div>
-                            <div className="text-sm" style={{ color: 'var(--ink-soft)' }}>
-                                {data.generated_at ? new Date(data.generated_at).toLocaleString() : 'N/A'}
-                            </div>
-                        </div>
-                        <div className="space-y-1">
-                            <div className="label-caps" style={{ fontSize: '9px' }}>Data Quality</div>
-                            <div className="text-sm">
-                                <span className="font-bold">{quality.health_score || 0}%</span>
-                                <span style={{ color: 'var(--ink-dim)' }}> ({quality.health_label || 'N/A'})</span>
-                            </div>
-                        </div>
-                        <div className="space-y-1">
-                            <div className="label-caps" style={{ fontSize: '9px' }}>Confidence Level</div>
-                            <div className="text-sm font-bold">95% CI</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </footer>
-);
 
 
 // ═══════════════════════════════════════════════════════════
@@ -609,29 +633,105 @@ const EmptyChapter = ({ label }) => (
 
 
 // ═══════════════════════════════════════════════════════════
+//  DOWNLOAD BUTTON — standalone with its own loading state
+// ═══════════════════════════════════════════════════════════
+
+const DownloadReportButton = ({ datasetId, datasetName }) => {
+    const [downloading, setDownloading] = useState(false);
+
+    const handleDownload = async () => {
+        if (!datasetId || downloading) return;
+        setDownloading(true);
+        try {
+            const token = getAuthToken();
+            const url = reportsAPI.downloadPDF(datasetId);
+            const response = await fetch(url, {
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const blob = await response.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = objectUrl;
+            link.download = `analysis-report-${(datasetName || 'dataset').replace(/[^a-z0-9]/gi, '-').toLowerCase()}.pdf`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(objectUrl);
+        } catch (err) {
+            console.error('PDF download error:', err);
+            alert('Failed to download PDF. Please try again.');
+        } finally {
+            setDownloading(false);
+        }
+    };
+
+    return (
+        <button
+            onClick={handleDownload}
+            disabled={downloading || !datasetId}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff' }}
+        >
+            {downloading ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /> Generating…</>
+            ) : (
+                <><Download className="w-4 h-4" /> Download Report</>
+            )}
+        </button>
+    );
+};
+
+
+// ═══════════════════════════════════════════════════════════
 //  MAIN PAGE COMPONENT
 // ═══════════════════════════════════════════════════════════
 
 const InsightsPage = () => {
     const { selectedDataset } = useDatasetStore();
     const navigate = useNavigate();
-    const { loading, error, data, filters, refresh } = useInsightsData(selectedDataset);
+    const { loading, error, data, filters, refresh, artifactStatus, storyStatus } = useInsightsData(selectedDataset);
+
+    // Sync loading/refresh to store for Header access (individual selectors prevent re-render loops)
+    const setInsightsLoading = useDashboardActionStore((s) => s.setInsightsLoading);
+    const setOnInsightsRefresh = useDashboardActionStore((s) => s.setOnInsightsRefresh);
+    useEffect(() => { setInsightsLoading(loading); }, [loading, setInsightsLoading]);
+    useEffect(() => { setOnInsightsRefresh(refresh); }, [refresh, setOnInsightsRefresh]);
 
     const { scrollYProgress } = useScroll();
     const scaleX = useSpring(scrollYProgress, { stiffness: 100, damping: 30, restDelta: 0.001 });
 
-    const investigateInChat = (query) => {
-        navigate('/app/chat', { state: { prefillQuery: query } });
-    };
+    const hasStory = data?.story && data?.is_story_available;
+    const isStoryGenerating = storyStatus === 'generating' || storyStatus === 'not_started';
+    const datasetId = selectedDataset?.id || selectedDataset?._id || data?.dataset_id;
+    const datasetName = data?.dataset_name || selectedDataset?.name;
+
+    const investigateInChat = useCallback((queryOrInsight, context = {}) => {
+        const baseQuery = typeof queryOrInsight === 'string'
+            ? queryOrInsight
+            : `Investigate: ${queryOrInsight.title}. ${queryOrInsight.description || ''}`;
+        const qualityScore = data?.data_quality?.health_score;
+        const rowCount = data?.data_quality?.total_rows;
+        const contextPrefix = context.chapter
+            ? `[Context: "${context.chapter}" section of "${datasetName}" analysis. ${qualityScore ? `Data quality: ${qualityScore}%.` : ''} ${rowCount ? `${rowCount.toLocaleString()} rows.` : ''}]`
+            : `[Context: Analyzing "${datasetName}". ${qualityScore ? `Data quality: ${qualityScore}%.` : ''} ${rowCount ? `${rowCount.toLocaleString()} rows.` : ''}]`;
+        window.dispatchEvent(new CustomEvent('open-chat-with-query', {
+            detail: {
+                query: `${contextPrefix}\n\n${baseQuery}`,
+                source: 'analysis-page',
+                insightContext: { type: context.type || 'general', chapter: context.chapter || null },
+                datasetContext: { name: datasetName, qualityScore, rowCount, colCount: data?.data_quality?.total_columns },
+            }
+        }));
+    }, [data, datasetName]);
 
     // ── Map backend response → story-arc structure ──
     const report = useMemo(() => {
         if (!data) return null;
-
         const q = data.data_quality || {};
         const c = data.counts || {};
+        const storyArc = data.story_arc || {};
 
-        // ── Key Findings (mapped to cards) ──
         const keyFindings = (data.key_findings || []).map((item, idx) => ({
             id: `kf-${idx}`,
             type: item.category || item.type?.replace(' ', '_')?.toLowerCase() || 'summary',
@@ -648,7 +748,6 @@ const InsightsPage = () => {
             },
         }));
 
-        // ── Trends ──
         const trends = (data.trends || []).map((item, idx) => ({
             id: `tr-${idx}`,
             type: 'trend',
@@ -657,18 +756,10 @@ const InsightsPage = () => {
             value: item.strength !== undefined ? `τ = ${Number(item.strength).toFixed(3)}` : null,
             severity: item.is_significant ? 'high' : 'medium',
             tags: [item.column, item.direction, item.seasonality].filter(Boolean),
-            data: (item.series || []).slice(0, 20).map((p, i) => ({
-                name: p.name || p.x || String(i + 1),
-                value: Number(p.value ?? p.y ?? i + 1),
-            })),
-            context: {
-                confidence: item.p_value !== undefined ? `p = ${Number(item.p_value).toFixed(4)}` : '95% CI',
-                methodology: 'Mann-Kendall trend test',
-                evidenceTier: item.is_significant ? 'strong' : 'moderate',
-            },
+            data: (item.series || []).slice(0, 20).map((p, i) => ({ name: p.name || p.x || String(i + 1), value: Number(p.value ?? p.y ?? i + 1) })),
+            context: { confidence: item.p_value !== undefined ? `p = ${Number(item.p_value).toFixed(4)}` : '95% CI', methodology: 'Mann-Kendall trend test', evidenceTier: item.is_significant ? 'strong' : 'moderate' },
         }));
 
-        // ── Correlations ──
         const correlations = (data.correlations || []).map((item, idx) => ({
             id: `co-${idx}`,
             type: 'correlation',
@@ -678,15 +769,9 @@ const InsightsPage = () => {
             severity: item.severity || (Math.abs(item.value) >= 0.7 ? 'high' : 'medium'),
             tags: [item.column1, item.column2, item.strength].filter(Boolean),
             data: toScatter(item.points || []),
-            context: {
-                confidence: item.p_value !== undefined ? `p = ${Number(item.p_value).toFixed(5)}` : '95% CI',
-                methodology: `${item.method || 'Pearson'} correlation`,
-                evidenceTier: item.abs_value >= 0.7 ? 'strong' : item.abs_value >= 0.4 ? 'moderate' : 'weak',
-                sampleSize: null,
-            },
+            context: { confidence: item.p_value !== undefined ? `p = ${Number(item.p_value).toFixed(5)}` : '95% CI', methodology: `${item.method || 'Pearson'} correlation`, evidenceTier: item.abs_value >= 0.7 ? 'strong' : item.abs_value >= 0.4 ? 'moderate' : 'weak', sampleSize: null },
         }));
 
-        // ── Distributions ──
         const distributions = (data.distributions || []).map((item, idx) => ({
             id: `di-${idx}`,
             type: 'distribution',
@@ -696,14 +781,9 @@ const InsightsPage = () => {
             severity: item.severity || 'medium',
             tags: [item.column, item.distribution_type].filter(Boolean),
             data: toScatter(item.points || item.buckets || []),
-            context: {
-                confidence: item.normality_p_value !== undefined ? `Normality p = ${item.normality_p_value}` : 'N/A',
-                methodology: 'Distribution profiling',
-                evidenceTier: Math.abs(item.skewness || 0) > 1.5 ? 'strong' : 'moderate',
-            },
+            context: { confidence: item.normality_p_value !== undefined ? `Normality p = ${item.normality_p_value}` : 'N/A', methodology: 'Distribution profiling', evidenceTier: Math.abs(item.skewness || 0) > 1.5 ? 'strong' : 'moderate' },
         }));
 
-        // ── Anomalies ──
         const anomalies = (data.anomalies || []).map((item, idx) => ({
             id: `an-${idx}`,
             type: 'anomaly',
@@ -712,13 +792,10 @@ const InsightsPage = () => {
             value: item.percentage !== undefined ? `${item.percentage}% anomalous` : null,
             severity: item.severity || 'medium',
             tags: [item.column, item.method].filter(Boolean),
-            context: {
-                methodology: item.method || 'IQR outlier detection',
-                evidenceTier: item.severity === 'high' ? 'strong' : 'moderate',
-            },
+            data: toScatter(item.points || item.outliers || []),
+            context: { methodology: item.method || 'IQR outlier detection', evidenceTier: item.severity === 'high' ? 'strong' : 'moderate' },
         }));
 
-        // ── Segments ──
         const segments = (data.segments || []).map((item, idx) => ({
             id: `sg-${idx}`,
             type: 'segment',
@@ -727,13 +804,9 @@ const InsightsPage = () => {
             value: item.deviation !== undefined ? `${Number(item.deviation).toFixed(1)}σ deviation` : null,
             severity: item.severity || 'medium',
             tags: [item.column, item.direction].filter(Boolean),
-            context: {
-                methodology: 'Segment contrast analysis',
-                evidenceTier: (item.deviation || 0) > 2 ? 'strong' : 'moderate',
-            },
+            context: { methodology: 'Segment contrast analysis', evidenceTier: (item.deviation || 0) > 2 ? 'strong' : 'moderate' },
         }));
 
-        // ── Drivers ──
         const drivers = (data.driver_analysis || []).map((item, idx) => ({
             id: `dr-${idx}`,
             type: 'driver',
@@ -742,173 +815,198 @@ const InsightsPage = () => {
             value: null,
             severity: 'medium',
             tags: [item.target, item.method].filter(Boolean),
-            data: (item.drivers || []).slice(0, 6).map((d) => ({
-                name: d.column || d.driver || 'Unknown',
-                value: Math.round((d.importance || 0) * 1000) / 10,
-            })),
-            context: {
-                methodology: 'Mutual Information ranking',
-                evidenceTier: 'moderate',
-            },
+            data: (item.drivers || []).slice(0, 6).map((d) => ({ name: d.column || d.driver || 'Unknown', value: Math.round((d.importance || 0) * 1000) / 10 })),
+            context: { methodology: 'Mutual Information ranking', evidenceTier: 'moderate' },
         }));
 
-        // ── Story-Arc Chapters ──
-
-        // Chapter 1: "What's Happening" → Key Findings + Trends
         const ch1 = [...keyFindings, ...trends].slice(0, 10);
-
-        // Chapter 2: "Why It's Happening" → Correlations + Drivers + Distributions
         const ch2 = [...correlations, ...drivers, ...distributions].slice(0, 10);
-
-        // Chapter 3: "What's At Risk" → Anomalies + Segments
         const ch3 = [...anomalies, ...segments].slice(0, 10);
 
-        // ── KPIs — actual data metrics, not meta-counts ──
         const health = Number(q.health_score || 0);
         const totalFindings = Number(c.key_findings || keyFindings.length);
         const totalCorrs = Number(c.correlations || correlations.length);
         const totalAnoms = Number(c.anomalies || anomalies.length);
 
         const kpis = [
-            {
-                label: 'Data Health',
-                value: `${health}%`,
-                change: formatPct((health - 75) / 2),
-                trend: health >= 80 ? 'up' : health >= 65 ? 'neutral' : 'down',
-                description: `Completeness ${q.completeness || 0}% · Uniqueness ${q.uniqueness || 0}%`,
-                sparkline: makeSparkline(health),
-            },
-            {
-                label: 'Key Findings',
-                value: `${totalFindings}`,
-                change: formatPct(totalFindings * 2.2),
-                trend: totalFindings >= 3 ? 'up' : 'neutral',
-                description: 'High-impact observations ranked by statistical significance.',
-                sparkline: makeSparkline(totalFindings + 3),
-            },
-            {
-                label: 'Relationships',
-                value: `${totalCorrs}`,
-                change: formatPct(totalCorrs * 1.8),
-                trend: totalCorrs >= 2 ? 'up' : 'neutral',
-                description: 'Variable correlations with p < 0.05 statistical support.',
-                sparkline: makeSparkline(totalCorrs + 6),
-            },
-            {
-                label: 'Risk Signals',
-                value: `${totalAnoms}`,
-                change: totalAnoms > 0 ? formatPct(totalAnoms * 2.5) : 0,
-                trend: totalAnoms > 3 ? 'down' : totalAnoms > 0 ? 'neutral' : 'up',
-                description: 'Anomalies and outlier events requiring attention.',
-                sparkline: makeSparkline(totalAnoms + 9),
-            },
+            { label: 'Data Health', value: `${health}%`, badge: q.health_label || 'Assessed', badgeTone: health >= 80 ? 'text-emerald-400' : health >= 65 ? 'text-amber-400' : 'text-red-400', description: `Completeness ${q.completeness || 0}% · Uniqueness ${q.uniqueness || 0}%` },
+            { label: 'Rows Analysed', value: Number(q.total_rows || 0).toLocaleString(), badge: `${q.total_columns || 0} cols`, badgeTone: 'text-blue-400', description: data.applied_filters ? `Filtered subset across ${Object.keys(data.applied_filters).length} condition(s).` : 'Full dataset included in this report.' },
+            { label: 'Strong Signals', value: `${totalFindings + totalCorrs}`, badge: `${totalCorrs} relationships`, badgeTone: 'text-purple-400', description: 'Findings and relationships with enough evidence to shape decisions.' },
+            { label: 'Action Items', value: `${(data.recommendations || []).length}`, badge: `${totalAnoms} risk flags`, badgeTone: totalAnoms > 0 ? 'text-red-400' : 'text-emerald-400', description: 'Prioritized actions derived from the strongest patterns and risks.' },
         ];
 
-        return { kpis, ch1, ch2, ch3, quality: q, counts: c };
+        return { kpis, ch1, ch2, ch3, quality: q, counts: c, storyArc };
     }, [data]);
 
     // ── Guards ──
     if (!selectedDataset) return <EmptyState onUpload={() => navigate('/app/datasets')} />;
-    if (loading && !data) return <LoadingSkeleton />;
+    if (loading && !data) {
+        const pendingArtifact = artifactStatus === 'pending' || artifactStatus === 'generating';
+        return (
+            <LoadingSkeleton
+                title={pendingArtifact ? 'Preparing Analysis' : 'Loading Analysis'}
+                description={pendingArtifact
+                    ? 'Your dataset is processed. We are now preparing the narrative, evidence sections, and action plan.'
+                    : 'Fetching the latest analysis for this dataset.'}
+            />
+        );
+    }
     if (error && !data) return <ErrorState error={error} onRetry={refresh} />;
     if (!data || !report) return <LoadingSkeleton />;
 
-    const reportId = `IR-${String(data.dataset_id || selectedDataset?.id || selectedDataset?._id || '0000').slice(-6).toUpperCase()}`;
+    const reportId = `AN-${String(datasetId || '0000').slice(-6).toUpperCase()}`;
 
     return (
-        <div className="insights-editorial-page min-h-screen pb-0">
-            {/* ── Scroll Progress ── */}
-            <motion.div className="fixed top-0 left-0 right-0 h-[3px] z-50 origin-left"
-                style={{ scaleX, background: 'var(--accent)' }} />
-
-            {/* ── Sticky Nav Bar ── */}
-            <header className="h-14 backdrop-blur-xl flex items-center justify-between px-6 sticky top-0 z-40"
-                    style={{ background: 'rgba(11,15,26,0.85)', borderBottom: '1px solid var(--border)' }}>
-                <div className="flex items-center gap-3">
-                    <span className="text-xs font-medium" style={{ color: 'var(--ink-dim)' }}>Reports</span>
-                    <ChevronRight className="w-3 h-3" style={{ color: 'var(--ink-dim)' }} />
-                    <span className="text-xs font-bold">{data.dataset_name || selectedDataset?.name || 'Insights'}</span>
-                </div>
-                <div className="flex items-center gap-4">
-                    <div className="hidden sm:flex items-center gap-1.5" style={{ color: 'var(--ink-dim)' }}>
-                        <Clock className="w-3.5 h-3.5" />
-                        <span className="text-[11px] font-medium">
-                            {data.generated_at ? new Date(data.generated_at).toLocaleDateString() : 'Just Analyzed'}
-                        </span>
-                    </div>
-                    {filters && (
-                        <span className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full"
-                              style={{ background: 'var(--amber-bg)', color: 'var(--amber)' }}>Filtered</span>
-                    )}
-                    <div className="w-px h-4" style={{ background: 'var(--border-vis)' }} />
-                    <button onClick={refresh} disabled={loading}
-                        className={cn('flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg transition-all',
-                            loading ? 'opacity-40 cursor-not-allowed' : 'hover:bg-white/5')}
-                        style={{ color: 'var(--ink-soft)' }}>
-                        <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} /> Refresh
-                    </button>
-                    <button onClick={() => investigateInChat(`Give me a comprehensive analysis of my ${data.dataset_name || 'dataset'} and what actions I should prioritize.`)}
-                        className="px-4 py-1.5 text-white text-[11px] font-semibold rounded-lg transition-all flex items-center gap-1.5"
-                        style={{ background: 'var(--accent)' }}>
-                        <MessageSquare className="w-3.5 h-3.5" /> Discuss Report
-                    </button>
-                </div>
-            </header>
-
-            {/* ── ① THE HOOK ── */}
-            <ReportHeader
-                datasetName={data.dataset_name || selectedDataset?.name}
-                reportId={reportId}
-                headline={data.story_headline || data.dataset_name || selectedDataset?.name || 'Narrative Intelligence Report'}
-                summary={data.executive_summary}
-                qualityScore={report.quality.health_score}
-                generatedAt={data.generated_at}
-                domain={data.domain}
-                totalRows={report.quality.total_rows}
-                totalCols={report.quality.total_columns}
+        <div className="insights-editorial-page min-h-screen pb-0" style={{ backgroundColor: 'var(--bg-primary)' }}>
+            {/* Scroll progress bar */}
+            <motion.div
+                className="fixed top-0 left-0 right-0 h-0.5 z-50 origin-left"
+                style={{ scaleX, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)' }}
             />
 
-            {/* ── ② THE SCOREBOARD ── */}
-            <MetricGrid kpis={report.kpis} />
+            <ArtifactBanner
+                selectedDataset={selectedDataset}
+                artifactStatus={artifactStatus}
+                reportStatus={data?.report_status}
+                onRefresh={refresh}
+            />
 
-            {/* ── ③ DATA TRUST BAR ── */}
-            <DataTrustBar quality={report.quality} counts={report.counts} />
+            {/* ── TOP BAR ── dataset name + download button */}
+            <div className="sticky top-0 z-40 border-b" style={{ borderColor: 'var(--border)', background: 'rgba(10,12,20,0.92)', backdropFilter: 'blur(16px)' }}>
+                <div className="report-container py-2.5 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                        <Sparkles className="w-4 h-4" style={{ color: 'var(--accent)' }} />
+                        <span className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>
+                            {datasetName}
+                        </span>
+                        <span className="text-[11px] px-2 py-0.5 rounded-md font-medium" style={{ background: 'var(--surface-1)', color: 'var(--ink-dim)' }}>
+                            {reportId}
+                        </span>
+                        {isStoryGenerating && !hasStory && (
+                            <span className="flex items-center gap-1.5 text-xs text-slate-500">
+                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse inline-block" />
+                                Narrative generating…
+                            </span>
+                        )}
+                    </div>
+                    <DownloadReportButton datasetId={datasetId} datasetName={datasetName} />
+                </div>
+            </div>
 
-            {/* ── ④ CHAPTER 1: What's Happening ── */}
-            <ChapterSection chapterNum="I" title="What's Happening"
-                narrative="The most significant signals and temporal patterns in your data. Key findings are ranked by statistical significance and impact."
-                findingCount={report.ch1.length}>
-                {report.ch1.length === 0
-                    ? <EmptyChapter label="key findings or trends" />
-                    : report.ch1.map((insight) => <InsightCard key={insight.id} insight={insight} onInvestigate={investigateInChat} />)
-                }
-            </ChapterSection>
+            {/* ── NARRATIVE STORY (when available) ── */}
+            <AnimatePresence mode="wait">
+                {hasStory ? (
+                    <motion.div
+                        key="story-section"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.4 }}
+                    >
+                        <StoryReader
+                            story={data.story}
+                            datasetName={datasetName}
+                            datasetId={datasetId}
+                            onInvestigate={investigateInChat}
+                            onSwitchToReport={null}
+                        />
+                        {/* Divider between story and detailed analysis */}
+                        <div className="report-container py-6">
+                            <div className="flex items-center gap-4">
+                                <div className="flex-1 h-px" style={{ background: 'var(--border)' }} />
+                                <span className="text-xs font-semibold uppercase tracking-widest px-4" style={{ color: 'var(--ink-dim)' }}>
+                                    Detailed Analysis
+                                </span>
+                                <div className="flex-1 h-px" style={{ background: 'var(--border)' }} />
+                            </div>
+                        </div>
+                    </motion.div>
+                ) : isStoryGenerating ? (
+                    <motion.div
+                        key="story-generating"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.3 }}
+                    >
+                        <StoryPlaceholder />
+                    </motion.div>
+                ) : null}
+            </AnimatePresence>
 
-            {/* ── ⑤ CHAPTER 2: Why It's Happening ── */}
-            <ChapterSection chapterNum="II" title="Why It's Happening"
-                narrative="The driving forces behind the patterns. Correlations reveal relationships, drivers quantify influence, and distributions expose the shape of your data."
-                findingCount={report.ch2.length}>
-                {report.ch2.length === 0
-                    ? <EmptyChapter label="correlations, drivers, or distributions" />
-                    : report.ch2.map((insight) => <InsightCard key={insight.id} insight={insight} onInvestigate={investigateInChat} />)
-                }
-            </ChapterSection>
+            {/* ── DETAILED ANALYSIS REPORT ── always visible */}
+            <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.4, delay: 0.1 }}
+            >
+                {/* ── ① THE HOOK ── */}
+                <ReportHeader
+                    datasetName={datasetName}
+                    reportId={reportId}
+                    headline={data.story_headline || datasetName || 'Analysis Report'}
+                    summary={report.storyArc?.hook || data.executive_summary}
+                    qualityScore={report.quality.health_score}
+                    generatedAt={data.generated_at}
+                    domain={data.domain}
+                    totalRows={report.quality.total_rows}
+                    totalCols={report.quality.total_columns}
+                />
 
-            {/* ── ⑥ CHAPTER 3: What's At Risk ── */}
-            <ChapterSection chapterNum="III" title="What's At Risk"
-                narrative="Anomalies that deviate from expected behavior and segments where patterns diverge. These are the red flags that need attention."
-                findingCount={report.ch3.length}>
-                {report.ch3.length === 0
-                    ? <EmptyChapter label="anomalies or segments" />
-                    : report.ch3.map((insight) => <InsightCard key={insight.id} insight={insight} onInvestigate={investigateInChat} />)
-                }
-            </ChapterSection>
+                <section className="py-12" style={{ borderBottom: '1px solid var(--border)' }}>
+                    <div className="report-container">
+                        <ExecutiveSummary
+                            summary={data.executive_summary}
+                            storyHeadline={data.story_headline}
+                            dataPersonality={data.data_personality}
+                            aiNarrated={data.ai_narrated}
+                        />
+                    </div>
+                </section>
 
-            {/* ── ⑦ STRATEGIC ACTION PLAN ── */}
-            <ActionPlan recommendations={data.recommendations || []} onInvestigate={investigateInChat} />
+                {/* ── ② THE SCOREBOARD ── */}
+                <MetricGrid kpis={report.kpis} />
 
-            {/* ── ⑧ METHODOLOGY APPENDIX ── */}
-            <MethodologyFooter data={data} quality={report.quality} />
+                {/* ── ③ DATA TRUST BAR ── */}
+                <DataTrustBar quality={report.quality} counts={report.counts} />
+
+                {/* ── ④ CHAPTER 1: What's Happening ── */}
+                <ChapterSection chapterNum="I" title="What's Happening"
+                    narrative={report.storyArc?.chapters?.happening || 'The most significant signals and temporal patterns in your data.'}
+                    findingCount={report.ch1.length}>
+                    {report.ch1.length === 0
+                        ? <EmptyChapter label="key findings or trends" />
+                        : report.ch1.map((insight) => <InsightCard key={insight.id} insight={insight} onInvestigate={investigateInChat} investigateContext={{ chapter: "I: What's Happening", type: insight.type }} />)
+                    }
+                </ChapterSection>
+
+                {/* ── ⑤ CHAPTER 2: Why It's Happening ── */}
+                <ChapterSection chapterNum="II" title="Why It's Happening"
+                    narrative={report.storyArc?.chapters?.drivers || 'The driving forces behind the patterns. Correlations reveal relationships, drivers quantify influence.'}
+                    findingCount={report.ch2.length}>
+                    {report.ch2.length === 0
+                        ? <EmptyChapter label="correlations, drivers, or distributions" />
+                        : report.ch2.map((insight) => <InsightCard key={insight.id} insight={insight} onInvestigate={investigateInChat} investigateContext={{ chapter: "II: Why It's Happening", type: insight.type }} />)
+                    }
+                </ChapterSection>
+
+                {/* ── ⑥ CHAPTER 3: What's At Risk ── */}
+                <ChapterSection chapterNum="III" title="What's At Risk"
+                    narrative={report.storyArc?.chapters?.risks || 'Anomalies that deviate from expected behavior and segments where patterns diverge.'}
+                    findingCount={report.ch3.length}>
+                    {report.ch3.length === 0
+                        ? <EmptyChapter label="anomalies or segments" />
+                        : report.ch3.map((insight) => <InsightCard key={insight.id} insight={insight} onInvestigate={investigateInChat} investigateContext={{ chapter: "III: What's At Risk", type: insight.type }} />)
+                    }
+                </ChapterSection>
+
+                {/* ── ⑦ STRATEGIC ACTION PLAN ── */}
+                <ActionPlan
+                    recommendations={data.recommendations || []}
+                    onInvestigate={investigateInChat}
+                    investigateContext={{ chapter: 'Strategic Action Plan', type: 'recommendation' }}
+                />
+            </motion.div>
         </div>
     );
 };

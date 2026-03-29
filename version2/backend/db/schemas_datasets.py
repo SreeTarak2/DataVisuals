@@ -30,6 +30,7 @@ class _Config:
 # ---------------------------------------------------
 class DatasetInfo(BaseModel):
     """Basic info about a processed dataset."""
+
     id: str
     filename: str
     total_rows: int
@@ -50,6 +51,7 @@ class DatasetMetadata(BaseModel):
     - correlations & summaries
     - data quality report
     """
+
     dataset_overview: Dict[str, Any]
     column_metadata: List[Dict[str, Any]]
     statistical_summaries: Dict[str, Any]
@@ -66,6 +68,7 @@ class DatasetMetadata(BaseModel):
 # ---------------------------------------------------
 class DatasetData(BaseModel):
     """Paginated dataset rows."""
+
     data: List[Dict[str, Any]]
     total_rows: int
     current_page: int
@@ -78,6 +81,7 @@ class DatasetData(BaseModel):
 
 class DatasetSummary(BaseModel):
     """High-level summary from profiling service."""
+
     total_rows: int
     total_columns: int
     numeric_columns: List[str]
@@ -95,11 +99,12 @@ class DatasetSummary(BaseModel):
 # ---------------------------------------------------
 class DatasetFileInfo(BaseModel):
     """Represents a file stored in disk or DB."""
+
     file_id: str
     original_filename: str
     file_path: str
     file_size: int
-    storage_type: str               # "database" or "file"
+    storage_type: str  # "database" or "file"
     upload_date: datetime
 
     class Config(_Config):
@@ -108,6 +113,7 @@ class DatasetFileInfo(BaseModel):
 
 class DatasetCreate(BaseModel):
     """Payload for creating DB record for an uploaded file."""
+
     name: str
     description: Optional[str] = None
     file_id: str
@@ -128,6 +134,7 @@ class DatasetFile(DatasetFileInfo):
     - preview/sample rows
     - processing status
     """
+
     id: str
     user_id: str
     name: str
@@ -154,9 +161,101 @@ class DatasetFile(DatasetFileInfo):
 # ---------------------------------------------------
 class UploadResponse(BaseModel):
     """Return after a dataset upload + processing."""
+
     dataset_id: str
     message: str
     metadata: DatasetMetadata
+
+    class Config(_Config):
+        pass
+
+
+# ---------------------------------------------------
+# Dataset Analytics (NEW - Separated from uploads)
+# ---------------------------------------------------
+class DatasetAnalytics(BaseModel):
+    """
+    Pre-computed analytical results stored separately from upload metadata.
+    Includes all heavy analytical data that was previously in metadata.
+    """
+
+    dataset_id: str
+    user_id: str
+
+    chart_recommendations: Optional[List[Dict[str, Any]]] = []
+    statistical_findings: Optional[List[Dict[str, Any]]] = []
+    deep_analysis: Optional[Dict[str, Any]] = {}
+    data_profile: Optional[Dict[str, Any]] = {}
+    domain_intelligence: Optional[Dict[str, Any]] = {}
+    data_quality: Optional[Dict[str, Any]] = {}
+
+    computed_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    pipeline_version: Optional[str] = None
+
+    class Config(_Config):
+        pass
+
+
+class DatasetAnalyticsResponse(BaseModel):
+    """Response schema for dataset analytics."""
+
+    dataset_id: str
+    chart_recommendations: List[Dict[str, Any]]
+    statistical_findings: List[Dict[str, Any]]
+    deep_analysis: Dict[str, Any]
+    data_profile: Dict[str, Any]
+    domain_intelligence: Dict[str, Any]
+    data_quality: Dict[str, Any]
+    computed_at: datetime
+
+    class Config(_Config):
+        pass
+
+
+# ---------------------------------------------------
+# Report Metadata (NEW)
+# ---------------------------------------------------
+class ReportMetadata(BaseModel):
+    """
+    Metadata for downloaded/generating reports.
+    Tracks report download history without storing the PDF itself.
+    """
+
+    dataset_id: str
+    user_id: str
+
+    title: Optional[str] = None
+    generated_at: Optional[datetime] = None
+    include_charts: bool = True
+    status: str = "pending"
+
+    findings_count: int = 0
+    warnings_count: int = 0
+    charts_included: Optional[List[str]] = []
+    domain: Optional[str] = None
+    file_size: Optional[int] = None
+
+    analytics_version: Optional[str] = None
+    analytics_computed_at: Optional[datetime] = None
+
+    class Config(_Config):
+        pass
+
+
+class ReportMetadataResponse(BaseModel):
+    """Response schema for report metadata."""
+
+    id: str
+    dataset_id: str
+    title: Optional[str]
+    generated_at: Optional[datetime]
+    include_charts: bool
+    status: str
+    findings_count: int
+    warnings_count: int
+    domain: Optional[str]
+    file_size: Optional[int]
 
     class Config(_Config):
         pass
@@ -174,4 +273,8 @@ __all__ = [
     "DatasetFile",
     "DatasetSummary",
     "UploadResponse",
+    "DatasetAnalytics",
+    "DatasetAnalyticsResponse",
+    "ReportMetadata",
+    "ReportMetadataResponse",
 ]

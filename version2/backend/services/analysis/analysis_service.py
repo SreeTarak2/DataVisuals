@@ -646,6 +646,97 @@ class AnalysisService:
             self._quis_cache[dataset_id] = {'result': quis_results, 'ts': time.time()}
         return quis_results
 
+    def get_correlation_matrix(self, df: pl.DataFrame) -> Dict[str, Any]:
+        """
+        Calculate a full correlation matrix for all numeric columns.
+        Returns a dictionary with 'columns' and 'matrix' (2D list).
+        """
+        numeric_cols = df.select(pl.col(self.numeric_dtypes)).columns
+        if len(numeric_cols) < 2:
+            return {"columns": numeric_cols, "matrix": []}
+            
+        # Select numeric data and handle NaN by dropping rows
+        data_df = df.select(numeric_cols).dropna()
+        if len(data_df) < 5:
+            # Fallback for very small or empty datasets after dropna
+            n = len(numeric_cols)
+            return {
+                "columns": numeric_cols, 
+                "matrix": [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+            }
+            
+        data = data_df.to_numpy().T # Transpose for np.corrcoef (rows are variables)
+        matrix = np.corrcoef(data)
+        
+        # Convert to list of lists and handle NaNs/rounding
+        matrix_list = []
+        for i, row in enumerate(matrix):
+            clean_row = []
+            for j, val in enumerate(row):
+                if i == j:
+                    clean_row.append(1.0)
+                else:
+                    clean_row.append(round(float(val), 3) if not np.isnan(val) else 0.0)
+            matrix_list.append(clean_row)
+            
+        return {
+            "columns": numeric_cols,
+            "matrix": matrix_list,
+            "sample_size": len(data_df)
+        }
+
+    def compare_distributions(self, df: pl.DataFrame, numeric_col: str, group_col: str) -> Dict[str, Any]:
+        """
+        Analyze and compare distributions of a numeric column across categories.
+        """
+        try:
+            # Get unique groups
+            clean_df = df.select([group_col, numeric_col]).dropna()
+            unique_groups = clean_df[group_col].unique().to_list()
+            
+            # Limit to top 8 groups for visual clarity
+            counts = clean_df[group_col].value_counts().sort("count", descending=True)
+            top_groups = counts[group_col].head(8).to_list()
+            
+            group_stats = []
+            for group in top_groups:
+                group_data = clean_df.filter(pl.col(group_col) == group)[numeric_col].to_numpy()
+                if len(group_data) >= 5:
+                    stats = {
+                        "group": str(group),
+                        "mean": round(float(np.mean(group_data)), 2),
+                        "median": round(float(np.median(group_data)), 2),
+                        "std": round(float(np.std(group_data)), 2),
+                        "min": round(float(np.min(group_data)), 2),
+                        "max": round(float(np.max(group_data)), 2),
+                        "count": len(group_data),
+                        "histogram": np.histogram(group_data, bins=20)[0].tolist()
+                    }
+                    group_stats.append(stats)
+            
+            # Basic ANOVA/Kruskal-Wallis to see if distributions differ significantly
+            groups_data = [clean_df.filter(pl.col(group_col) == g)[numeric_col].to_numpy() for g in top_groups if len(clean_df.filter(pl.col(group_col) == g)) >= 5]
+            
+            sig_test = {}
+            if len(groups_data) >= 2:
+                from scipy.stats import f_oneway, kruskal
+                try:
+                    f_stat, p_val = f_oneway(*groups_data)
+                    sig_test = {"method": "ANOVA", "p_value": round(float(p_val), 5), "significant": p_val < 0.05}
+                except:
+                    k_stat, p_val = kruskal(*groups_data)
+                    sig_test = {"method": "Kruskal-Wallis", "p_value": round(float(p_val), 5), "significant": p_val < 0.05}
+            
+            return {
+                "numeric_column": numeric_col,
+                "group_column": group_col,
+                "group_stats": group_stats,
+                "significance": sig_test
+            }
+        except Exception as e:
+            logger.error(f"Distribution comparison failed: {e}")
+            return {"error": str(e)}
+
     # ============================================================
     # ENHANCED DATA SCIENTIST-LEVEL ANALYSIS METHODS
     # ============================================================

@@ -182,9 +182,13 @@ export const chartAPI = {
       fields: fields,
       aggregation: aggregation,
       title: options.title || `${fields[1] || 'Value'} by ${fields[0] || 'Category'}`,
-      include_insights: options.includeInsights || false,
+      include_insights: options.include_insights !== undefined ? options.include_insights : true,
       filters: options.filters || null,
-      group_by: options.groupBy || null
+      group_by: options.groupBy || null,
+      from: options.from || null,
+      to: options.to || null,
+      granularity: options.granularity || 'day',
+      limit: options.limit || 10000,
     }),
 
   // Legacy alias for backward compatibility
@@ -226,6 +230,14 @@ export const chartAPI = {
     api.post('/charts/render-preview', {
       chart_config: chartConfig,
       dataset_id: datasetId
+    }),
+
+  // Explain a chart (lazy load explanation)
+  explainChart: (datasetId, chartKey, chartConfig) =>
+    api.post('/charts/explain', {
+      dataset_id: datasetId,
+      chart_key: chartKey,
+      chart_config: chartConfig
     }),
 };
 
@@ -313,6 +325,29 @@ export const insightsAPI = {
   },
 };
 
+// Reports API calls (PDF generation)
+export const reportsAPI = {
+  // Get PDF report for a dataset
+  downloadPDF: (datasetId, includeCharts = true) => {
+    const params = new URLSearchParams();
+    if (!includeCharts) params.set('include_charts', 'false');
+    const qs = params.toString();
+    return `${API_URL}/reports/${datasetId}/pdf${qs ? `?${qs}` : ''}`;
+  },
+
+  // Preview report as HTML
+  previewReport: (datasetId, includeCharts = true) => {
+    const params = new URLSearchParams();
+    params.set('preview', 'true');
+    if (!includeCharts) params.set('include_charts', 'false');
+    const qs = params.toString();
+    return `${API_URL}/reports/${datasetId}/pdf?${qs}`;
+  },
+
+  // Get report metadata/info
+  getReportInfo: (datasetId) => api.get(`/reports/${datasetId}/report-info`),
+};
+
 // Agentic AI & Belief Store API calls
 export const agenticAPI = {
   // Run agentic QUIS analysis
@@ -334,6 +369,46 @@ export const agenticAPI = {
   // Clear all beliefs (reset personalization)
   clearBeliefs: () =>
     api.delete('/agentic/beliefs'),
+};
+
+// Privacy API
+export const privacyAPI = {
+  // Get global privacy settings
+  getGlobalSettings: () => api.get('/privacy/settings'),
+
+  // Update global privacy settings
+  updateGlobalSettings: (updates) => api.put('/privacy/settings', updates),
+
+  // Get dataset-specific privacy settings
+  getDatasetSettings: (datasetId) => api.get(`/privacy/settings/${datasetId}`),
+
+  // Update dataset-specific privacy settings
+  updateDatasetSettings: (datasetId, updates) => api.put(`/privacy/settings/${datasetId}`, updates),
+
+  // Scan dataset for PII
+  scanForPII: (datasetId) => api.post(`/privacy/detect-pii/${datasetId}`),
+
+  // Generate privacy preview (dry-run)
+  generatePreview: (datasetId) => api.post(`/privacy/preview/${datasetId}`),
+
+  // Manage private columns
+  managePrivateColumn: (datasetId, action, columnName) =>
+    api.post(`/privacy/settings/${datasetId}/columns`, { action, column_name: columnName }),
+
+  // Get audit log
+  getAuditLog: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return api.get(`/privacy/audit-log${query ? `?${query}` : ''}`);
+  },
+
+  // Get audit stats
+  getAuditStats: (days = 30) => api.get(`/privacy/audit-log/stats?days=${days}`),
+
+  // Export privacy data (GDPR)
+  exportPrivacyData: () => api.get('/privacy/export'),
+
+  // Dismiss privacy notice
+  dismissNotice: (dismissed = true) => api.post('/privacy/notice-dismissal', { dismissed }),
 };
 
 export default api;

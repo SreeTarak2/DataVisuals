@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Analysis Report — {{DATASET_NAME}}</title>
+<style>
+/* ── PAGE SETUP ── */
+@page {
+    size: A4;
+    margin: 22mm 18mm 22mm 18mm;
+    @bottom-center {
+        content: counter(page) " / " counter(pages);
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        font-size: 8pt;
+        color: #94a3b8;
+    }
+    @bottom-left {
+        content: "{{DATASET_NAME}} — Confidential";
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        font-size: 8pt;
+        color: #cbd5e1;
+    }
+    @top-right {
+        content: "DataSage Analysis Report";
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        font-size: 8pt;
+        color: #cbd5e1;
+    }
+}
+
+@page :first {
+    margin: 0;
+    @bottom-center { content: none; }
+    @bottom-left { content: none; }
+    @top-right { content: none; }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 10pt;
+    line-height: 1.55;
+    color: #1e293b;
+    background: #fff;
+}
+
+/* ── TYPOGRAPHY ── */
+h1, h2, h3, h4 { font-weight: 600; line-height: 1.25; }
+h2 { font-size: 15pt; color: #0f172a; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 2px solid #1e40af; }
+h3 { font-size: 12pt; color: #1e293b; margin-bottom: 10px; }
+h4 { font-size: 10.5pt; color: #334155; margin: 16px 0 8px; }
+p  { margin-bottom: 8px; }
+
+/* ── COVER PAGE ── */
+.cover {
+    width: 100%;
+    height: 100vh;
+    background: linear-gradient(145deg, #0f172a 0%, #1e1b4b 55%, #1e3a5f 100%);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    page-break-after: always;
+    position: relative;
+    overflow: hidden;
+}
+
+.cover-accent {
+    position: absolute;
+    top: 0; right: 0;
+    width: 45%;
+    height: 100%;
+    background: linear-gradient(135deg, transparent 0%, rgba(99,102,241,0.12) 100%);
+}
+
+.cover-body {
+    position: relative;
+    z-index: 1;
+    padding: 60px 64px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.cover-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: auto;
+}
+
+.cover-brand-dot {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+}
+
+.cover-brand-name {
+    font-size: 14pt;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: rgba(255,255,255,0.9);
+}
+
+.cover-tag {
+    display: inline-block;
+    font-size: 8.5pt;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #a5b4fc;
+    margin-bottom: 20px;
+}
+
+.cover-title {
+    font-size: 32pt;
+    font-weight: 300;
+    letter-spacing: -0.5px;
+    line-height: 1.1;
+    color: #fff;
+    margin-bottom: 12px;
+    max-width: 560px;
+}
+
+.cover-subtitle {
+    font-size: 13pt;
+    font-weight: 400;
+    color: rgba(255,255,255,0.6);
+    margin-bottom: 40px;
+    max-width: 480px;
+    line-height: 1.5;
+}
+
+.cover-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 36px;
+}
+
+.cover-stat {
+    padding: 18px 20px;
+    border-right: 1px solid rgba(255,255,255,0.12);
+}
+.cover-stat:last-child { border-right: none; }
+
+.cover-stat-value {
+    font-size: 22pt;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 4px;
+}
+
+.cover-stat-label {
+    font-size: 8pt;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.45);
+}
+
+.cover-meta-row {
+    display: flex;
+    gap: 32px;
+    padding-top: 28px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+.cover-meta-item { }
+.cover-meta-label {
+    font-size: 8pt;
+    color: rgba(255,255,255,0.4);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+.cover-meta-value {
+    font-size: 10pt;
+    font-weight: 500;
+    color: rgba(255,255,255,0.85);
+}
+
+.health-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-size: 9pt;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.health-pill.strong  { background: rgba(34,197,94,0.18);  color: #86efac; }
+.health-pill.stable  { background: rgba(59,130,246,0.18); color: #93c5fd; }
+.health-pill.warning { background: rgba(245,158,11,0.18); color: #fcd34d; }
+.health-pill.critical{ background: rgba(239,68,68,0.18);  color: #fca5a5; }
+
+/* ── BODY SECTIONS ── */
+.section {
+    margin-bottom: 32px;
+    page-break-inside: avoid;
+}
+
+.section-intro {
+    font-size: 10pt;
+    color: #64748b;
+    margin-bottom: 16px;
+    line-height: 1.6;
+}
+
+/* ── NARRATIVE HOOK ── */
+.narrative-hook {
+    border-left: 4px solid #6366f1;
+    padding: 16px 20px;
+    background: #f8faff;
+    border-radius: 0 8px 8px 0;
+    margin-bottom: 20px;
+}
+.narrative-hook p {
+    font-size: 11.5pt;
+    line-height: 1.7;
+    color: #1e293b;
+    font-style: italic;
+    margin: 0;
+}
+
+.takeaway-box {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+}
+.takeaway-box .tbox-label {
+    font-size: 8.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #b45309;
+    margin-bottom: 6px;
+}
+.takeaway-box p { font-size: 10pt; color: #1e293b; margin: 0; }
+
+.top-priority-box {
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 20px;
+}
+.top-priority-box .tbox-label {
+    font-size: 8.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #166534;
+    margin-bottom: 6px;
+}
+.top-priority-box p { font-size: 10pt; color: #1e293b; margin: 0; }
+
+/* ── FINDING CARDS ── */
+.finding-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    margin-bottom: 18px;
+    overflow: hidden;
+    page-break-inside: avoid;
+    border-left-width: 4px;
+}
+.finding-normal { border-left-color: #6366f1; }
+.finding-medium  { border-left-color: #f59e0b; }
+.finding-high    { border-left-color: #ef4444; }
+
+.finding-meta {
+    padding: 10px 18px 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #f8fafc;
+    border-bottom: 1px solid #f1f5f9;
+}
+.finding-num {
+    font-size: 8pt;
+    font-weight: 700;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.finding-importance {
+    font-size: 8pt;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+.imp-high   { background: #fef2f2; color: #dc2626; }
+.imp-medium { background: #fffbeb; color: #d97706; }
+
+.finding-headline {
+    font-size: 12pt;
+    font-weight: 600;
+    color: #0f172a;
+    padding: 12px 18px 4px;
+    line-height: 1.3;
+}
+.finding-narrative {
+    font-size: 10pt;
+    line-height: 1.7;
+    color: #334155;
+    padding: 4px 18px 10px;
+}
+.finding-number-box {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 8px 18px;
+    background: #f0fdf4;
+    border-top: 1px solid #dcfce7;
+}
+.fn-label {
+    font-size: 8pt;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #166534;
+}
+.fn-value {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #15803d;
+}
+.finding-so-what {
+    font-size: 9.5pt;
+    color: #64748b;
+    padding: 4px 18px 12px;
+}
+
+/* ── RISK CARDS ── */
+.risk-card {
+    border-radius: 10px;
+    margin-bottom: 16px;
+    overflow: hidden;
+    page-break-inside: avoid;
+    border: 1px solid;
+}
+.risk-critical { border-color: #fca5a5; background: #fff5f5; }
+.risk-high     { border-color: #fcd34d; background: #fffdf0; }
+.risk-medium   { border-color: #bfdbfe; background: #f0f7ff; }
+
+.risk-header {
+    padding: 12px 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+.risk-badge {
+    font-size: 8pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    white-space: nowrap;
+}
+.badge-critical { background: #ef4444; color: #fff; }
+.badge-high     { background: #f59e0b; color: #fff; }
+.badge-medium   { background: #3b82f6; color: #fff; }
+
+.risk-headline {
+    font-size: 11pt;
+    font-weight: 600;
+    color: #0f172a;
+}
+.risk-narrative {
+    font-size: 10pt;
+    line-height: 1.65;
+    color: #334155;
+    padding: 12px 18px;
+}
+.risk-action {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px 18px;
+    background: rgba(0,0,0,0.03);
+    border-top: 1px solid rgba(0,0,0,0.06);
+}
+.ra-label {
+    font-size: 8.5pt;
+    font-weight: 700;
+    color: #166534;
+    white-space: nowrap;
+}
+.ra-text { font-size: 9.5pt; color: #1e293b; }
+
+/* ── ACTION PLAN ── */
+.action-primary {
+    background: linear-gradient(135deg, #1e1b4b 0%, #1e3a5f 100%);
+    color: #fff;
+    border-radius: 10px;
+    padding: 24px 28px;
+    margin-bottom: 20px;
+    page-break-inside: avoid;
+}
+.action-badge {
+    display: inline-block;
+    font-size: 8pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #a5b4fc;
+    margin-bottom: 10px;
+}
+.action-title {
+    font-size: 13pt;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 12px;
+}
+.action-why, .action-result {
+    font-size: 10pt;
+    color: rgba(255,255,255,0.8);
+    margin-bottom: 8px;
+    line-height: 1.6;
+}
+.action-tags {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.15);
+}
+.atag {
+    font-size: 9pt;
+    color: rgba(255,255,255,0.7);
+    background: rgba(255,255,255,0.1);
+    padding: 4px 12px;
+    border-radius: 20px;
+}
+
+.secondary-heading {
+    font-size: 10.5pt;
+    font-weight: 600;
+    color: #334155;
+    margin: 18px 0 10px;
+}
+.secondary-list {
+    list-style: none;
+    padding: 0;
+}
+.sec-action {
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    background: #f8fafc;
+    border-left: 3px solid #6366f1;
+    border-radius: 0 6px 6px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.sec-what { font-size: 10pt; font-weight: 600; color: #1e293b; }
+.sec-why  { font-size: 9.5pt; color: #64748b; }
+.sec-when { font-size: 9pt; color: #6366f1; }
+
+.conclusion-box {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 16px 18px;
+    font-size: 10.5pt;
+    line-height: 1.7;
+    color: #334155;
+    font-style: italic;
+}
+
+/* ── DATA QUALITY ── */
+.dq-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.dq-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+}
+.dq-card.main {
+    border-color: #c7d2fe;
+    background: #f5f3ff;
+}
+.dq-score {
+    font-size: 22pt;
+    font-weight: 700;
+    color: #1e293b;
+    margin-bottom: 4px;
+}
+.dq-label {
+    font-size: 8.5pt;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+}
+.bar-bg {
+    height: 4px;
+    background: #e2e8f0;
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+.bar-fill {
+    height: 100%;
+    border-radius: 2px;
+}
+.flags-section { margin-top: 14px; }
+.flags-list {
+    list-style: none;
+    padding: 0;
+}
+.flags-list li {
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 6px;
+    font-size: 9pt;
+    color: #78350f;
+}
+
+/* ── TABLES ── */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9pt;
+    margin: 10px 0;
+}
+.data-table th {
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 9px 11px;
+    text-align: left;
+    font-size: 8pt;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.data-table td {
+    padding: 9px 11px;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: top;
+}
+.data-table tr:nth-child(even) { background: #f8fafc; }
+.data-table .num {
+    text-align: right;
+    font-family: 'Courier New', monospace;
+    font-size: 9pt;
+}
+
+/* ── BADGES ── */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 8pt;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.badge-strong    { background: #dcfce7; color: #166534; }
+.badge-moderate  { background: #fef9c3; color: #854d0e; }
+.badge-weak      { background: #fee2e2; color: #991b1b; }
+.badge-high      { background: #fee2e2; color: #991b1b; }
+.badge-medium    { background: #fef3c7; color: #92400e; }
+.badge-low       { background: #f0f9ff; color: #075985; }
+
+.dtype {
+    font-family: 'Courier New', monospace;
+    font-size: 8pt;
+    background: #f1f5f9;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #475569;
+}
+
+.dir-up   { color: #16a34a; font-weight: 600; }
+.dir-down { color: #dc2626; font-weight: 600; }
+.dir-flat { color: #6366f1; font-weight: 600; }
+
+.freq-badge {
+    font-size: 8pt;
+    background: #eff6ff;
+    color: #1d4ed8;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+}
+
+/* ── MISC ── */
+.empty {
+    color: #94a3b8;
+    font-style: italic;
+    padding: 14px;
+    background: #f8fafc;
+    border-radius: 6px;
+    font-size: 9.5pt;
+}
+
+.page-break { page-break-after: always; }
+
+.divider {
+    border: none;
+    border-top: 1px solid #e2e8f0;
+    margin: 24px 0;
+}
+
+.stat-row {
+    display: flex;
+    gap: 24px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 9.5pt;
+}
+.stat-row:last-child { border-bottom: none; }
+.stat-label { color: #64748b; flex: 0 0 140px; }
+.stat-value { font-weight: 600; color: #1e293b; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════
+     COVER PAGE
+══════════════════════════════════════════ -->
+<div class="cover">
+    <div class="cover-accent"></div>
+    <div class="cover-body">
+
+        <div class="cover-brand">
+            <div class="cover-brand-dot"></div>
+            <span class="cover-brand-name">DataSage</span>
+        </div>
+
+        <div>
+            <div class="cover-tag">Analytical Intelligence Report</div>
+            <h1 class="cover-title">{{STORY_TITLE}}</h1>
+            <p class="cover-subtitle">{{STORY_SUBTITLE}}</p>
+        </div>
+
+        {{COVER_STATS}}
+
+        <div class="cover-meta-row">
+            <div class="cover-meta-item">
+                <div class="cover-meta-label">Dataset</div>
+                <div class="cover-meta-value">{{DATASET_NAME}}</div>
+            </div>
+            <div class="cover-meta-item">
+                <div class="cover-meta-label">Domain</div>
+                <div class="cover-meta-value">{{DOMAIN}}</div>
+            </div>
+            <div class="cover-meta-item">
+                <div class="cover-meta-label">Time Period</div>
+                <div class="cover-meta-value">{{TIME_PERIOD}}</div>
+            </div>
+            <div class="cover-meta-item">
+                <div class="cover-meta-label">Generated</div>
+                <div class="cover-meta-value">{{GENERATED_DATE}}</div>
+            </div>
+            <div class="cover-meta-item">
+                <div class="cover-meta-label">Data Health</div>
+                <div class="cover-meta-value">
+                    <span class="health-pill {{HEALTH_CLASS}}">{{OVERALL_HEALTH}}</span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════
+     EXECUTIVE NARRATIVE
+══════════════════════════════════════════ -->
+<section class="section">
+    <h2>Executive Narrative</h2>
+
+    <div class="narrative-hook">
+        <p>{{OPENING_HOOK}}</p>
+    </div>
+
+    <div class="takeaway-box">
+        <div class="tbox-label">Key Takeaway</div>
+        <p>{{TAKEAWAY}}</p>
+    </div>
+
+    <div class="top-priority-box">
+        <div class="tbox-label">Top Priority</div>
+        <p>{{TOP_PRIORITY}}</p>
+    </div>
+
+    <div class="takeaway-box" style="background:#f0f7ff;border-color:#bfdbfe">
+        <div class="tbox-label" style="color:#1d4ed8">Why It Matters</div>
+        <p>{{WHY_MATTERS}}</p>
+    </div>
+
+    <div class="stat-row">
+        <span class="stat-label">Story Theme</span>
+        <span class="stat-value">{{STORY_THEME}}</span>
+    </div>
+    <div class="stat-row">
+        <span class="stat-label">Overall Health</span>
+        <span class="stat-value">{{OVERALL_HEALTH}}</span>
+    </div>
+    <div class="stat-row">
+        <span class="stat-label">Records Analyzed</span>
+        <span class="stat-value">{{TOTAL_RECORDS}} rows × {{TOTAL_COLUMNS}} columns</span>
+    </div>
+</section>
+
+<hr class="divider">
+
+
+<!-- ══════════════════════════════════════════
+     KEY FINDINGS
+══════════════════════════════════════════ -->
+<section class="section">
+    <h2>Key Findings</h2>
+    <p class="section-intro">
+        AI-generated narrative insights ranked by business impact. Each finding is drawn
+        directly from the statistical patterns detected in your data.
+    </p>
+    {{FINDINGS_SECTION}}
+</section>
+
+<div class="page-break"></div>
+
+
+<!-- ══════════════════════════════════════════
+     RISKS & WARNINGS
+══════════════════════════════════════════ -->
+<section class="section">
+    <h2>Risks &amp; Warnings</h2>
+    <p class="section-intro">
+        Patterns that represent risk to your business goals. Each item includes a specific
+        recommended action to address it.
+    </p>
+    {{COMPLICATIONS_SECTION}}
+</section>
+
+<hr class="divider">
+
+
+<!-- ══════════════════════════════════════════
+     ACTION PLAN
+══════════════════════════════════════════ -->
+<section class="section">
+    <h2>Recommended Actions</h2>
+    <p class="section-intro">
+        Prioritized actions derived from the findings above. Start with the primary action
+        for the highest leverage impact.
+    </p>
+    {{ACTION_PLAN_SECTION}}
+</section>
+
+<hr class="divider">
+
+
+<!-- ══════════════════════════════════════════
+     METRICS TO MONITOR
+══════════════════════════════════════════ -->
+<section class="section">
+    <h2>Metrics to Monitor</h2>
+    <p class="section-intro">
+        Track these metrics going forward. Each has a specific threshold that should trigger
+        a review or action.
+    </p>
+    {{WATCH_SECTION}}
+</section>
+
+<div class="page-break"></div>
+
+
+<!-- ══════════════════════════════════════════
+     STATISTICAL ANALYSIS — CORRELATIONS
+══════════════════════════════════════════ -->
+<section class="section">
+    <h2>Statistical Analysis: Relationships</h2>
+    <p class="section-intro">
+        Variable pairs with measurable relationships. Strength is based on the
+        absolute correlation coefficient; direction indicates positive or inverse movement.
+    </p>
+    {{CORRELATIONS_TABLE}}
+</section>
+
+<hr class="divider">
+
+
+<!-- ══════════════════════════════════════════
+     STATISTICAL ANALYSIS — TRENDS
+══════════════════════════════════════════ -->
+<section class="section">
+    <h2>Statistical Analysis: Trends</h2>
+    <p class="section-intro">
+        Time-based directional patterns detected across your variables.
+    </p>
+    {{TRENDS_TABLE}}
+</section>
+
+<hr class="divider">
+
+
+<!-- ══════════════════════════════════════════
+     ANOMALY DETECTION
+══════════════════════════════════════════ -->
+<section class="section">
+    <h2>Anomaly Detection</h2>
+    <p class="section-intro">
+        Values and patterns that deviate significantly from expected behavior.
+        High-severity anomalies may indicate data quality issues or unusual events.
+    </p>
+    {{ANOMALIES_TABLE}}
+</section>
+
+<div class="page-break"></div>
+
+
+<!-- ══════════════════════════════════════════
+     DATA QUALITY REPORT
+══════════════════════════════════════════ -->
+<section class="section">
+    <h2>Data Quality Report</h2>
+    <p class="section-intro">
+        A comprehensive assessment of the dataset's completeness, uniqueness, and consistency.
+        Quality issues can affect the reliability of all findings above.
+    </p>
+    {{DATA_QUALITY_SECTION}}
+</section>
+
+<hr class="divider">
+
+
+<!-- ══════════════════════════════════════════
+     APPENDIX — COLUMN STATISTICS
+══════════════════════════════════════════ -->
+<section class="section">
+    <h2>Appendix: Column Statistics</h2>
+    <p class="section-intro">
+        Summary statistics for every column analyzed.
+    </p>
+    {{COLUMN_STATS_TABLE}}
+</section>
+
+
+</body>
+</html>

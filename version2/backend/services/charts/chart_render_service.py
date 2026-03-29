@@ -348,11 +348,11 @@ class ChartRenderService:
     ) -> Dict[str, Any]:
         """
         Render chart from config with automatic dataset loading.
-        
+
         Args:
             chart_config: Chart configuration
             dataset_id: Optional dataset ID (if not in config)
-        
+
         Returns:
             Rendered chart payload
         """
@@ -361,22 +361,21 @@ class ChartRenderService:
             ds_id = chart_config.get("dataset_id") or dataset_id
             if not ds_id:
                 raise ValueError("dataset_id is required")
-            
+
             # Load dataset using enhanced_dataset_service
             logger.info(f"Loading dataset {ds_id}...")
-            
-            # Get user_id from config if provided, otherwise use None (service will handle auth separately)
-            user_id = config.get("user_id")
+
+            # Get user_id from config if provided, otherwise use None
+            user_id = chart_config.get("user_id")  # ← was: config.get("user_id")
             if not user_id:
-                # Try to get from context or raise error
                 raise ValueError("user_id is required in config for dataset loading")
-            
+
             # Load the dataset data
             df = await enhanced_dataset_service.load_dataset_data(ds_id, user_id)
-            
+
             # Now render the chart with the loaded dataframe
-            return await self.render_chart(df, config)
-        
+            return await self.render_chart(df, chart_config)  # ← was: render_chart(df, config)
+
         except Exception as e:
             logger.error(f"✗ Failed to render chart from config: {e}")
             raise

@@ -267,6 +267,19 @@ async def get_dataset_metadata(
                 except Exception:
                     pass
             
+            # Boolean / low-unique integer columns: store actual values (binary flags, status codes)
+            elif df[col].dtype == pl.Boolean or (
+                df[col].dtype in [pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64]
+                and df[col].n_unique() <= 20
+            ):
+                try:
+                    col_meta["top_values"] = [
+                        {"value": str(v), "count": int(df[col].filter(pl.col(col) == v).len())}
+                        for v in df[col].drop_nulls().unique().to_list()[:10]
+                    ]
+                except Exception:
+                    pass
+
             # Categorical columns: add value counts (top 10)
             elif df[col].dtype == pl.Utf8 and df[col].n_unique() < 100:
                 try:
