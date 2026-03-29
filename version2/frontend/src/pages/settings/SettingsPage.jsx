@@ -27,6 +27,10 @@ import {
   Trash2,
   User,
   UserCog,
+  Lock,
+  FileSearch,
+  CheckCircle,
+  Loader2,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "react-hot-toast";
@@ -36,7 +40,7 @@ import useDatasetStore from "../../store/datasetStore";
 import useChatStore from "../../store/chatStore";
 import useChatHistoryStore from "../../store/chatHistoryStore";
 import { cn } from "../../lib/utils";
-import { agenticAPI } from "../../services/api";
+import { agenticAPI, privacyAPI, datasetAPI } from "../../services/api";
 
 /* ─── Constants ─── */
 const SETTINGS_PREFS_KEY = "datasage-settings-preferences";
@@ -48,6 +52,7 @@ const TAB_ITEMS = [
   { id: "workspace", label: "Appearance", icon: SlidersHorizontal },
   { id: "data", label: "Data & Session", icon: Database },
   { id: "ai-memory", label: "AI Memory", icon: BrainCircuit },
+  { id: "privacy", label: "Privacy", icon: Shield },
 ];
 
 /* ─── Motion ─── */
@@ -96,12 +101,12 @@ const getDisplayName = (u) => u?.username || u?.full_name || "User";
 
 /* ─── Primitives ─── */
 const inputCls =
-  "h-12 w-full rounded-xl border border-white/[0.08] bg-noir/60 px-4 text-[15px] text-pearl/90 placeholder:text-granite/60 outline-none transition-all focus:border-pearl/25 focus:ring-2 focus:ring-pearl/10";
+  "h-12 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 text-[15px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none transition-all focus:border-[var(--accent-primary)] focus:ring-2 focus:ring-[var(--accent-primary-light)]";
 
 const Toggle = ({ checked, onChange }) => (
   <button type="button" role="switch" aria-checked={checked} onClick={onChange}
     className={cn("relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors duration-200",
-      checked ? "border-pearl/30 bg-pearl/80" : "border-white/[0.1] bg-avocado/80")}>
+      checked ? "border-[var(--accent-primary)] bg-[var(--accent-primary)]" : "border-[var(--border)] bg-[var(--bg-secondary)]")}>
     <span className={cn("pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200",
       checked ? "translate-x-[24px]" : "translate-x-[3px]")} />
   </button>
@@ -109,10 +114,10 @@ const Toggle = ({ checked, onChange }) => (
 
 /* ─── Horizontal form row (label left, content right) — stacks on mobile ─── */
 const FormRow = ({ label, description, children, noBorder }) => (
-  <div className={cn("flex flex-col sm:flex-row sm:items-start gap-1.5 sm:gap-8 py-5", !noBorder && "border-b border-white/[0.05]")}>
+  <div className={cn("flex flex-col sm:flex-row sm:items-start gap-1.5 sm:gap-8 py-5", !noBorder && "border-b border-[var(--border)]")}>
     <div className="sm:w-[280px] shrink-0">
-      <p className="text-[15px] font-medium text-pearl">{label}</p>
-      {description && <p className="mt-1 text-sm text-granite/90 leading-relaxed">{description}</p>}
+      <p className="text-[15px] font-medium text-[var(--text-primary)]">{label}</p>
+      {description && <p className="mt-1 text-sm text-[var(--text-secondary)] leading-relaxed">{description}</p>}
     </div>
     <div className="flex-1 mt-2 sm:mt-0">{children}</div>
   </div>
@@ -128,14 +133,16 @@ const ToggleFormRow = ({ label, description, checked, onChange }) => (
 );
 
 /* ─── Action footer bar (Cancel + Save) ─── */
-const ActionFooter = ({ onSave, saving, disabled, saveLabel = "Save changes", saveClassName }) => (
-  <div className="flex items-center justify-end gap-3 pt-5 border-t border-white/[0.05] mt-2">
-    <motion.button whileTap={{ scale: 0.97 }}
-      className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-6 py-2.5 text-[15px] font-medium text-pearl/70 transition-all hover:bg-white/[0.06] hover:text-pearl">
+const ActionFooter = ({ onSave, onCancel, saving, disabled, saveLabel = "Save changes", saveClassName }) => (
+  <div className="flex items-center justify-end gap-3 pt-5 border-t border-[var(--border)] mt-2">
+    <motion.button
+      whileTap={{ scale: 0.97 }}
+      onClick={onCancel}
+      className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-6 py-2.5 text-[15px] font-medium text-[var(--text-secondary)] transition-all hover:bg-[var(--bg-active)] hover:text-[var(--text-primary)]">
       Cancel
     </motion.button>
     <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.97 }} onClick={onSave} disabled={disabled}
-      className={cn("inline-flex items-center gap-2 rounded-xl bg-pearl px-6 py-2.5 text-[15px] font-semibold text-noir transition-colors hover:bg-pearl/85 disabled:cursor-not-allowed disabled:opacity-50", saveClassName)}>
+      className={cn("inline-flex items-center gap-2 rounded-xl bg-[var(--accent-primary)] px-6 py-2.5 text-[15px] font-semibold text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50", saveClassName)}>
       <Save className="h-[18px] w-[18px]" />
       {saving ? "Saving\u2026" : saveLabel}
     </motion.button>
@@ -176,6 +183,23 @@ const SettingsPage = () => {
   const [clearingBeliefs, setClearingBeliefs] = useState(false);
   const [deletingBeliefId, setDeletingBeliefId] = useState(null);
 
+  /* ── Privacy state ── */
+  const [privacySettings, setPrivacySettings] = useState(null);
+  const [privacyDatasets, setPrivacyDatasets] = useState([]);
+  const [privacyAuditStats, setPrivacyAuditStats] = useState(null);
+  const [loadingPrivacy, setLoadingPrivacy] = useState(false);
+  const [savingPrivacy, setSavingPrivacy] = useState(false);
+  const [scanningPii, setScanningPii] = useState(null);
+  const [piiScanResults, setPiiScanResults] = useState({});
+
+  const RETENTION_OPTIONS = [
+    { value: 30, label: "30 days" },
+    { value: 60, label: "60 days" },
+    { value: 90, label: "90 days" },
+    { value: 365, label: "1 year" },
+    { value: -1, label: "Forever" },
+  ];
+
   const [profileForm, setProfileForm] = useState({ username: getDisplayName(user), email: user?.email || "" });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [showPassword, setShowPassword] = useState({ current: false, next: false, confirm: false });
@@ -208,6 +232,35 @@ const SettingsPage = () => {
     fetchBeliefs();
     return () => { cancelled = true; };
   }, [activeTab]);
+
+  /* ── Fetch privacy settings when Privacy tab is active ── */
+  useEffect(() => {
+    if (activeTab !== "privacy") return;
+    let cancelled = false;
+    const loadPrivacyData = async () => {
+      setLoadingPrivacy(true);
+      try {
+        const [settingsRes, datasetsRes, statsRes] = await Promise.all([
+          privacyAPI.getGlobalSettings(),
+          datasetAPI.getDatasets(),
+          privacyAPI.getAuditStats(30),
+        ]);
+        if (!cancelled) {
+          setPrivacySettings(settingsRes.data?.global_defaults || {});
+          setPrivacyDatasets(datasetsRes.data?.datasets || []);
+          setPrivacyAuditStats(statsRes.data || {});
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to load privacy settings:", err);
+        }
+      } finally {
+        if (!cancelled) setLoadingPrivacy(false);
+      }
+    };
+    loadPrivacyData();
+    return () => { cancelled = true; };
+  }, [activeTab]);
   useEffect(() => {
     setPreferences((p) => p.workspace.theme === theme ? p : { ...p, workspace: { ...p.workspace, theme } });
   }, [theme]);
@@ -218,7 +271,7 @@ const SettingsPage = () => {
     return { total, ready };
   }, [datasets]);
 
-  /* ── Handlers ── */
+  /* ─── Handlers ─── */
   const handleSaveProfile = async () => {
     const username = profileForm.username.trim();
     if (username.length < 2) { toast.error("Username must be at least 2 characters."); return; }
@@ -227,6 +280,11 @@ const SettingsPage = () => {
     setSavingProfile(false);
     if (!r.success) { toast.error(r.error || "Unable to update profile."); return; }
     toast.success("Profile updated.");
+  };
+
+  const handleResetProfile = () => {
+    setProfileForm({ username: getDisplayName(user), email: user?.email || "" });
+    toast.dismiss();
   };
 
   const handleChangePassword = async () => {
@@ -243,6 +301,11 @@ const SettingsPage = () => {
     toast.success("Password changed.");
   };
 
+  const handleResetPassword = () => {
+    setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    toast.dismiss();
+  };
+
   const updatePref = (section, key, value) => {
     setPreferences((p) => ({ ...p, [section]: { ...p[section], [key]: value } }));
     setPrefsDirty(true);
@@ -257,6 +320,13 @@ const SettingsPage = () => {
     setSavingPrefs(false);
     setPrefsDirty(false);
     toast.success("Preferences saved.");
+  };
+
+  const handleResetPrefs = () => {
+    const d = readStoredPreferences(theme);
+    setPreferences(d);
+    setPrefsDirty(false);
+    toast.dismiss();
   };
 
   const handleExport = () => {
@@ -298,20 +368,20 @@ const SettingsPage = () => {
         <input value={profileForm.email} disabled className={cn(inputCls, "max-w-md cursor-not-allowed opacity-50")} />
       </FormRow>
       <FormRow label="Member since" description="When your account was created.">
-        <p className="text-[15px] text-pearl/80 pt-2.5">{formatDate(user?.created_at)}</p>
+        <p className="text-[15px] text-[var(--text-secondary)] pt-2.5">{formatDate(user?.created_at)}</p>
       </FormRow>
       <FormRow label="Last login" description="Your most recent sign-in." noBorder>
-        <p className="text-[15px] text-pearl/80 pt-2.5">{formatDate(user?.last_login)}</p>
+        <p className="text-[15px] text-[var(--text-secondary)] pt-2.5">{formatDate(user?.last_login)}</p>
       </FormRow>
-      <ActionFooter onSave={handleSaveProfile} saving={savingProfile} saveLabel="Save profile" />
+      <ActionFooter onSave={handleSaveProfile} onCancel={handleResetProfile} saving={savingProfile} saveLabel="Save profile" />
     </motion.div>
   );
 
   const renderSecurityTab = () => (
     <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
       <div className="mb-2">
-        <h3 className="text-lg font-semibold text-pearl">Password</h3>
-        <p className="text-sm text-granite/90 mt-1">Please enter your current password to change your password.</p>
+        <h3 className="text-lg font-semibold text-[var(--text-primary)]">Password</h3>
+        <p className="text-sm text-[var(--text-secondary)] mt-1">Please enter your current password to change your password.</p>
       </div>
       {[
         { key: "currentPassword", label: "Current password", vis: "current", value: passwordForm.currentPassword, hint: null },
@@ -325,24 +395,24 @@ const SettingsPage = () => {
                 onChange={(e) => setPasswordForm((p) => ({ ...p, [f.key]: e.target.value }))}
                 className={cn(inputCls, "pr-11")} placeholder={f.label} />
               <button type="button" onClick={() => setShowPassword((p) => ({ ...p, [f.vis]: !p[f.vis] }))}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-granite hover:text-pearl/70 transition-colors p-1">
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors p-1">
                 {showPassword[f.vis] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
-            {f.hint && <p className="mt-1.5 text-sm text-granite/90 leading-relaxed">{f.hint}</p>}
+            {f.hint && <p className="mt-1.5 text-sm text-[var(--text-secondary)] leading-relaxed">{f.hint}</p>}
           </div>
         </FormRow>
       ))}
-      <ActionFooter onSave={handleChangePassword} saving={changingPassword} saveLabel="Update password"
-        saveClassName="bg-gold hover:bg-gold/85" />
+      <ActionFooter onSave={handleChangePassword} onCancel={handleResetPassword} saving={changingPassword} saveLabel="Update password"
+        saveClassName="bg-amber-500 hover:bg-amber-500/85" />
     </motion.div>
   );
 
   const renderNotificationsTab = () => (
     <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
       <div className="mb-2">
-        <h3 className="text-lg font-semibold text-pearl">Notification preferences</h3>
-        <p className="text-sm text-granite/90 mt-1">Choose what reaches your inbox and activity stream.</p>
+        <h3 className="text-lg font-semibold text-[var(--text-primary)]">Notification preferences</h3>
+        <p className="text-sm text-[var(--text-secondary)] mt-1">Choose what reaches your inbox and activity stream.</p>
       </div>
       <ToggleFormRow label="Product announcements" description="Release notes, feature updates, and major platform changes."
         checked={preferences.notifications.productAnnouncements}
@@ -353,15 +423,15 @@ const SettingsPage = () => {
       <ToggleFormRow label="Security alerts" description="Authentication warnings, suspicious activity, and session alerts."
         checked={preferences.notifications.securityAlerts}
         onChange={() => updatePref("notifications", "securityAlerts", !preferences.notifications.securityAlerts)} />
-      <ActionFooter onSave={handleSavePrefs} saving={savingPrefs} disabled={!prefsDirty} saveLabel="Save preferences" />
+      <ActionFooter onSave={handleSavePrefs} onCancel={handleResetPrefs} saving={savingPrefs} disabled={!prefsDirty} saveLabel="Save preferences" />
     </motion.div>
   );
 
   const renderWorkspaceTab = () => (
     <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
       <div className="mb-2">
-        <h3 className="text-lg font-semibold text-pearl">Appearance & Behavior</h3>
-        <p className="text-sm text-granite/90 mt-1">Configure how the application looks and behaves.</p>
+        <h3 className="text-lg font-semibold text-[var(--text-primary)]">Appearance & Behavior</h3>
+        <p className="text-sm text-[var(--text-secondary)] mt-1">Configure how the application looks and behaves.</p>
       </div>
       <FormRow label="Color theme" description="Select your preferred color scheme.">
         <div className="grid grid-cols-3 gap-3 max-w-sm">
@@ -373,15 +443,15 @@ const SettingsPage = () => {
             <button key={t.id} onClick={() => handleTheme(t.id)}
               className={cn("flex flex-col items-center gap-1.5 rounded-xl border px-3 py-4 transition-all text-center",
                 preferences.workspace.theme === t.id
-                  ? "border-pearl/30 bg-pearl/10 text-pearl ring-1 ring-pearl/20"
-                  : "border-white/[0.06] bg-noir/30 text-granite hover:bg-white/[0.04] hover:text-pearl/70")}>
+                  ? "border-[var(--accent-primary)] bg-[var(--accent-primary-light)] text-[var(--accent-primary)] ring-1 ring-[var(--accent-primary)]"
+                  : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-active)] hover:text-[var(--text-primary)]")}>
               <t.icon className="h-6 w-6" />
               <span className="text-sm font-medium">{t.label}</span>
             </button>
           ))}
         </div>
-        <p className="mt-2 text-sm text-granite/90">
-          Active: <span className="text-pearl/70 font-medium">{preferences.workspace.theme}</span> &middot; Rendered as <span className="text-pearl/70 font-medium">{resolvedTheme}</span>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">
+          Active: <span className="text-[var(--text-primary)] font-medium">{preferences.workspace.theme}</span> &middot; Rendered as <span className="text-[var(--text-primary)] font-medium">{resolvedTheme}</span>
         </p>
       </FormRow>
       <ToggleFormRow label="Auto refresh datasets" description="Automatically refresh dataset metadata when cache is cleared or data changes."
@@ -393,7 +463,7 @@ const SettingsPage = () => {
       <ToggleFormRow label="Reduce animations" description="Simplify transitions and reduce motion throughout the interface."
         checked={preferences.workspace.reduceAnimations}
         onChange={() => updatePref("workspace", "reduceAnimations", !preferences.workspace.reduceAnimations)} />
-      <ActionFooter onSave={handleSavePrefs} saving={savingPrefs} disabled={!prefsDirty} saveLabel="Save preferences" />
+      <ActionFooter onSave={handleSavePrefs} onCancel={handleResetPrefs} saving={savingPrefs} disabled={!prefsDirty} saveLabel="Save preferences" />
     </motion.div>
   );
 
@@ -475,6 +545,61 @@ const SettingsPage = () => {
     }
   };
 
+  /* ── Privacy handlers ── */
+  const updatePrivacySetting = async (key, value) => {
+    setSavingPrivacy(true);
+    try {
+      const res = await privacyAPI.updateGlobalSettings({ [key]: value });
+      setPrivacySettings(res.data?.global_defaults || {});
+      toast.success("Privacy setting updated.");
+    } catch (err) {
+      console.error("Failed to update privacy setting:", err);
+      toast.error("Failed to update setting.");
+    } finally {
+      setSavingPrivacy(false);
+    }
+  };
+
+  const handleScanPII = async (datasetId) => {
+    setScanningPii(datasetId);
+    try {
+      const res = await privacyAPI.scanForPII(datasetId);
+      setPiiScanResults((prev) => ({ ...prev, [datasetId]: res.data }));
+      toast.success("PII scan complete.");
+    } catch (err) {
+      console.error("PII scan failed:", err);
+      toast.error("PII scan failed.");
+    } finally {
+      setScanningPii(null);
+    }
+  };
+
+  const handleRedactColumn = async (datasetId, columnName) => {
+    try {
+      await privacyAPI.managePrivateColumn(datasetId, "add", columnName);
+      toast.success(`Column marked as private.`);
+      handleScanPII(datasetId);
+    } catch (err) {
+      console.error("Failed to redact column:", err);
+      toast.error("Failed to redact column.");
+    }
+  };
+
+  const handleExportPrivacyData = () => {
+    const exportData = {
+      exported_at: new Date().toISOString(),
+      privacy_settings: privacySettings,
+      datasets: privacyDatasets,
+      audit_stats: privacyAuditStats,
+    };
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement("a"), { href: url, download: `datasage-privacy-${new Date().toISOString().slice(0, 10)}.json` });
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    toast.success("Privacy data exported.");
+  };
+
   const handleClearAllBeliefs = async () => {
     setClearingBeliefs(true);
     try {
@@ -500,17 +625,17 @@ const SettingsPage = () => {
   const renderAiMemoryTab = () => (
     <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
       {/* Explainer */}
-      <div className="mb-6 p-5 rounded-xl border border-white/[0.06] bg-white/[0.02]">
+      <div className="mb-6 p-5 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]">
         <div className="flex items-start gap-4">
-          <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center shrink-0">
-            <BrainCircuit className="w-5 h-5 text-purple-400" />
+          <div className="w-10 h-10 rounded-xl bg-[var(--accent-primary-light)] border border-[var(--accent-primary)] flex items-center justify-center shrink-0">
+            <BrainCircuit className="w-5 h-5 text-[var(--accent-primary)]" />
           </div>
           <div>
-            <h3 className="text-[15px] font-semibold text-pearl">Belief Store — Your AI Memory</h3>
-            <p className="text-sm text-granite/90 leading-relaxed mt-1">
+            <h3 className="text-[15px] font-semibold text-[var(--text-primary)]">Belief Store — Your AI Memory</h3>
+            <p className="text-sm text-[var(--text-secondary)] leading-relaxed mt-1">
               When you mark insights as <span className="text-emerald-400 font-medium">"Useful"</span> or{" "}
               <span className="text-amber-400 font-medium">"Already Knew"</span>, they are stored here as embeddings.
-              Future analyses use these beliefs to compute <span className="text-pearl font-medium">Semantic Surprisal</span> — 
+              Future analyses use these beliefs to compute <span className="text-[var(--text-primary)] font-medium">Semantic Surprisal</span> —
               suppressing insights you've already seen. Removing a belief will allow similar insights to surface again.
             </p>
           </div>
@@ -521,8 +646,8 @@ const SettingsPage = () => {
       <FormRow label="Stored beliefs" description="Total knowledge entries the system has learned from your feedback.">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <span className="text-2xl font-mono font-bold text-pearl">{beliefsCount}</span>
-            <span className="text-sm text-granite">entries</span>
+            <span className="text-2xl font-mono font-bold text-[var(--text-primary)]">{beliefsCount}</span>
+            <span className="text-sm text-[var(--text-secondary)]">entries</span>
           </div>
           {beliefsCount > 0 && (
             <motion.button
@@ -545,21 +670,21 @@ const SettingsPage = () => {
           {loadingBeliefs ? (
             // Loading skeleton
             Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="animate-pulse flex items-start gap-3 p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.04]">
-                <div className="w-6 h-6 rounded-lg bg-white/[0.06] shrink-0 mt-0.5" />
+              <div key={i} className="animate-pulse flex items-start gap-3 p-3.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border)]">
+                <div className="w-6 h-6 rounded-lg bg-[var(--bg-secondary)] shrink-0 mt-0.5" />
                 <div className="flex-1 space-y-2">
-                  <div className="h-3 bg-white/[0.06] rounded w-3/4" />
-                  <div className="h-2.5 bg-white/[0.04] rounded w-1/2" />
+                  <div className="h-3 bg-[var(--bg-secondary)] rounded w-3/4" />
+                  <div className="h-2.5 bg-[var(--bg-secondary)] rounded w-1/2" />
                 </div>
               </div>
             ))
           ) : beliefs.length === 0 ? (
             <div className="text-center py-10">
-              <div className="w-14 h-14 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mx-auto mb-4">
-                <BrainCircuit className="w-6 h-6 text-granite/60" />
+              <div className="w-14 h-14 rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border)] flex items-center justify-center mx-auto mb-4">
+                <BrainCircuit className="w-6 h-6 text-[var(--text-muted)]" />
               </div>
-              <p className="text-[14px] text-granite font-medium">No beliefs stored yet</p>
-              <p className="text-[12px] text-granite/60 mt-1 max-w-xs mx-auto">
+              <p className="text-[14px] text-[var(--text-secondary)] font-medium">No beliefs stored yet</p>
+              <p className="text-[12px] text-[var(--text-muted)] mt-1 max-w-xs mx-auto">
                 Start by rating insights on your dashboard or analysis pages. Your feedback will appear here.
               </p>
             </div>
@@ -577,7 +702,7 @@ const SettingsPage = () => {
                     animate={{ opacity: isDeleting ? 0.4 : 1, y: 0 }}
                     exit={{ opacity: 0, x: -20, height: 0 }}
                     transition={{ delay: idx * 0.03 }}
-                    className="flex items-start gap-3 p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.04] hover:border-white/[0.08] transition-colors group"
+                    className="flex items-start gap-3 p-3.5 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border)] hover:border-[var(--text-muted)] transition-colors group"
                   >
                     {/* Source badge */}
                     <div className={cn("mt-0.5 px-2 py-0.5 rounded-md text-[9px] font-semibold uppercase tracking-wider border shrink-0", src.color)}>
@@ -586,10 +711,10 @@ const SettingsPage = () => {
 
                     {/* Content */}
                     <div className="flex-1 min-w-0">
-                      <p className="text-[13px] text-pearl/80 leading-relaxed line-clamp-2">
+                      <p className="text-[13px] text-[var(--text-primary)]/80 leading-relaxed line-clamp-2">
                         {belief.document || "—"}
                       </p>
-                      <div className="flex items-center gap-3 mt-1.5 text-[10px] text-granite/50">
+                      <div className="flex items-center gap-3 mt-1.5 text-[10px] text-[var(--text-muted)]">
                         {confidence != null && <span>Confidence: {confidence}%</span>}
                         {belief.metadata?.created_at && (
                           <span>{formatDate(belief.metadata.created_at)}</span>
@@ -606,7 +731,7 @@ const SettingsPage = () => {
                       whileTap={{ scale: 0.9 }}
                       onClick={() => handleDeleteBelief(belief.id)}
                       disabled={isDeleting}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg border border-transparent hover:border-rose-500/20 hover:bg-rose-500/10 text-granite/50 hover:text-rose-400 disabled:opacity-30"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg border border-transparent hover:border-rose-500/20 hover:bg-rose-500/10 text-[var(--text-muted)] hover:text-rose-400 disabled:opacity-30"
                       title="Remove this belief"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -621,6 +746,218 @@ const SettingsPage = () => {
     </motion.div>
   );
 
+  /* ── Privacy Tab ── */
+  const renderPrivacyTab = () => {
+    if (loadingPrivacy) {
+      return (
+        <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit" className="flex items-center justify-center py-16">
+          <Loader2 className="w-8 h-8 text-pearl animate-spin" />
+        </motion.div>
+      );
+    }
+
+    return (
+      <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
+        {/* Explainer */}
+        <div className="mb-6 p-5 rounded-xl border border-white/[0.06] bg-white/[0.02]">
+          <div className="flex items-start gap-4">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
+              <Shield className="w-5 h-5 text-emerald-400" />
+            </div>
+            <div>
+              <h3 className="text-[15px] font-semibold text-pearl">Privacy & Security</h3>
+              <p className="text-sm text-granite/90 leading-relaxed mt-1">
+                Control how your data is processed by AI models. Sensitive information like emails, phone numbers,
+                and other PII can be automatically detected and redacted for your protection.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Privacy Stats */}
+        <FormRow label="Privacy overview" description="Current privacy status across your workspace.">
+          <div className="grid grid-cols-3 gap-3 max-w-sm">
+            <div className="rounded-xl border border-white/[0.05] bg-noir/30 px-4 py-3 text-center">
+              <p className="text-2xl font-bold text-pearl/90">{privacyDatasets.length}</p>
+              <p className="text-sm text-granite mt-0.5">Datasets</p>
+            </div>
+            <div className="rounded-xl border border-white/[0.05] bg-noir/30 px-4 py-3 text-center">
+              <p className="text-2xl font-bold text-emerald-400">{privacyAuditStats?.pii_scan || 0}</p>
+              <p className="text-sm text-granite mt-0.5">PII Scans</p>
+            </div>
+            <div className="rounded-xl border border-white/[0.05] bg-noir/30 px-4 py-3 text-center">
+              <p className="text-2xl font-bold text-violet-400">{privacyAuditStats?.data_accessed || 0}</p>
+              <p className="text-sm text-granite mt-0.5">Access Events</p>
+            </div>
+          </div>
+        </FormRow>
+
+        {/* AI Data Processing */}
+        <div className="mb-2">
+          <h3 className="text-lg font-semibold text-pearl">AI Data Processing</h3>
+          <p className="text-sm text-granite/90 mt-1">Configure how data is shared with AI models.</p>
+        </div>
+
+        <ToggleFormRow
+          label="Auto-detect PII"
+          description="Automatically scan datasets for sensitive information like emails, phone numbers, etc."
+          checked={privacySettings?.pii_auto_detect ?? true}
+          onChange={() => updatePrivacySetting("pii_auto_detect", !(privacySettings?.pii_auto_detect ?? true))}
+        />
+        <ToggleFormRow
+          label="Auto-redact PII"
+          description="Automatically redact sensitive columns before sending to AI models."
+          checked={privacySettings?.pii_auto_redact ?? true}
+          onChange={() => updatePrivacySetting("pii_auto_redact", !(privacySettings?.pii_auto_redact ?? true))}
+        />
+        <ToggleFormRow
+          label="Share column names"
+          description="Include column names when processing data (required for analysis)."
+          checked={privacySettings?.share_column_names ?? true}
+          onChange={() => updatePrivacySetting("share_column_names", !(privacySettings?.share_column_names ?? true))}
+        />
+        <ToggleFormRow
+          label="Share sample rows"
+          description="Include sample data rows for context (helps AI understand your data)."
+          checked={privacySettings?.share_sample_rows ?? true}
+          onChange={() => updatePrivacySetting("share_sample_rows", !(privacySettings?.share_sample_rows ?? true))}
+        />
+
+        {/* Data Retention */}
+        <div className="mt-6 mb-2">
+          <h3 className="text-lg font-semibold text-pearl">Data Retention</h3>
+          <p className="text-sm text-granite/90 mt-1">Manage how long your data is stored.</p>
+        </div>
+
+        <FormRow label="Auto-delete after" description="Automatically delete datasets after this period.">
+          <select
+            value={privacySettings?.data_retention_days ?? 90}
+            onChange={(e) => updatePrivacySetting("data_retention_days", parseInt(e.target.value))}
+            className={cn(inputCls, "max-w-xs")}
+          >
+            {RETENTION_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </FormRow>
+
+        <ToggleFormRow
+          label="Retention warnings"
+          description="Receive an email notification 7 days before datasets are automatically deleted."
+          checked={privacySettings?.send_retention_warnings ?? true}
+          onChange={() => updatePrivacySetting("send_retention_warnings", !(privacySettings?.send_retention_warnings ?? true))}
+        />
+
+        {/* Dataset Privacy */}
+        <div className="mt-6 mb-2">
+          <h3 className="text-lg font-semibold text-pearl">Dataset Privacy</h3>
+          <p className="text-sm text-granite/90 mt-1">Scan datasets for PII and configure per-dataset settings.</p>
+        </div>
+
+        {privacyDatasets.length === 0 ? (
+          <FormRow label="No datasets" description="Upload a dataset to configure privacy settings." noBorder>
+            <p className="text-sm text-granite">No datasets found.</p>
+          </FormRow>
+        ) : (
+          <div className="space-y-3 mb-4">
+            {privacyDatasets.map((dataset) => {
+              const dsId = dataset.id || dataset._id;
+              const scanResult = piiScanResults[dsId];
+              const isScanning = scanningPii === dsId;
+
+              return (
+                <div key={dsId} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-[15px] font-medium text-pearl">{dataset.name || "Unnamed Dataset"}</p>
+                      <p className="text-xs text-granite mt-0.5">
+                        {dataset.row_count ? `${dataset.row_count.toLocaleString()} rows` : ""} · {dataset.column_count ? `${dataset.column_count} columns` : ""}
+                      </p>
+                    </div>
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => handleScanPII(dsId)}
+                      disabled={isScanning}
+                      className="inline-flex items-center gap-2 rounded-xl border border-violet-500/25 bg-violet-500/[0.06] px-4 py-2 text-[13px] font-medium text-violet-300 transition-all hover:bg-violet-500/[0.12] hover:border-violet-500/40 disabled:opacity-50"
+                    >
+                      {isScanning ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <FileSearch className="w-3.5 h-3.5" />
+                      )}
+                      {isScanning ? "Scanning…" : "Scan PII"}
+                    </motion.button>
+                  </div>
+
+                  {/* PII Scan Results */}
+                  {scanResult && (
+                    <div className="mt-3 pt-3 border-t border-white/[0.05]">
+                      <p className="text-xs text-granite mb-2">
+                        Found {scanResult.columns_with_pii?.length || 0} columns with potential PII
+                      </p>
+                      {scanResult.columns_with_pii?.length > 0 ? (
+                        <div className="space-y-2">
+                          {scanResult.columns_with_pii.slice(0, 5).map((col) => (
+                            <div key={col.column_name} className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-white/[0.02]">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[13px] text-pearl/80">{col.column_name}</span>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">{col.pii_type}</span>
+                                <span className="text-[10px] text-granite">{Math.round(col.confidence * 100)}%</span>
+                              </div>
+                              <button
+                                onClick={() => handleRedactColumn(dsId, col.column_name)}
+                                className="text-[11px] px-2 py-1 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 transition-colors"
+                              >
+                                Redact
+                              </button>
+                            </div>
+                          ))}
+                          {scanResult.columns_with_pii.length > 5 && (
+                            <p className="text-xs text-granite text-center">+{scanResult.columns_with_pii.length - 5} more</p>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-emerald-400 text-sm">
+                          <CheckCircle className="w-4 h-4" />
+                          <span>No PII detected</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Warning notice */}
+        <div className="mb-4 p-4 rounded-xl border border-amber-500/20 bg-amber-500/[0.05]">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+            <p className="text-sm text-amber-200/80 leading-relaxed">
+              Data is processed by AI models through OpenRouter. Column names and sample data may be shared
+              for analysis purposes. Configure your privacy settings above to control what is shared.
+            </p>
+          </div>
+        </div>
+
+        {/* Export Button */}
+        <FormRow label="Export privacy data" description="Download your privacy settings and audit logs for compliance." noBorder>
+          <motion.button
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={handleExportPrivacyData}
+            className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] px-5 py-2.5 text-[14px] font-medium text-emerald-300 transition-all hover:bg-emerald-500/[0.12] hover:border-emerald-500/40"
+          >
+            <Download className="w-4 h-4" />
+            Export Privacy Data
+          </motion.button>
+        </FormRow>
+      </motion.div>
+    );
+  };
+
   const TAB_RENDERERS = {
     account: renderAccountTab,
     security: renderSecurityTab,
@@ -628,6 +965,7 @@ const SettingsPage = () => {
     workspace: renderWorkspaceTab,
     data: renderDataTab,
     "ai-memory": renderAiMemoryTab,
+    privacy: renderPrivacyTab,
   };
 
   /* ═══════════════════ RENDER ═══════════════════ */
@@ -665,14 +1003,14 @@ const SettingsPage = () => {
       {/* ───── Profile Header Row (below banner) ───── */}
       <div className="shrink-0 px-6 sm:px-10 pt-14 sm:pt-14 pb-0 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-pearl">{getDisplayName(user)}&apos;s Settings</h1>
-          <p className="text-sm sm:text-base text-granite mt-1">{user?.email} &middot; {datasetStats.ready}/{datasetStats.total} datasets ready</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[var(--text-primary)]">{getDisplayName(user)}&apos;s Settings</h1>
+          <p className="text-sm sm:text-base text-[var(--text-secondary)] mt-1">{user?.email} &middot; {datasetStats.ready}/{datasetStats.total} datasets ready</p>
         </div>
       </div>
 
       {/* ───── Horizontal Tab Bar ───── */}
       <div className="shrink-0 px-6 sm:px-10 mt-5">
-        <div ref={tabsRef} className="flex gap-0 overflow-x-auto scrollbar-hide border-b border-white/[0.06]">
+        <div ref={tabsRef} className="flex gap-0 overflow-x-auto scrollbar-hide border-b border-[var(--border)]">
           {TAB_ITEMS.map((tab) => {
             const isActive = activeTab === tab.id;
             return (
@@ -680,15 +1018,15 @@ const SettingsPage = () => {
                 className={cn(
                   "relative flex items-center gap-2.5 whitespace-nowrap px-5 py-3.5 text-[15px] font-medium transition-colors shrink-0",
                   isActive
-                    ? "text-pearl"
-                    : "text-granite hover:text-pearl/70",
+                    ? "text-[var(--text-primary)]"
+                    : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]/70",
                 )}>
                 <tab.icon className="h-[18px] w-[18px]" />
                 {tab.label}
                 {/* Active underline */}
                 {isActive && (
                   <motion.div layoutId="settings-tab-underline"
-                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-pearl rounded-full"
+                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--text-primary)] rounded-full"
                     transition={{ type: "spring", stiffness: 400, damping: 30 }} />
                 )}
               </button>

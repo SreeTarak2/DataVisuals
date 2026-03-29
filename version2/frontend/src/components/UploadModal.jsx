@@ -1,12 +1,12 @@
 import React, { useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { 
-  Upload, 
-  FileText, 
-  FileSpreadsheet, 
-  Database, 
-  X, 
-  Cloud, 
+import {
+  Upload,
+  FileText,
+  FileSpreadsheet,
+  Database,
+  X,
+  Cloud,
   Server,
   CheckCircle,
   AlertCircle
@@ -16,8 +16,10 @@ import { useDropzone } from 'react-dropzone';
 import GlassCard from './common/GlassCard';
 import useDatasetStore from '../store/datasetStore';
 import { toast } from 'react-hot-toast';
+import { useNavigate } from 'react-router-dom';
 
 const UploadModal = ({ isOpen, onClose }) => {
+  const navigate = useNavigate();
   const [uploading, setUploading] = useState(false);
   const [uploadType, setUploadType] = useState('file');
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -26,29 +28,16 @@ const UploadModal = ({ isOpen, onClose }) => {
   const onDrop = useCallback(async (acceptedFiles) => {
     setUploading(true);
     setUploadProgress(0);
-    
+
     try {
       for (const file of acceptedFiles) {
-        // Simulate progress
-        const progressInterval = setInterval(() => {
-          setUploadProgress(prev => Math.min(prev + 10, 90));
-        }, 200);
-        
+        // Immediately navigate to Dashboard to show unified progress
+        navigate('/app/dashboard');
+        onClose();
+
         const result = await uploadDataset(file, file.name, '');
-        
-        clearInterval(progressInterval);
-        setUploadProgress(100);
-        
-        if (result.success) {
-          toast.success(`${file.name} uploaded successfully!`);
-          
-          // Reset progress after a short delay
-          setTimeout(() => {
-            setUploadProgress(0);
-            setUploading(false);
-            onClose();
-          }, 1000);
-        } else {
+
+        if (!result.success) {
           throw new Error(result.error || 'Upload failed');
         }
       }
@@ -84,14 +73,14 @@ const UploadModal = ({ isOpen, onClose }) => {
       {isOpen && (
         <div className="fixed inset-0 z-[60] overflow-y-auto">
           {/* Backdrop */}
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-300"
             onClick={!uploading ? onClose : undefined}
           />
-          
+
           {/* Modal */}
           <div className="flex min-h-full items-center justify-center p-4">
             <motion.div
@@ -131,19 +120,16 @@ const UploadModal = ({ isOpen, onClose }) => {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={() => setUploadType('file')}
-                    className={`p-4 rounded-xl border-2 transition-all duration-200 ${
-                      uploadType === 'file'
+                    className={`p-4 rounded-xl border-2 transition-all duration-200 ${uploadType === 'file'
                         ? 'border-primary bg-primary/10 shadow-md'
                         : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
-                    }`}
+                      }`}
                   >
                     <div className="text-center">
-                      <div className={`p-3 rounded-lg mx-auto mb-3 ${
-                        uploadType === 'file' ? 'bg-primary/20' : 'bg-gray-100 dark:bg-gray-700'
-                      }`}>
-                        <FileText className={`h-6 w-6 ${
-                          uploadType === 'file' ? 'text-primary' : 'text-gray-600 dark:text-gray-400'
-                        }`} />
+                      <div className={`p-3 rounded-lg mx-auto mb-3 ${uploadType === 'file' ? 'bg-primary/20' : 'bg-gray-100 dark:bg-gray-700'
+                        }`}>
+                        <FileText className={`h-6 w-6 ${uploadType === 'file' ? 'text-primary' : 'text-gray-600 dark:text-gray-400'
+                          }`} />
                       </div>
                       <h4 className="font-medium text-gray-900 dark:text-white mb-1">File Upload</h4>
                       <p className="text-sm text-gray-500 dark:text-gray-400">CSV, Excel files</p>
@@ -202,29 +188,26 @@ const UploadModal = ({ isOpen, onClose }) => {
                   >
                     <div
                       {...getRootProps()}
-                      className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200 ${
-                        isDragActive
+                      className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200 ${isDragActive
                           ? 'border-primary bg-primary/10 scale-105'
                           : 'border-gray-300 dark:border-gray-600 hover:border-primary dark:hover:border-primary hover:bg-primary/5'
-                      } ${uploading ? 'pointer-events-none' : 'cursor-pointer'}`}
+                        } ${uploading ? 'pointer-events-none' : 'cursor-pointer'}`}
                     >
                       <input {...getInputProps()} />
-                      
+
                       <div className="space-y-4">
-                        <motion.div 
+                        <motion.div
                           className="flex justify-center"
                           animate={{ scale: isDragActive ? 1.1 : 1 }}
                           transition={{ duration: 0.2 }}
                         >
-                          <div className={`p-4 rounded-full transition-all duration-200 ${
-                            isDragActive ? 'bg-primary/30 scale-110' : 'bg-primary/20'
-                          }`}>
-                            <Upload className={`h-8 w-8 transition-colors duration-200 ${
-                              isDragActive ? 'text-primary' : 'text-primary'
-                            }`} />
+                          <div className={`p-4 rounded-full transition-all duration-200 ${isDragActive ? 'bg-primary/30 scale-110' : 'bg-primary/20'
+                            }`}>
+                            <Upload className={`h-8 w-8 transition-colors duration-200 ${isDragActive ? 'text-primary' : 'text-primary'
+                              }`} />
                           </div>
                         </motion.div>
-                        
+
                         <div>
                           <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
                             {isDragActive ? 'Drop files here' : 'Upload your datasets'}
@@ -232,7 +215,7 @@ const UploadModal = ({ isOpen, onClose }) => {
                           <p className="text-gray-600 dark:text-gray-400 mb-4">
                             Drag and drop CSV or Excel files, or click to browse
                           </p>
-                          
+
                           <div className="flex items-center justify-center space-x-6 text-sm text-gray-500 dark:text-gray-400">
                             <div className="flex items-center space-x-2">
                               <FileText className="h-4 w-4" />
@@ -248,15 +231,15 @@ const UploadModal = ({ isOpen, onClose }) => {
                             </div>
                           </div>
                         </div>
-                        
+
                         {uploading && (
-                          <motion.div 
+                          <motion.div
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
                             className="space-y-3"
                           >
                             <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                              <motion.div 
+                              <motion.div
                                 className="bg-primary h-2 rounded-full transition-all duration-300 ease-out"
                                 initial={{ width: 0 }}
                                 animate={{ width: `${uploadProgress}%` }}
@@ -264,7 +247,7 @@ const UploadModal = ({ isOpen, onClose }) => {
                               />
                             </div>
                             <div className="flex items-center justify-center space-x-2 text-primary">
-                              <motion.div 
+                              <motion.div
                                 className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"
                                 animate={{ rotate: 360 }}
                                 transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
@@ -280,7 +263,7 @@ const UploadModal = ({ isOpen, onClose }) => {
 
                 {/* Upload Success */}
                 {uploadProgress === 100 && (
-                  <motion.div 
+                  <motion.div
                     initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
                     className="text-center py-4"

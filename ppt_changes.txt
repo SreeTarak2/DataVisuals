@@ -1,0 +1,213 @@
+========================================
+DATASAGE AI - PRESENTATION CONTENT UPDATES
+========================================
+
+ABSTRACT
+--------
+DataSage AI is an adaptive and explainable analytics assistant that transforms raw tabular data (CSV/Excel) into actionable insights—leveraging orchestrated multi-model AI instead of cloud lock-in. Designed for non-technical users in privacy-sensitive domains (e.g., healthcare, education, small businesses), the tool uses Python, FastAPI, Polars, and Plotly to generate interactive visualizations, statistical summaries, and anomaly detection reports.
+
+At its core, DataSage intelligently routes analytical tasks across multiple AI models—supporting both free cloud providers (OpenRouter) and local models (Ollama). Its natural-language Q&A enables users to ask questions like "Why did sales drop in June?" and receive plain-English, data-driven answers.
+
+By prioritizing privacy, transparency, and cost-efficiency, DataSage bridges the gap between raw datasets and decision-making for domain experts—without expensive licensing, vendor dependencies, or mandatory cloud exposure.
+
+
+INTRODUCTION
+------------
+In many industries, structured datasets are underutilized due to the complexity of extracting actionable insights without advanced technical skills or costly cloud platforms. Traditional analytics solutions require expensive licensing, vendor lock-in, and often don't explain their results. DataSage AI addresses these challenges by providing a user-friendly, cost-efficient solution that transforms tabular data into clear, interactive insights.
+
+Unlike proprietary platforms that lock users into single providers, DataSage supports both cloud-based and local AI models—giving organizations the flexibility to choose their deployment model based on security and compliance requirements. It bridges the gap between raw data and informed decision-making, empowering users—regardless of technical expertise—to explore patterns, detect anomalies, and ask natural-language questions with transparent, explainable answers.
+
+
+PROBLEM STATEMENT
+-----------------
+In the current landscape, most data analysis solutions lock users into expensive, single-vendor cloud platforms that expose sensitive datasets to third parties. These platforms often cost thousands in licensing, require advanced technical skills, and present results as 'black-box' outputs without explanation. The workflow is fragmented—data profiling, visualization, anomaly detection, and reporting spread across multiple tools—resulting in inefficiency and higher manual effort. Additionally, many systems provide static insights that fail to adapt when datasets are updated, leaving users without timely or context-aware analysis. Organizations in privacy-sensitive domains (healthcare, education, government) cannot use these solutions due to compliance and security concerns.
+
+
+PROPOSED SYSTEM
+---------------
+DataSage AI addresses these limitations by offering an adaptive, unified, and explainable AI assistant for tabular data analysis. Built with Python, FastAPI, Polars, and Plotly, it operates as a single integrated platform, ensuring users don't need to juggle multiple fragmented tools.
+
+Deployment Flexibility: Users can deploy DataSage in two ways—either using free cloud AI models (OpenRouter) for maximum capability, or by running local models via Ollama for complete data privacy and offline operation. This hybrid approach ensures organizations can choose the deployment model that best fits their security, compliance, and performance requirements.
+
+The system automates data profiling, visualization, anomaly detection, and pattern discovery, presenting results in interactive dashboards with clear, human-readable explanations. Unlike static solutions, DataSage AI dynamically adapts to periodic dataset updates, ensuring insights remain relevant and context-aware. It also supports natural-language queries—allowing users to ask questions like "Why did revenue drop last quarter?"—and provides transparent answers grounded in the actual data. By combining usability, adaptability, and explainability, DataSage AI delivers intelligent analytics without vendor lock-in or expensive licensing.
+
+
+OBJECTIVES
+----------
+• Automate Insight Generation: Deliver automated data profiling, visualization, anomaly detection, and pattern discovery without manual intervention.
+
+• Improve Explainability: Offer transparent, plain-language explanations for all insights to build trust and support informed decision-making.
+
+• Enable Adaptability: Automatically update analyses and summaries when datasets are modified or replaced.
+
+• Unify Workflow: Integrate multiple data analysis steps into a single platform, eliminating the need for separate tools.
+
+• Prevent Vendor Lock-in: Deliver intelligent analytics through orchestrated multi-model AI, avoiding dependence on single expensive providers.
+
+• Support Flexible Deployment: Enable users to choose between cloud-based multi-model AI (OpenRouter) for maximum capability or local models (Ollama) for complete data privacy and offline operation.
+
+
+REQUIREMENT ANALYSIS
+====================
+
+2. Non-Functional Requirements
+------------------------------
+• Flexible Deployment: System must support both cloud-based AI (OpenRouter) and local models (Ollama), allowing users to choose based on their security and connectivity requirements.
+
+• Performance: Process datasets up to a defined size limit within a few seconds, with optimized async processing for concurrent requests.
+
+• Usability: Simple, intuitive UI accessible to non-technical users with natural-language query capabilities.
+
+• Scalability: Ability to handle increasing dataset sizes efficiently through streaming, caching, and intelligent indexing (FAISS).
+
+• Security: Ensure complete data privacy through flexible deployment options—cloud-optional via OpenRouter or fully local via Ollama.
+
+• Maintainability: Modular code structure (services, API routes, core config) for easier updates and enhancements.
+
+
+3. Software Requirements
+------------------------
+• Backend: Python 3.10+, FastAPI (async web framework)
+
+• Data Processing: Polars (high-performance data manipulation), NumPy, Scikit-learn (anomaly detection)
+
+• AI/LLM Integration: OpenRouter (free cloud models), Ollama (optional local models), LangChain (prompt management), FAISS (semantic vector search)
+
+• Async & Background Jobs: Celery (task queue), Redis (caching & message broker)
+
+• Frontend: React 19 (interactive SPA), Plotly (interactive visualizations), Axios (API calls)
+
+• Database: MongoDB (metadata, user data, conversation history)
+
+• Real-time Communication: WebSocket support for streaming chat responses
+
+• Deployment: Local machine or server environment with Python 3.10+, optional Ollama for offline operation
+
+
+METHODOLOGY
+===========
+
+Opening Statement
+-----------------
+DataSage AI follows a structured, modular approach to ensure robustness, adaptability, and flexible deployment—supporting both cloud-based AI (OpenRouter) for maximum capability and local models (Ollama) for complete data privacy.
+
+
+1. Data Ingestion and Preprocessing
+------------------------------------
+• Input Handling: The system accepts structured datasets in formats such as CSV and Excel.
+
+• Validation: Checks for schema consistency, missing values, and format errors.
+
+• Cleaning & Transformation: Handles missing data (imputation or removal), removes duplicates, normalizes column names, and converts data types for uniform processing.
+
+
+2. Data Profiling and Summary Generation
+-----------------------------------------
+• Descriptive Statistics: Calculates mean, median, mode, variance, standard deviation, and data distribution.
+
+• Automated Profiling: Generates summaries of dataset dimensions, data types, and null value percentages.
+
+• Correlation Analysis: Identifies relationships between variables using correlation matrices and visual heatmaps.
+
+
+3. Insight Extraction and Anomaly Detection
+--------------------------------------------
+• Pattern Discovery: Identifies trends, seasonal effects, and recurring patterns.
+
+• Anomaly Detection: Detects outliers and unusual data points using statistical and rule-based methods.
+
+• Dynamic Summaries: Updates insights automatically when new data is loaded.
+
+
+4. Visualization Layer
+----------------------
+• Interactive Charts: Uses Plotly to generate dynamic and interactive bar charts, line graphs, scatter plots, and heatmaps.
+
+• Custom Dashboards: Allows users to filter, zoom, and highlight specific data ranges for deeper exploration.
+
+
+5. Natural Language Query & Explainable AI
+-------------------------------------------
+• Flexible LLM Integration: Supports two deployment modes:
+  - Cloud Mode (OpenRouter): Intelligently routes queries across multiple free AI models for maximum analytical capability
+  - Local Mode (Ollama): Uses locally hosted models (e.g., LLaMA 3) for complete data privacy and offline operation
+
+• Explainable Responses: Provides step-by-step reasoning and visual evidence for each answer, building user trust and transparency.
+
+
+6. User Interaction and Adaptation
+-----------------------------------
+• Context-Aware Responses: Adapts to the user's query style and domain-specific terminology.
+
+• Periodic Updates: Maintains relevance by refreshing insights whenever new datasets are added.
+
+
+7. Deployment and Security
+---------------------------
+• Flexible Deployment Architecture: Choose between cloud-based (OpenRouter) for maximum capability or local (Ollama) for complete offline operation, based on security and compliance needs.
+
+• Data Privacy: All data processing (via Polars) is performed locally; raw datasets never leave the user's infrastructure. Users control whether AI integration requires cloud connectivity or uses local models.
+
+• Scalable Backend: FastAPI with async processing, Celery task queue, and Redis caching ensure efficient data handling and real-time response delivery.
+
+
+========================================
+KEY ALIGNMENT NOTES
+========================================
+
+✓ All sections now consistently support BOTH cloud (OpenRouter) AND local (Ollama) deployment
+✓ Removed all "offline-first" and "no internet" claims that contradicted the flexible deployment model
+✓ Fixed Pandas → Polars throughout
+✓ Added FAISS, Redis, Celery, WebSocket to Software Requirements
+✓ All methodology sections avoid false offline claims
+✓ Vendor lock-in prevention is the PRIMARY value proposition (not offline capability)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+PPT2
+=====
+DataSage AI: Intelligent, Accessible, Cost-Efficient Analytics Without Vendor Lock-in
+
+Data analytics today faces a fundamental constraint: organizations choose between expensive proprietary platforms (PowerBI, Tableau) that extract vendor fees and data exposure, or open-source tools that demand advanced technical skills. This project introduces DataSage AI, an AI-powered analytics platform that democratizes data insight generation while preserving user autonomy and data privacy.
+
+Core Innovation: Rather than relying on a single expensive language model API, DataSage intelligently orchestrates multiple free AI models (OpenRouter) and supports local alternatives (Ollama), giving users the flexibility to choose between cloud-based capability and local privacy. This multi-model routing approach prevents vendor lock-in while delivering enterprise-grade analytical quality at zero LLM cost.
+
+Architecture: Built with Python, FastAPI, Polars, and MongoDB, DataSage automates the complete analytics pipeline: data ingestion, statistical profiling, anomaly detection, intelligent visualization recommendation, and natural-language question answering. The system works with parallelized async processing and semantic indexing via FAISS vector search.
+
+
+
+System Architecture
+===================
+
+Frontend Layer:
+Built with React 19 + Vite + Tailwind CSS, providing interactive dashboards, data visualization with Plotly, and real-time chat interface via WebSocket.
+
+API Gateway Layer:
+FastAPI (Python, async) handles authentication (JWT), request routing, file uploads, and API orchestration. Implements rate limiting via SlowAPI.
+
+Data Processing Layer:
+Polars (high-performance) reads and cleans CSV/Excel files. Statistical analysis (correlations, distributions, anomalies) computed via NumPy and Scikit-learn. Celery background workers process datasets asynchronously, preventing UI blocking.
+
+Intelligence Layer:
+Multi-model LLM routing selects between OpenRouter (multiple free cloud models: Qwen, Hermes, Llama, Mistral) for maximum capability, or Ollama (local models) for offline/privacy operation. LangChain manages prompts. Outputs include structured recommendations (charts, KPIs, insights).
+
+Vector Search & Memory:
+FAISS indexes dataset summaries and conversation history for semantic search. Enables RAG (retrieval-augmented generation) for context-aware responses. Reranking improves relevance.
+
+Persistence Layer:
+MongoDB stores metadata, user data, conversation history, analysis artifacts. Redis caches frequently accessed data and manages Celery task queue. Parquet files store processed datasets.
+
+Real-time Communication:
+WebSocket implementation enables streaming responses for chat queries, giving users immediate feedback without waiting for full response.
+

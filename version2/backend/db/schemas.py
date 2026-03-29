@@ -138,6 +138,10 @@ class UserBase(BaseModel):
     username: str
     email: EmailStr
 
+class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    avatar: Optional[str] = None
+
 class UserCreate(UserBase):
     password: str
 
@@ -176,4 +180,26 @@ class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
     timestamp: str
+
+# Bookmark Schemas
+class BookmarkBase(BaseModel):
+    title: str
+    description: Optional[str] = None
+    dataset_id: str
+    item_type: str
+    item_data: Dict[str, Any]
+
+class BookmarkCreate(BookmarkBase):
+    pass
+
+class BookmarkUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    item_data: Optional[Dict[str, Any]] = None
+
+class Bookmark(BookmarkBase):
+    id: str
+    user_id: str
+    created_at: datetime
+    updated_at: datetime
 

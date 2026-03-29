@@ -1,6 +1,11 @@
 import React from 'react';
-import { RefreshCw, ChevronDown, Database, Settings, Save, Download } from 'lucide-react';
+import {
+    RefreshCw, ChevronDown, Settings, Save, Download,
+    TrendingUp, SlidersHorizontal, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen,
+    Layers
+} from 'lucide-react';
 import { motion } from 'framer-motion';
+import { cn } from '../../../lib/utils';
 
 const AGGREGATIONS = [
     { id: 'sum', label: 'Sum' },
@@ -25,112 +30,147 @@ const EncodingBar = ({
 }) => {
     const getFieldName = (col) => typeof col === 'string' ? col : col.name;
 
-    const Dropdown = ({ label, value, options, onChange, width = 'w-36' }) => (
-        <div className="flex items-center gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-granite">
-                {label}
-            </span>
+    const Dropdown = ({ label, value, options, onChange, icon: Icon, color = "text-accent-primary" }) => (
+        <div className="flex flex-col min-w-[120px]">
             <div className="relative group">
+                <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted opacity-40 group-hover:opacity-100 transition-opacity">
+                    <Icon size={12} className={color} strokeWidth={2.5} />
+                </div>
                 <select
                     value={value}
                     onChange={(e) => onChange(e.target.value)}
-                    className={`${width} appearance-none px-2.5 py-1.5 pr-7 rounded-md bg-midnight border border-pearl/[0.06] text-[11px] text-pearl cursor-pointer outline-none focus:border-ocean/30 transition-colors`}
+                    className="w-full appearance-none pl-9 pr-8 py-2 rounded-lg bg-secondary/30 shadow-inner text-[12px] font-bold text-header cursor-pointer outline-none focus:bg-secondary/50 transition-all border border-transparent focus:border-accent-primary/20"
                 >
-                    <option value="" className="bg-midnight text-granite">Select…</option>
+                    <option value="" className="bg-surface text-muted">{label}</option>
                     {options.map((opt, i) => (
-                        <option key={i} value={typeof opt === 'string' ? opt : opt.id || opt.value} className="bg-midnight text-pearl">
+                        <option key={i} value={typeof opt === 'string' ? opt : opt.id || opt.value} className="bg-surface text-header font-medium">
                             {typeof opt === 'string' ? opt : opt.label || opt.name}
                         </option>
                     ))}
                 </select>
-                <ChevronDown
-                    size={11}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-granite"
-                />
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted/40 group-hover:text-header transition-colors">
+                    <ChevronDown size={12} strokeWidth={3} />
+                </div>
             </div>
         </div>
     );
 
+    const ActionButton = ({ onClick, icon: Icon, label, disabled, active, variant = "ghost" }) => (
+        <motion.button
+            whileHover={!disabled ? { y: -2, scale: 1.02 } : {}}
+            whileTap={!disabled ? { scale: 0.95 } : {}}
+            onClick={onClick}
+            disabled={disabled}
+            className={cn(
+                "flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all relative overflow-hidden group cursor-pointer",
+                disabled ? "opacity-20 grayscale cursor-not-allowed" : "",
+                active
+                    ? "bg-accent-primary text-white shadow-lg shadow-accent-primary/30"
+                    : variant === "primary"
+                        ? "bg-header text-surface shadow-xl shadow-black/10"
+                        : "bg-secondary/20 text-secondary hover:bg-secondary/40 hover:text-header transition-colors"
+            )}
+            title={label}
+        >
+            <Icon size={14} strokeWidth={3} />
+            <span className="hidden xl:inline">{label}</span>
+        </motion.button>
+    );
+
     return (
-        <div className="h-11 flex items-center justify-between px-3 border-t border-pearl/[0.06] bg-midnight">
-            {/* Left: Panel toggle + Encoding dropdowns */}
-            <div className="flex items-center gap-3">
+        <div className="w-full flex items-center justify-between p-2 rounded-xl bg-surface/90 backdrop-blur-3xl shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)]">
+            {/* Left: Encoding Controls */}
+            <div className="flex items-center gap-3 px-1">
                 <button
                     onClick={onToggleDataPanel}
-                    className={`p-1.5 rounded-md transition-colors ${showDataPanel ? 'bg-ocean/15 text-ocean' : 'text-granite hover:text-pearl'}`}
-                    title="Toggle Data Panel"
+                    className={cn(
+                        "p-2 rounded-lg transition-all shadow-sm cursor-pointer",
+                        showDataPanel
+                            ? "bg-accent-primary text-white shadow-lg shadow-accent-primary/20"
+                            : "bg-secondary/20 text-muted hover:text-header hover:bg-secondary/40"
+                    )}
+                    title={showDataPanel ? "Close Dimensions" : "Open Dimensions"}
                 >
-                    <Database size={13} />
+                    {showDataPanel ? <PanelLeftClose size={18} strokeWidth={2.5} /> : <PanelLeftOpen size={18} strokeWidth={2.5} />}
                 </button>
 
-                <div className="h-4 w-px bg-pearl/[0.06]" />
+                <div className="flex items-center gap-3">
+                    <Dropdown
+                        label="X-Axis"
+                        value={encoding.x.field}
+                        options={columns.map(getFieldName)}
+                        onChange={(v) => onUpdateEncoding('x', v)}
+                        icon={Settings}
+                    />
+                    <Dropdown
+                        label="Y-Axis"
+                        value={encoding.y.field}
+                        options={columns.map(getFieldName)}
+                        onChange={(v) => onUpdateEncoding('y', v)}
+                        icon={TrendingUp}
+                        color="text-accent-secondary"
+                    />
+                    <Dropdown
+                        label="Segment"
+                        value={encoding.group_by}
+                        options={columns.map(getFieldName)}
+                        onChange={(v) => onUpdateEncoding('group_by', v)}
+                        icon={Layers}
+                        color="text-amber-400"
+                    />
+                    <Dropdown
+                        label="Method"
+                        value={encoding.y.aggregate}
+                        options={AGGREGATIONS}
+                        onChange={(v) => onUpdateEncoding('y', { ...encoding.y, aggregate: v })}
+                        icon={SlidersHorizontal}
+                        color="text-accent-purple"
+                    />
+                </div>
 
-                <Dropdown
-                    label="X Axis"
-                    value={encoding.x.field}
-                    options={columns.map(getFieldName)}
-                    onChange={(v) => onUpdateEncoding('x', v)}
-                    width="w-32"
-                />
-                <Dropdown
-                    label="Y Axis"
-                    value={encoding.y.field}
-                    options={columns.map(getFieldName)}
-                    onChange={(v) => onUpdateEncoding('y', v)}
-                    width="w-32"
-                />
-                <Dropdown
-                    label="Aggr"
-                    value={encoding.y.aggregate}
-                    options={AGGREGATIONS}
-                    onChange={(v) => onUpdateEncoding('y', { ...encoding.y, aggregate: v })}
-                    width="w-24"
-                />
+                <motion.button
+                    whileHover={{ rotate: 180, scale: 1.1 }}
+                    transition={{ duration: 0.8 }}
+                    onClick={onRefresh}
+                    className="p-2 rounded-full bg-accent-primary shadow-lg shadow-accent-primary/20 text-white cursor-pointer"
+                    title="Compute Visualization"
+                >
+                    <RefreshCw size={18} strokeWidth={3} />
+                </motion.button>
             </div>
 
-            {/* Right: Actions + Panel toggle */}
-            <div className="flex items-center gap-1.5">
-                <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={onRefresh}
-                    className="p-1.5 rounded-md text-granite hover:text-pearl hover:bg-pearl/[0.04] transition-colors"
-                    title="Refresh Chart"
-                >
-                    <RefreshCw size={13} />
-                </motion.button>
-
-                <div className="h-4 w-px bg-pearl/[0.06]" />
-
-                <button
+            {/* Right: Workspace Actions */}
+            <div className="flex items-center gap-2 px-1">
+                <ActionButton
                     onClick={onSave}
                     disabled={!chartData}
-                    className="p-1.5 rounded-md text-granite hover:text-pearl hover:bg-pearl/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    title="Save"
-                >
-                    <Save size={13} />
-                </button>
-                <button
+                    icon={Save}
+                    label="Commit"
+                />
+                <ActionButton
                     onClick={onExport}
                     disabled={!chartData}
-                    className="p-1.5 rounded-md text-granite hover:text-pearl hover:bg-pearl/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    title="Export"
-                >
-                    <Download size={13} />
-                </button>
-
-                <div className="h-4 w-px bg-pearl/[0.06]" />
+                    icon={Download}
+                    label="Export"
+                    variant="primary"
+                />
 
                 <button
                     onClick={onToggleFormatPanel}
-                    className={`p-1.5 rounded-md transition-colors ${showFormatPanel ? 'bg-ocean/15 text-ocean' : 'text-granite hover:text-pearl'}`}
-                    title="Toggle Format Panel"
+                    className={cn(
+                        "ml-3 p-2 rounded-lg transition-all shadow-sm cursor-pointer",
+                        showFormatPanel
+                            ? "bg-accent-primary text-white shadow-lg shadow-accent-primary/20"
+                            : "bg-secondary/20 text-muted hover:text-header hover:bg-secondary/40"
+                    )}
+                    title={showFormatPanel ? "Close Properties" : "Open Properties"}
                 >
-                    <Settings size={13} />
+                    {showFormatPanel ? <PanelRightClose size={18} strokeWidth={2.5} /> : <PanelRightOpen size={18} strokeWidth={2.5} />}
                 </button>
             </div>
         </div>
     );
 };
+
 
 export default EncodingBar;

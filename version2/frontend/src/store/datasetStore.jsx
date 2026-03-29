@@ -4,29 +4,44 @@ import { datasetAPI } from '../services/api';
 import { toast } from 'react-hot-toast';
 
 const DATASET_STORAGE_KEY = 'dataset-storage';
+let datasetsFetchPromise = null;
 
 const getInitialState = () => ({
   datasets: [],
   selectedDataset: null,
+  selectedDatasetId: null,
   ownerUserId: null,
   uploadProgress: 0,
   isUploading: false,
   loading: false,
   error: null,
+  processingDatasetId: null,
+  isProcessingComplete: false,
+  lastFetchedAt: 0,
+  isBackendOffline: false,
+  dashboardConfigs: {}, // Map of datasetId -> dashboardConfig
+  activeUpload: { fileName: null, progress: 0, isComplete: false, error: null },
 });
 
 const getDatasetId = (dataset) => dataset?.id || dataset?._id || null;
+const getDatasetLifecycleStatus = (dataset) =>
+  (dataset?.processing_status || dataset?.status || '').toLowerCase();
 const hasSameDatasetSnapshot = (a, b) => {
   if (!a || !b) return false;
   return (
     getDatasetId(a) === getDatasetId(b) &&
     a?.is_processed === b?.is_processed &&
-    (a?.processing_status || '') === (b?.processing_status || '') &&
+    getDatasetLifecycleStatus(a) === getDatasetLifecycleStatus(b) &&
+    (a?.artifact_status?.dashboard_design || null) === (b?.artifact_status?.dashboard_design || null) &&
+    (a?.artifact_status?.insights_report || null) === (b?.artifact_status?.insights_report || null) &&
+    (a?.artifact_status?.dashboard_error || '') === (b?.artifact_status?.dashboard_error || '') &&
+    (a?.artifact_status?.insights_error || '') === (b?.artifact_status?.insights_error || '') &&
+    Number(a?.processing_progress || 0) === Number(b?.processing_progress || 0) &&
     Number(a?.row_count || 0) === Number(b?.row_count || 0) &&
     Number(a?.column_count || 0) === Number(b?.column_count || 0) &&
     (a?.name || '') === (b?.name || '') &&
     (a?.updated_at || a?.created_at || a?.upload_date || '') ===
-      (b?.updated_at || b?.created_at || b?.upload_date || '')
+    (b?.updated_at || b?.created_at || b?.upload_date || '')
   );
 };
 
@@ -73,6 +88,7 @@ const useDatasetStore = create(
         set({
           datasets,
           selectedDataset: nextSelected,
+          selectedDatasetId: getDatasetId(nextSelected),
           ownerUserId: getCurrentAuthUserId(),
         });
       },
@@ -83,7 +99,10 @@ const useDatasetStore = create(
           return;
         }
         const matched = get().datasets.find((item) => getDatasetId(item) === datasetId);
-        set({ selectedDataset: matched || dataset });
+        set({
+          selectedDataset: matched || dataset,
+          selectedDatasetId: datasetId
+        });
       },
       setUploadProgress: (progress) => set({ uploadProgress: progress }),
       setIsUploading: (isUploading) => set({ isUploading }),
@@ -95,10 +114,22 @@ const useDatasetStore = create(
       },
       clearError: () => set({ error: null }),
 
+      // Processing modal state
+      setProcessingDataset: (datasetId) => set({
+        processingDatasetId: datasetId,
+        isProcessingComplete: false
+      }),
+      setProcessingComplete: (isComplete) => set({ isProcessingComplete: isComplete }),
+      clearProcessingState: () => set({
+        processingDatasetId: null,
+        isProcessingComplete: false
+      }),
+
       // Enhanced fetch: Auto-call on init if empty
-      fetchDatasets: async (force = false) => {
-        const { loading } = get();
+      fetchDatasets: async (force = false, manual = false) => {
         const currentUserId = getCurrentAuthUserId();
+        const now = Date.now();
+        const { lastFetchedAt, datasets, ownerUserId } = get();
 
         // No authenticated user means no dataset access
         if (!currentUserId) {
@@ -108,20 +139,31 @@ const useDatasetStore = create(
             ownerUserId: null,
             loading: false,
             error: null,
+            lastFetchedAt: 0,
           });
           return [];
         }
 
-        // Prevent concurrent fetches (race condition fix)
-        if (loading) return get().datasets;
+        // Reuse the in-flight request instead of returning stale datasets.
+        if (datasetsFetchPromise) {
+          return datasetsFetchPromise;
+        }
 
-        const { ownerUserId } = get();
+        // Optimization: Throttling forced refreshes
+        // If not a manual refresh, ignore 'force' if fetched within the last 15 seconds
+        const isFresh = (now - lastFetchedAt) < 15000;
+        if (force && isFresh && !manual && datasets.length > 0) {
+          console.debug('Optimizing: Skipping forced dataset refresh (fetched < 5s ago)');
+          return datasets;
+        }
+
         if (ownerUserId && ownerUserId !== currentUserId) {
           set({
             datasets: [],
             selectedDataset: null,
             ownerUserId: currentUserId,
             error: null,
+            lastFetchedAt: 0,
           });
         }
 
@@ -135,49 +177,72 @@ const useDatasetStore = create(
         }
 
         set({ loading: true, error: null });
-        try {
-          const response = await datasetAPI.getDatasets();
-          const fetched = response.data.datasets || [];
-          const currentSelected = get().selectedDataset;
-          const selectedDatasetId = getDatasetId(currentSelected);
-          const selectedFromFetched = fetched.find(
-            (dataset) => getDatasetId(dataset) === selectedDatasetId
-          ) || null;
-          const nextSelectedDataset = selectedFromFetched
-            ? (hasSameDatasetSnapshot(currentSelected, selectedFromFetched) ? currentSelected : selectedFromFetched)
-            : fetched[0] || null;
+        datasetsFetchPromise = (async () => {
+          try {
+            const response = await datasetAPI.getDatasets();
+            const fetched = response.data.datasets || [];
+            const currentSelected = get().selectedDataset;
+            const selectedDatasetId = getDatasetId(currentSelected);
+            const selectedFromFetched = fetched.find(
+              (dataset) => getDatasetId(dataset) === selectedDatasetId
+            ) || null;
+            const nextSelectedDataset = selectedFromFetched
+              ? (hasSameDatasetSnapshot(currentSelected, selectedFromFetched) ? currentSelected : selectedFromFetched)
+              : fetched[0] || null;
 
-          set({
-            datasets: fetched,
-            selectedDataset: nextSelectedDataset,
-            ownerUserId: currentUserId,
-            loading: false,
-          });
-
-          // Only show success toast for manual refreshes, not automatic polling
-          if (force) {
-            toast.success(`Refreshed ${fetched.length} datasets`, {
-              id: 'datasets-refreshed', // Prevent duplicate toasts
-              duration: 2000,
+            set({
+              datasets: fetched,
+              selectedDataset: nextSelectedDataset,
+              selectedDatasetId: getDatasetId(nextSelectedDataset),
+              ownerUserId: currentUserId,
+              loading: false,
+              lastFetchedAt: Date.now(),
+              isBackendOffline: false,
             });
-          }
 
-          return fetched;
-        } catch (error) {
-          const errMsg = error.response?.data?.detail || 'Failed to fetch datasets';
-          set({ error: errMsg, loading: false });
-          // Only show error toast for manual refreshes, not automatic polling
-          if (force) {
-            toast.error(errMsg);
+            if (force && manual) {
+              toast.success(`Refreshed ${fetched.length} datasets`, {
+                id: 'datasets-refreshed',
+                duration: 2000,
+              });
+            }
+
+            return fetched;
+          } catch (error) {
+            const isNetworkError = !error.response && (error.code === 'ERR_NETWORK' || error.message?.includes('Network Error') || error.name === 'TypeError');
+            const errMsg = error.response?.data?.detail || (isNetworkError ? 'Backend server is unreachable' : 'Failed to fetch datasets');
+
+            set({
+              error: errMsg,
+              loading: false,
+              isBackendOffline: isNetworkError
+            });
+
+            if (force) {
+              toast.error(errMsg);
+            }
+            return [];
+          } finally {
+            datasetsFetchPromise = null;
           }
-          return [];
-        }
+        })();
+
+        return datasetsFetchPromise;
       },
 
       // Enhanced upload with duplicate detection
       uploadDataset: async (file, name = '', description = '') => {
         const uploadToast = toast.loading('Uploading...');
-        set({ isUploading: true, uploadProgress: 0, error: null });
+        set({
+          isUploading: true,
+          uploadProgress: 0,
+          error: null,
+          activeUpload: { fileName: name || file.name, progress: 0, isComplete: false, error: null }
+        });
+        get().clearActiveUpload(); // Reset previous if any
+        set({
+          activeUpload: { fileName: name || file.name, progress: 0, isComplete: false, error: null }
+        });
         try {
           const formData = new FormData();
           formData.append('file', file);
@@ -185,7 +250,10 @@ const useDatasetStore = create(
           if (description) formData.append('description', description);
 
           const response = await datasetAPI.uploadDataset(formData, (progress) => {
-            set({ uploadProgress: progress });
+            set((state) => ({
+              uploadProgress: progress,
+              activeUpload: { ...state.activeUpload, progress }
+            }));
             toast.loading(`Uploading: ${progress}%`, { id: uploadToast });
           });
 
@@ -220,9 +288,11 @@ const useDatasetStore = create(
           set((state) => ({
             datasets: [newDataset, ...state.datasets],
             selectedDataset: newDataset,
+            selectedDatasetId: getDatasetId(newDataset),
             ownerUserId: getCurrentAuthUserId(),
             isUploading: false,
             uploadProgress: 100,
+            activeUpload: { ...state.activeUpload, progress: 100, isComplete: true }
           }));
 
           toast.success('Dataset uploaded successfully!', { id: uploadToast });
@@ -230,7 +300,12 @@ const useDatasetStore = create(
 
         } catch (error) {
           const errMsg = error.response?.data?.detail || 'Upload failed';
-          set({ error: errMsg, isUploading: false, uploadProgress: 0 });
+          set({
+            error: errMsg,
+            isUploading: false,
+            uploadProgress: 0,
+            activeUpload: { fileName: null, progress: 0, isComplete: false, error: errMsg }
+          });
           toast.error(errMsg, { id: uploadToast });
           return { success: false, error: errMsg };
         }
@@ -271,6 +346,7 @@ const useDatasetStore = create(
           const dataset = response.data;
           set({
             selectedDataset: dataset,
+            selectedDatasetId: getDatasetId(dataset),
             ownerUserId: getCurrentAuthUserId(),
             loading: false,
           });
@@ -288,6 +364,7 @@ const useDatasetStore = create(
         set((state) => ({
           datasets: [dataset, ...state.datasets],
           selectedDataset: dataset,
+          selectedDatasetId: getDatasetId(dataset),
           ownerUserId: getCurrentAuthUserId(),
         }));
         toast.success('Dataset added');
@@ -321,14 +398,33 @@ const useDatasetStore = create(
           return { success: false, error: errMsg };
         }
       },
+      setActiveUpload: (fileName, progress = 0) => set({
+        activeUpload: { fileName, progress, isComplete: false, error: null }
+      }),
+      updateUploadProgress: (progress) => set((state) => ({
+        activeUpload: { ...state.activeUpload, progress }
+      })),
+      clearActiveUpload: () => set({
+        activeUpload: { fileName: null, progress: 0, isComplete: false, error: null }
+      }),
+      setDashboardConfig: (datasetId, config) => {
+        if (!datasetId) return;
+        set((state) => ({
+          dashboardConfigs: {
+            ...state.dashboardConfigs,
+            [datasetId]: config,
+          },
+        }));
+      },
+      clearDashboardConfigs: () => set({ dashboardConfigs: {} }),
     }),
     {
       name: DATASET_STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        datasets: state.datasets,
-        selectedDataset: state.selectedDataset,
+        selectedDatasetId: state.selectedDatasetId || getDatasetId(state.selectedDataset),
         ownerUserId: state.ownerUserId,
+        dashboardConfigs: state.dashboardConfigs,
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
@@ -341,24 +437,32 @@ const useDatasetStore = create(
           state.resetState?.();
           if (typeof window !== 'undefined') {
             window.localStorage.removeItem(DATASET_STORAGE_KEY);
-            window.sessionStorage.removeItem(DATASET_STORAGE_KEY);
           }
           return;
         }
 
-        const selectedDatasetId = getDatasetId(state.selectedDataset);
-        const isSelectedValid = state.datasets.some(
-          (dataset) => getDatasetId(dataset) === selectedDatasetId
-        );
+        // Auto-fetch datasets and restore selection by ID
+        const rehydrateData = async () => {
+          try {
+            const datasets = await state.fetchDatasets(true);
+            const targetId = state.selectedDatasetId;
 
-        if (state.datasets.length === 0) {
-          state.fetchDatasets?.(true);
-          return;
-        }
+            if (targetId) {
+              const matched = datasets.find(d => getDatasetId(d) === targetId);
+              if (matched) {
+                state.setSelectedDataset(matched);
+              } else if (datasets.length > 0) {
+                state.setSelectedDataset(datasets[0]);
+              }
+            } else if (datasets.length > 0) {
+              state.setSelectedDataset(datasets[0]);
+            }
+          } catch (e) {
+            console.error('Failed to rehydrate dataset selection:', e);
+          }
+        };
 
-        if (!isSelectedValid) {
-          state.setSelectedDataset?.(state.datasets[0] || null);
-        }
+        rehydrateData();
       },
     }
   )

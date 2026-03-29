@@ -33,13 +33,12 @@ scikit-learn
 duckdb
 
 # ── AI / Embeddings ──
-# NOTE: Install torch + sentence-transformers separately using transformers_install.txt:
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-#   pip install sentence-transformers --no-cache-dir
+sentence-transformers
 langchain-huggingface
 langgraph
 chromadb
 faiss-cpu
+rank-bm25
 
 # ── Rate limiting ──
 slowapi
@@ -47,9 +46,13 @@ slowapi
 # ── File handling ──
 python-magic
 
+# ── PDF Generation ──
+weasyprint>=60.0
+
 # ── Resilience & Retry ──
 tenacity
 
 # ── Misc ──
 requests
 websockets
+

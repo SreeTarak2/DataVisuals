@@ -15,6 +15,7 @@ import "./assets/styles/App.css";
 const Landing = lazyWithRetry(() => import("./pages/Landing.jsx"), "landing");
 const Login = lazyWithRetry(() => import("./pages/Login.jsx"), "login");
 const Register = lazyWithRetry(() => import("./pages/Register.jsx"), "register");
+const GoogleCallback = lazyWithRetry(() => import("./pages/auth/GoogleCallbackPage.jsx"), "google-callback");
 const Dashboard = lazyWithRetry(() => import("./pages/Dashboard/index.js"), "dashboard");
 const Datasets = lazyWithRetry(() => import("./pages/Datasets.jsx"), "datasets");
 const Chat = lazyWithRetry(() => import("./pages/Chat.jsx"), "chat");
@@ -48,6 +49,7 @@ function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/auth/google/callback" element={<GoogleCallback />} />
 
             {/* Protected Routes */}
             <Route
@@ -60,10 +62,10 @@ function App() {
             >
               <Route index element={<Navigate to="/app/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
-              <Route path="datasets" element={<Datasets />} />
+              <Route path="workspace" element={<Datasets />} />
               <Route path="chat" element={<Chat />} />
               <Route path="charts" element={<ChartsStudio />} />
-              <Route path="insights" element={<Insights />} />
+              <Route path="analysis" element={<Insights />} />
               <Route path="settings" element={<Settings />} />
             </Route>
 

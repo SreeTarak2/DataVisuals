@@ -1,170 +1,187 @@
 /**
- * InsightsBar Component — v2.0
- * 
- * Redesigned to be genuinely useful for normal users:
- * - Executive Summary gets a prominent hero card
- * - Insight cards have human-readable titles and descriptions
- * - Confidence shown as qualitative labels, not raw percentages
- * - Visual hierarchy by insight type (color-coded borders & icons)
- * - Shows top 3 insights initially — quality over quantity
+ * InsightsBar — v3.0
+ *
+ * What changed vs v2.0:
+ * - Surfaces effect_size, p_value, columns that the backend sends but v2 never rendered
+ * - Stops stripping statistical context (humanizeDescription was removing r-values etc.)
+ * - Summary card shows parsed stat-chips extracted from the description text
+ * - Insight card: column pills + visual effect bar replace the two generic sub-boxes
+ * - Tighter layout: more findings visible without scrolling
  */
 
 import React, { useState, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    Zap,
-    TrendingUp,
-    TrendingDown,
-    AlertTriangle,
-    CheckCircle,
-    Lightbulb,
-    ChevronDown,
-    ChevronUp,
-    Search,
-    Activity,
-    BarChart3,
-    MessageSquare,
-    Copy,
-    Check,
-    ArrowRight,
-    Sparkles,
-    Eye,
-    Shuffle,
-    FileText,
+    Zap, TrendingUp, AlertTriangle, Lightbulb,
+    ChevronDown, ChevronUp, Activity, BarChart3,
+    MessageSquare, Copy, Check, ArrowRight, Sparkles,
+    Eye, FileText, ShieldAlert, GitBranch, Layers,
 } from 'lucide-react';
 import useChatStore from '../../../store/chatStore';
 import useDatasetStore from '../../../store/datasetStore';
 import InsightFeedback from '../../../components/features/feedback/InsightFeedback';
 
-// ── Icon mapping by insight type ──
+// ── Icon mapping ──────────────────────────────────────────────────────────────
 const ICON_MAP = {
-    success: Sparkles,
-    info: Activity,
-    warning: AlertTriangle,
-    trend: TrendingUp,
-    anomaly: AlertTriangle,
-    correlation: Activity,
-    distribution: BarChart3,
-    recommendation: Lightbulb,
-    quis: Search,
-    subspace: Eye,
-    default: Zap,
+    success: Sparkles, info: Activity, warning: AlertTriangle,
+    trend: TrendingUp, anomaly: AlertTriangle, correlation: GitBranch,
+    distribution: BarChart3, recommendation: Lightbulb,
+    subspace: Eye, default: Zap,
 };
 
-// ── Richer color themes per insight type ──
-const COLOR_MAP = {
-    success: {
-        icon: 'text-emerald-400',
-        bg: 'bg-emerald-500/8',
-        border: 'border-emerald-500/25',
-        borderAccent: 'border-l-emerald-500',
-        badge: 'bg-emerald-500/12 text-emerald-400',
-        action: 'hover:bg-emerald-500/10 hover:text-emerald-400 hover:border-emerald-500/30',
-        glow: 'shadow-emerald-500/5',
-    },
-    info: {
-        icon: 'text-blue-400',
-        bg: 'bg-blue-500/8',
-        border: 'border-blue-500/25',
-        borderAccent: 'border-l-blue-500',
-        badge: 'bg-blue-500/12 text-blue-400',
-        action: 'hover:bg-blue-500/10 hover:text-blue-400 hover:border-blue-500/30',
-        glow: 'shadow-blue-500/5',
-    },
-    warning: {
-        icon: 'text-amber-400',
-        bg: 'bg-amber-500/8',
-        border: 'border-amber-500/25',
-        borderAccent: 'border-l-amber-500',
-        badge: 'bg-amber-500/12 text-amber-400',
-        action: 'hover:bg-amber-500/10 hover:text-amber-400 hover:border-amber-500/30',
-        glow: 'shadow-amber-500/5',
-    },
-    trend: {
-        icon: 'text-violet-400',
-        bg: 'bg-violet-500/8',
-        border: 'border-violet-500/25',
-        borderAccent: 'border-l-violet-500',
-        badge: 'bg-violet-500/12 text-violet-400',
-        action: 'hover:bg-violet-500/10 hover:text-violet-400 hover:border-violet-500/30',
-        glow: 'shadow-violet-500/5',
-    },
-    default: {
-        icon: 'text-slate-400',
-        bg: 'bg-slate-500/8',
-        border: 'border-slate-500/25',
-        borderAccent: 'border-l-slate-500',
-        badge: 'bg-slate-500/12 text-slate-400',
-        action: 'hover:bg-slate-500/10 hover:text-slate-300 hover:border-slate-500/30',
-        glow: 'shadow-slate-500/5',
-    },
+// ── Accent colours per type (inline-style safe — no Tailwind arbitrary values) ──
+const ACCENTS = {
+    success: { primary: '#34d399', bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.22)', leftBorder: '#34d399' },
+    info: { primary: '#60a5fa', bg: 'rgba(96,165,250,0.08)', border: 'rgba(96,165,250,0.22)', leftBorder: '#60a5fa' },
+    warning: { primary: '#fbbf24', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.22)', leftBorder: '#fbbf24' },
+    trend: { primary: '#a78bfa', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.22)', leftBorder: '#a78bfa' },
+    default: { primary: '#94a3b8', bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.20)', leftBorder: '#94a3b8' },
 };
 
 const VISIBLE_COUNT = 3;
 
-// ── Convert confidence number to a human-readable label ──
-const getConfidenceLabel = (confidence) => {
-    if (confidence >= 95) return { text: 'Very High', color: 'text-emerald-400 bg-emerald-500/10' };
-    if (confidence >= 80) return { text: 'High', color: 'text-blue-400 bg-blue-500/10' };
-    if (confidence >= 60) return { text: 'Moderate', color: 'text-amber-400 bg-amber-500/10' };
-    return { text: 'Low', color: 'text-slate-400 bg-slate-500/10' };
-};
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-// ── Get a human-friendly type label ──
-const getTypeLabel = (type) => {
-    const labels = {
-        success: 'Key Finding',
-        info: 'Relationship',
-        warning: 'Attention',
-        trend: 'Trend',
-        anomaly: 'Anomaly',
-    };
-    return labels[type] || 'Insight';
-};
-
-// ── Clean up any remaining statistical jargon from descriptions ──
-const humanizeDescription = (desc) => {
+/** Clean junk punctuation but KEEP r-values and numbers — they're useful context. */
+const cleanDescription = (desc) => {
     if (!desc) return '';
     return desc
-        // Remove raw p-value references
-        .replace(/\.\s*p[=<]\d+\.\d+/gi, '')
-        // Remove effect size references
-        .replace(/\.\s*effect\s*size[=:]\s*\d+\.\d+(\s*\([^)]*\))?/gi, '')
-        // Remove confidence interval references
-        .replace(/\.\s*95%\s*CI:\s*\[[^\]]+\]/gi, '')
-        // Remove normality test references  
-        .replace(/\.\s*Normality test:\s*p[=<]\d+\.\d+/gi, '')
-        // Remove r= correlation coefficient
-        .replace(/\s*\(r[=:]\s*-?\d+\.\d+[^)]*\)/gi, '')
-        // Clean up double periods and trailing dots
         .replace(/\.{2,}/g, '.')
-        .replace(/\.\s*$/, '.')
+        .replace(/\s{2,}/g, ' ')
         .trim();
 };
+
+/** Convert numeric effect_size → label + bar fill % */
+const effectLabel = (e) => {
+    if (e == null) return null;
+    const abs = Math.abs(e);
+    if (abs >= 0.8) return { text: 'Very strong', pct: 95, color: '#34d399' };
+    if (abs >= 0.6) return { text: 'Strong', pct: 78, color: '#34d399' };
+    if (abs >= 0.4) return { text: 'Moderate', pct: 55, color: '#fbbf24' };
+    if (abs >= 0.2) return { text: 'Weak', pct: 30, color: '#f87171' };
+    return { text: 'Negligible', pct: 12, color: '#6b7280' };
+};
+
+/** Convert confidence number → qualitative label */
+const confidenceLabel = (c) => {
+    if (c >= 95) return { text: 'Very high', color: '#34d399' };
+    if (c >= 80) return { text: 'High', color: '#60a5fa' };
+    if (c >= 60) return { text: 'Moderate', color: '#fbbf24' };
+    return { text: 'Low', color: '#94a3b8' };
+};
+
+const typeLabel = (t) => ({
+    success: 'Key Finding', info: 'Relationship', warning: 'Anomaly',
+    trend: 'Trend', correlation: 'Correlation', distribution: 'Distribution',
+    subspace: 'Hidden Pattern', anomaly: 'Anomaly',
+}[t] || 'Insight');
+
+const severityClasses = (s) => s === 'high'
+    ? { bg: 'rgba(239,68,68,0.10)', color: '#f87171', border: 'rgba(239,68,68,0.20)', label: 'Priority' }
+    : s === 'medium'
+        ? { bg: 'rgba(251,191,36,0.10)', color: '#fbbf24', border: 'rgba(251,191,36,0.20)', label: 'Review' }
+        : { bg: 'rgba(148,163,184,0.08)', color: '#94a3b8', border: 'rgba(148,163,184,0.18)', label: 'Monitor' };
+
+/**
+ * Extract key numbers from the executive summary description text so we can
+ * show them as stat chips rather than burying them in prose.
+ * Patterns we look for: "N rows", "N columns", "N correlations", "N outliers"
+ */
+const extractSummaryChips = (description = '') => {
+    const chips = [];
+    const patterns = [
+        { re: /([\d,]+)\s*rows?/i, label: 'Rows', icon: '⊞' },
+        { re: /([\d,]+)\s*columns?/i, label: 'Columns', icon: '⊟' },
+        { re: /([\d,]+)\s*(?:strong\s+)?correlations?/i, label: 'Correlations', icon: '⇌' },
+        { re: /([\d,]+)\s*outliers?/i, label: 'Outliers', icon: '◉' },
+        { re: /([\d,]+)\s*columns?\s+deviate/i, label: 'Non-normal cols', icon: '≠' },
+    ];
+    for (const { re, label, icon } of patterns) {
+        const m = description.match(re);
+        if (m) chips.push({ value: m[1], label, icon });
+    }
+    return chips;
+};
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+const ColumnPills = ({ columns = [] }) => {
+    if (!columns.length) return null;
+    return (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+            {columns.slice(0, 4).map(col => (
+                <span key={col} style={{
+                    fontSize: 10, fontWeight: 600,
+                    padding: '2px 7px', borderRadius: 4,
+                    background: 'rgba(99,102,241,0.12)',
+                    border: '1px solid rgba(99,102,241,0.25)',
+                    color: '#a5b4fc', letterSpacing: '0.02em',
+                    fontFamily: 'monospace',
+                }}>
+                    {col.replace(/_/g, ' ')}
+                </span>
+            ))}
+        </div>
+    );
+};
+
+const EffectBar = ({ effectSize, pValue }) => {
+    const ef = effectLabel(effectSize);
+    if (!ef) return null;
+    const pLabel = pValue != null
+        ? pValue < 0.001 ? 'p<0.001' : pValue < 0.01 ? `p=${pValue.toFixed(3)}` : `p=${pValue.toFixed(2)}`
+        : null;
+    return (
+        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* Bar */}
+            <div style={{ flex: 1, height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                <div style={{
+                    height: '100%', width: `${ef.pct}%`, borderRadius: 3,
+                    background: `linear-gradient(90deg, ${ef.color}80, ${ef.color})`,
+                    transition: 'width 0.4s ease',
+                }} />
+            </div>
+            {/* Label */}
+            <span style={{ fontSize: 10, fontWeight: 600, color: ef.color, whiteSpace: 'nowrap', minWidth: 64 }}>
+                {ef.text}
+                {effectSize != null && (
+                    <span style={{ opacity: 0.7, fontWeight: 400 }}> ({Math.abs(effectSize).toFixed(2)})</span>
+                )}
+            </span>
+            {pLabel && (
+                <span style={{
+                    fontSize: 9, fontWeight: 600, padding: '1px 5px', borderRadius: 3,
+                    background: 'rgba(255,255,255,0.06)', color: '#6b7280',
+                }}>
+                    {pLabel}
+                </span>
+            )}
+        </div>
+    );
+};
+
+// ── Main component ────────────────────────────────────────────────────────────
 
 const InsightsBar = ({ insights = [], loading = false }) => {
     const [expanded, setExpanded] = useState(false);
     const [copiedId, setCopiedId] = useState(null);
-
-    const { startNewConversation, sendMessageStreaming } = useChatStore();
+    const navigate = useNavigate();
     const { selectedDataset } = useDatasetStore();
+    const selectedDatasetId = selectedDataset?.id || selectedDataset?._id || null;
 
-    // Separate executive summary from other insights
     const { summary, findings } = useMemo(() => {
-        const summaryInsight = insights.find(i => i.id === 'executive_summary');
-        const rest = insights.filter(i => i.id !== 'executive_summary');
-        return { summary: summaryInsight, findings: rest };
+        const s = insights.find(i => i.id === 'executive_summary');
+        const f = insights.filter(i => i.id !== 'executive_summary');
+        return { summary: s, findings: f };
     }, [insights]);
 
-    // ── Investigate: open chat with a pre-filled investigation query ──
     const handleInvestigate = useCallback((insight) => {
-        if (!selectedDataset?.id) return;
-
+        if (!selectedDatasetId) return;
         const query = `Investigate this insight in detail: "${insight.title}". ${insight.description || ''} — provide deeper analysis, possible causes, and recommended actions.`;
         window.dispatchEvent(new CustomEvent('open-chat-with-query', { detail: { query } }));
-    }, [selectedDataset]);
+    }, [selectedDatasetId]);
 
-    // ── Copy insight text to clipboard ──
     const handleCopy = useCallback((insight) => {
         const text = `${insight.title}\n${insight.description || ''}`;
         navigator.clipboard.writeText(text).then(() => {
@@ -175,20 +192,18 @@ const InsightsBar = ({ insights = [], loading = false }) => {
 
     if (loading) {
         return (
-            <motion.div
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-slate-900/60 backdrop-blur-sm border border-slate-800/80 rounded-2xl p-6"
-                aria-live="polite"
-                aria-busy="true"
+            <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+                style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}
+                className="rounded-2xl p-6"
             >
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-indigo-500/10 rounded-xl flex items-center justify-center border border-indigo-500/20" aria-hidden="true">
-                        <Sparkles className="w-5 h-5 text-indigo-400 animate-pulse" />
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                        style={{ background: 'var(--accent-primary-light)', border: '1px solid var(--accent-primary)' }}>
+                        <Sparkles className="w-5 h-5 animate-pulse" style={{ color: 'var(--accent-primary)' }} />
                     </div>
                     <div>
-                        <h3 className="text-sm font-semibold text-white">Analyzing your data…</h3>
-                        <p className="text-xs text-slate-500 mt-0.5">Finding the most important patterns</p>
+                        <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Analyzing your data…</p>
+                        <p className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>Finding the most important patterns</p>
                     </div>
                 </div>
             </motion.div>
@@ -201,181 +216,232 @@ const InsightsBar = ({ insights = [], loading = false }) => {
     const hasMore = findings.length > VISIBLE_COUNT;
 
     return (
-        <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-slate-900/60 backdrop-blur-sm border border-slate-800/80 rounded-2xl overflow-hidden"
-            aria-label="Data Insights"
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+            style={{ background: 'var(--bg-surface)', borderColor: 'var(--border)' }}
+            className="border rounded-2xl overflow-hidden"
         >
-            {/* ─── Header ─── */}
-            <div className="flex items-center justify-between px-6 pt-5 pb-4">
-                <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 bg-indigo-500/10 rounded-xl flex items-center justify-center border border-indigo-500/20" aria-hidden="true">
-                        <Sparkles className="w-4.5 h-4.5 text-indigo-400" />
+            {/* ── Header ── */}
+            <div className="flex items-center justify-between px-5 pt-4 pb-3.5"
+                style={{ borderBottom: '1px solid var(--border)' }}>
+                <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+                        style={{ background: 'var(--accent-primary-light)', border: '1px solid var(--accent-primary)' }}>
+                        <Sparkles className="w-4 h-4" style={{ color: 'var(--accent-primary)' }} />
                     </div>
                     <div>
-                        <h3 className="text-[15px] font-bold text-slate-100 tracking-tight">Key Insights</h3>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                            Top findings from AI analysis
+                        <h3 className="text-[14px] font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>
+                            Key Insights
+                        </h3>
+                        <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                            AI-detected patterns &amp; signals
                         </p>
                     </div>
                 </div>
                 {findings.length > 0 && (
-                    <span className="text-[11px] text-slate-500 bg-slate-800/60 px-2.5 py-1 rounded-full">
+                    <span className="text-[11px] px-2.5 py-1 rounded-full"
+                        style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
                         {findings.length} finding{findings.length !== 1 ? 's' : ''}
                     </span>
                 )}
             </div>
 
-            <div className="px-5 pb-5 space-y-4">
-                {/* ─── Executive Summary Hero Card ─── */}
-                {summary && (
-                    <motion.div
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="relative p-4 rounded-xl bg-gradient-to-br from-indigo-500/8 via-slate-800/40 to-violet-500/8 border border-indigo-500/20 group/summary"
-                    >
-                        <div className="flex items-start gap-3">
-                            <div className="w-8 h-8 rounded-lg bg-indigo-500/15 flex items-center justify-center flex-shrink-0 border border-indigo-500/25" aria-hidden="true">
-                                <FileText className="w-4 h-4 text-indigo-400" />
+            <div className="px-4 pb-4 pt-3 space-y-3">
+                {/* ── Summary card — stat chips + description ── */}
+                {summary && (() => {
+                    const chips = extractSummaryChips(summary.description || '');
+                    return (
+                        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                            className="rounded-xl p-4 group/summary"
+                            style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
+                        >
+                            <div className="flex items-center gap-2 mb-3">
+                                <FileText className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--accent-primary)' }} />
+                                <span className="text-[12px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                    Dataset Summary
+                                </span>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full"
+                                    style={{ background: 'var(--accent-primary-light)', color: 'var(--accent-primary)' }}>
+                                    AI Generated
+                                </span>
                             </div>
-                            <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-1.5">
-                                    <h4 className="text-[13px] font-semibold text-indigo-300">Summary</h4>
-                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/12 text-indigo-400">
-                                        AI Generated
-                                    </span>
-                                </div>
-                                <p className="text-[12.5px] text-slate-300 leading-relaxed">
-                                    {humanizeDescription(summary.description)}
-                                </p>
-                            </div>
-                        </div>
-                        {/* Summary actions */}
-                        <div className="flex items-center gap-2 mt-3 ml-11 opacity-0 group-hover/summary:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
-                            <button
-                                onClick={() => handleInvestigate(summary)}
-                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-indigo-500/25 text-indigo-400/70 hover:bg-indigo-500/10 hover:text-indigo-300 transition-all duration-150"
-                                title="Dig deeper with AI"
-                            >
-                                <MessageSquare className="w-3 h-3" aria-hidden="true" />
-                                Ask AI about this
-                                <ArrowRight className="w-2.5 h-2.5" aria-hidden="true" />
-                            </button>
-                            <button
-                                onClick={() => handleCopy(summary)}
-                                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] border border-slate-700/40 text-slate-500 hover:text-slate-300 hover:bg-slate-700/30 transition-all duration-150"
-                                title="Copy summary"
-                            >
-                                {copiedId === summary.id ? (
-                                    <><Check className="w-3 h-3 text-emerald-400" /><span className="text-emerald-400">Copied</span></>
-                                ) : (
-                                    <><Copy className="w-3 h-3" />Copy</>
-                                )}
-                            </button>
-                        </div>
-                    </motion.div>
-                )}
 
-                {/* ─── Insight Cards ─── */}
+                            {/* Stat chips — extracted from the description text */}
+                            {chips.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mb-3">
+                                    {chips.map(chip => (
+                                        <div key={chip.label} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg"
+                                            style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                                            <span style={{ fontSize: 12 }}>{chip.icon}</span>
+                                            <span className="text-[13px] font-bold tabular-nums"
+                                                style={{ color: 'var(--text-primary)' }}>{chip.value}</span>
+                                            <span className="text-[10px]"
+                                                style={{ color: 'var(--text-secondary)' }}>{chip.label}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            <p className="text-[12px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                                {cleanDescription(summary.description)}
+                            </p>
+
+                            {/* Actions */}
+                            <div className="flex items-center gap-2 mt-3 opacity-0 group-hover/summary:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
+                                <button onClick={() => handleInvestigate(summary)}
+                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all"
+                                    style={{ border: '1px solid rgba(99,102,241,0.25)', color: 'rgba(165,180,252,0.7)' }}
+                                >
+                                    <MessageSquare className="w-3 h-3" />
+                                    Ask AI about this
+                                    <ArrowRight className="w-2.5 h-2.5" />
+                                </button>
+                                <button onClick={() => handleCopy(summary)}
+                                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] transition-all"
+                                    style={{ border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
+                                >
+                                    {copiedId === summary.id ? (
+                                        <><Check className="w-3 h-3 text-emerald-400" /><span className="text-emerald-400">Copied</span></>
+                                    ) : (
+                                        <><Copy className="w-3 h-3" />Copy</>
+                                    )}
+                                </button>
+                            </div>
+                        </motion.div>
+                    );
+                })()}
+
+                {/* ── Insight cards ── */}
                 {visibleFindings.length > 0 && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3" role="list">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                         <AnimatePresence mode="popLayout">
                             {visibleFindings.map((insight, i) => {
                                 const type = insight.type || 'default';
-                                const colors = COLOR_MAP[type] || COLOR_MAP.default;
+                                const accent = ACCENTS[type] || ACCENTS.default;
                                 const Icon = ICON_MAP[type] || ICON_MAP.default;
                                 const insightId = insight.id || `insight-${i}`;
                                 const isCopied = copiedId === (insight.id || insight.title);
-                                const confLabel = getConfidenceLabel(insight.confidence);
-                                const typeLabel = getTypeLabel(type);
+                                const conf = confidenceLabel(insight.confidence);
+                                const tLabel = typeLabel(type);
+                                const sev = insight.severity ? severityClasses(insight.severity) : null;
+                                const columns = insight.columns || [];
+                                const hasEffect = insight.effect_size != null;
 
                                 return (
-                                    <motion.div
-                                        key={insightId}
-                                        role="listitem"
-                                        initial={{ opacity: 0, y: 8 }}
-                                        animate={{ opacity: 1, y: 0 }}
+                                    <motion.div key={insightId}
+                                        initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                                         exit={{ opacity: 0, y: -8 }}
-                                        transition={{ delay: i * 0.05, duration: 0.25 }}
-                                        className={`
-                                            flex flex-col gap-3 p-3.5 rounded-xl
-                                            bg-slate-800/30 border border-slate-700/30
-                                            border-l-2 ${colors.borderAccent}
-                                            hover:bg-slate-800/50 hover:border-slate-700/50
-                                            hover:shadow-lg ${colors.glow}
-                                            transition-all duration-200 group/card
-                                        `}
-                                        aria-labelledby={`insight-title-${insightId}`}
-                                        aria-describedby={`insight-desc-${insightId}`}
+                                        transition={{ delay: i * 0.05, duration: 0.22 }}
+                                        className="flex flex-col rounded-xl overflow-hidden group/card transition-all duration-200 hover:shadow-lg"
+                                        style={{
+                                            background: 'var(--bg-elevated)',
+                                            border: `1px solid var(--border)`,
+                                            borderLeft: `3px solid ${accent.leftBorder}`,
+                                        }}
                                     >
-                                        {/* Card header: type badge + confidence */}
-                                        <div className="flex items-center justify-between">
+                                        {/* Card header */}
+                                        <div className="px-3.5 pt-3 pb-2 flex items-center justify-between gap-2">
                                             <div className="flex items-center gap-2">
-                                                <div className={`
-                                                    w-6 h-6 rounded-md flex items-center justify-center
-                                                    ${colors.bg} ${colors.border} border
-                                                `} aria-hidden="true">
-                                                    <Icon className={`w-3 h-3 ${colors.icon}`} />
+                                                <div className="w-5 h-5 rounded flex items-center justify-center shrink-0"
+                                                    style={{ background: accent.bg, border: `1px solid ${accent.border}` }}>
+                                                    <Icon className="w-3 h-3" style={{ color: accent.primary }} />
                                                 </div>
-                                                <span className={`text-[10px] font-semibold uppercase tracking-wider ${colors.icon}`}>
-                                                    {typeLabel}
+                                                <span className="text-[10px] font-bold uppercase tracking-wider"
+                                                    style={{ color: accent.primary }}>
+                                                    {tLabel}
                                                 </span>
                                             </div>
-                                            {insight.confidence != null && (
-                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${confLabel.color}`}>
-                                                    {confLabel.text}
-                                                </span>
-                                            )}
+                                            <div className="flex items-center gap-1.5">
+                                                {sev && (
+                                                    <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full border"
+                                                        style={{ background: sev.bg, color: sev.color, borderColor: sev.border }}>
+                                                        {sev.label}
+                                                    </span>
+                                                )}
+                                                {insight.confidence != null && (
+                                                    <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
+                                                        style={{ color: conf.color, background: `${conf.color}15` }}>
+                                                        {conf.text}
+                                                    </span>
+                                                )}
+                                            </div>
                                         </div>
 
-                                        {/* Title & description */}
-                                        <div className="flex-1 min-w-0">
-                                            <p id={`insight-title-${insightId}`} className="text-[13px] font-semibold text-slate-200 leading-snug mb-1">
+                                        {/* Title */}
+                                        <div className="px-3.5">
+                                            <p className="text-[13px] font-semibold leading-snug"
+                                                style={{ color: 'var(--text-primary)' }}>
                                                 {insight.title}
                                             </p>
-                                            <p id={`insight-desc-${insightId}`} className="text-[11.5px] text-slate-400 leading-relaxed line-clamp-3">
-                                                {humanizeDescription(insight.description)}
+                                        </div>
+
+                                        {/* Column pills — show which fields are involved */}
+                                        {columns.length > 0 && (
+                                            <div className="px-3.5">
+                                                <ColumnPills columns={columns} />
+                                            </div>
+                                        )}
+
+                                        {/* Effect bar — visual strength of the finding */}
+                                        {hasEffect && (
+                                            <div className="px-3.5">
+                                                <EffectBar effectSize={insight.effect_size} pValue={insight.p_value} />
+                                            </div>
+                                        )}
+
+                                        {/* Description — keep stats, just clean whitespace */}
+                                        <div className="px-3.5 mt-2 flex-1">
+                                            <p className="text-[11.5px] leading-relaxed line-clamp-3"
+                                                style={{ color: 'var(--text-secondary)' }}>
+                                                {cleanDescription(insight.description)}
                                             </p>
                                         </div>
 
-                                        {/* Action buttons */}
-                                        <div className="flex items-center justify-between opacity-0 group-hover/card:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
-                                            <div className="flex items-center gap-1.5">
-                                                <button
-                                                    onClick={() => handleInvestigate(insight)}
-                                                    className={`
-                                                        flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium
-                                                        border border-slate-700/40 text-slate-500
-                                                        ${colors.action}
-                                                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500
-                                                        transition-all duration-150
-                                                    `}
-                                                    title="Ask AI to investigate this insight"
-                                                >
-                                                    <MessageSquare className="w-3 h-3" aria-hidden="true" />
-                                                    Investigate
-                                                    <ArrowRight className="w-2.5 h-2.5" aria-hidden="true" />
-                                                </button>
+                                        {/* Inline action hint (replaces the two generic sub-boxes) */}
+                                        {insight.recommended_action && (
+                                            <div className="px-3.5 mt-2">
+                                                <p className="text-[11px] leading-relaxed line-clamp-2"
+                                                    style={{ color: 'var(--text-muted)' }}>
+                                                    <span style={{ color: accent.primary, marginRight: 4 }}>→</span>
+                                                    {insight.recommended_action}
+                                                </p>
+                                            </div>
+                                        )}
 
-                                                <button
-                                                    onClick={() => handleCopy(insight)}
-                                                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] border border-slate-700/40 text-slate-500 hover:text-slate-300 hover:bg-slate-700/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 transition-all duration-150"
-                                                    title="Copy insight"
-                                                    aria-live="polite"
+                                        {/* Action buttons */}
+                                        <div className="px-3.5 py-2.5 mt-1 flex items-center justify-between
+                                            opacity-100 sm:opacity-0 sm:group-hover/card:opacity-100
+                                            focus-within:opacity-100 transition-opacity duration-200"
+                                            style={{ borderTop: '1px solid var(--border)' }}>
+                                            <div className="flex items-center gap-1.5">
+                                                <button onClick={() => handleInvestigate(insight)}
+                                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all"
+                                                    style={{
+                                                        border: `1px solid ${accent.border}`,
+                                                        color: `${accent.primary}CC`,
+                                                        background: 'transparent',
+                                                    }}
+                                                    onMouseEnter={e => e.currentTarget.style.background = accent.bg}
+                                                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                                >
+                                                    <MessageSquare className="w-3 h-3" />
+                                                    Investigate
+                                                    <ArrowRight className="w-2.5 h-2.5" />
+                                                </button>
+                                                <button onClick={() => handleCopy(insight)}
+                                                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] transition-all"
+                                                    style={{ border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
                                                 >
                                                     {isCopied ? (
-                                                        <><Check className="w-3 h-3 text-emerald-400" aria-hidden="true" /><span className="text-emerald-400">Copied</span></>
+                                                        <><Check className="w-3 h-3 text-emerald-400" /><span className="text-emerald-400">Copied</span></>
                                                     ) : (
-                                                        <><Copy className="w-3 h-3" aria-hidden="true" />Copy</>
+                                                        <><Copy className="w-3 h-3" />Copy</>
                                                     )}
                                                 </button>
                                             </div>
-
                                             <InsightFeedback
                                                 variant="compact"
                                                 insightText={`${insight.title}. ${insight.description || ''}`}
-                                                datasetId={selectedDataset?.id}
+                                                datasetId={selectedDatasetId}
                                             />
                                         </div>
                                     </motion.div>
@@ -386,26 +452,35 @@ const InsightsBar = ({ insights = [], loading = false }) => {
                 )}
             </div>
 
-            {/* ─── Expand / Collapse ─── */}
+            {/* ── Show more / collapse ── */}
             {hasMore && (
-                <button
-                    onClick={() => setExpanded(!expanded)}
-                    aria-expanded={expanded}
-                    className="
-                        w-full flex items-center justify-center gap-1.5 py-2.5
-                        text-[11px] font-medium text-slate-500 hover:text-slate-300
-                        border-t border-slate-800/50
-                        bg-slate-900/30 hover:bg-slate-800/30
-                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:ring-inset
-                        transition-all duration-200
-                    "
+                <button onClick={() => setExpanded(!expanded)}
+                    className="w-full flex items-center justify-center gap-1.5 py-2.5 text-[11px] font-medium transition-all"
+                    style={{
+                        borderTop: '1px solid var(--border)',
+                        background: 'var(--bg-elevated)',
+                        color: 'var(--accent-primary)',
+                    }}
                 >
                     {expanded ? (
-                        <>Show fewer insights <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" /></>
+                        <>Show fewer <ChevronUp className="w-3.5 h-3.5" /></>
                     ) : (
-                        <>{findings.length - VISIBLE_COUNT} more insight{findings.length - VISIBLE_COUNT !== 1 ? 's' : ''} <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" /></>
+                        <>{findings.length - VISIBLE_COUNT} more insight{findings.length - VISIBLE_COUNT !== 1 ? 's' : ''} <ChevronDown className="w-3.5 h-3.5" /></>
                     )}
                 </button>
+            )}
+
+            {/* ── Footer link ── */}
+            {selectedDatasetId && (
+                <div className="px-5 py-3" style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
+                    <button onClick={() => navigate('/app/analysis')}
+                        className="inline-flex items-center gap-2 text-[11.5px] font-medium transition-colors"
+                        style={{ color: 'var(--accent-primary)' }}
+                    >
+                        Open the full intelligence report
+                        <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                </div>
             )}
         </motion.div>
     );

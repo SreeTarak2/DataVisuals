@@ -157,6 +157,10 @@ export const hydrateKpiComponent = (component, datasetData) => {
         const recordCount = component.record_count ?? null;
         const minValue = component.min_value ?? null;
         const maxValue = component.max_value ?? null;
+        const definition = component.definition || null;
+        const benchmarkText = component.benchmarkText || null;
+        const isOutlier = component.isOutlier || false;
+        const aiSuggestion = component.aiSuggestion || null;
 
         return {
             ...component,
@@ -171,6 +175,10 @@ export const hydrateKpiComponent = (component, datasetData) => {
             recordCount,
             minValue,
             maxValue,
+            definition,
+            benchmarkText,
+            isOutlier,
+            aiSuggestion,
         };
     } catch (e) {
         console.warn('hydrateKpiComponent failed', e);

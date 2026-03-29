@@ -33,7 +33,7 @@ class _Config:
 class ChartRenderRequest(BaseModel):
     """
     Enhanced chart generation request with full configuration.
-    
+
     This replaces the ad-hoc {x_axis, y_axis, ...} payload.
     """
     dataset_id: str = Field(..., description="Dataset ID to render chart from")
@@ -43,10 +43,15 @@ class ChartRenderRequest(BaseModel):
     group_by: Optional[List[str]] = Field(default=None, description="Optional grouping columns")
     filters: Optional[List[Dict[str, Any]]] = Field(default=None, description="Optional data filters")
     title: Optional[str] = Field(default=None, description="Chart title")
-    include_insights: bool = Field(default=False, description="Whether to generate AI insights")
-    
+    include_insights: bool = Field(default=True, description="Whether to generate AI insights")
+    # Date range filtering
+    from_date: Optional[str] = Field(default=None, alias="from", description="Start date (ISO 8601, e.g. 2024-01-01)")
+    to_date: Optional[str] = Field(default=None, alias="to", description="End date (ISO 8601, e.g. 2024-12-31)")
+    granularity: Optional[str] = Field(default="day", description="Time granularity: hour | day | week | month")
+    limit: Optional[int] = Field(default=10000, ge=1, le=100000, description="Max rows returned")
+
     class Config(_Config):
-        pass
+        populate_by_name = True  # allow both alias and field name
 
 
 # ---------------------------------------------------

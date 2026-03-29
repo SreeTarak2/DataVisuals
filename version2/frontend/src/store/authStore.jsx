@@ -4,6 +4,7 @@ import axios from 'axios';
 import useDatasetStore from './datasetStore';
 import useChatStore from './chatStore';
 import useChatHistoryStore from './chatHistoryStore';
+import { clearInsightsDataCache } from '../pages/insights/hooks/useInsightsData';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 const USER_SCOPED_STORAGE_KEYS = ['dataset-storage', 'datasage-chat-store', 'chat-history-storage'];
@@ -38,6 +39,12 @@ const clearUserScopedClientState = () => {
         useChatHistoryStore.getState().resetState();
     } catch (error) {
         console.warn('Failed to reset chat history store:', error);
+    }
+
+    try {
+        clearInsightsDataCache();
+    } catch (error) {
+        console.warn('Failed to clear insights data cache:', error);
     }
 
     USER_SCOPED_STORAGE_KEYS.forEach((key) => {
@@ -120,6 +127,24 @@ const useAuthStore = create(
                     return { success: true, message: 'Registration successful! Please login.' };
                 } catch (error) {
                     return { success: false, error: error.response?.data?.detail || 'Registration failed' };
+                }
+            },
+
+            googleLogin: () => {
+                window.location.href = `${API_URL}/auth/google`;
+            },
+
+            setGoogleToken: async (token, tokenType = 'bearer') => {
+                axios.defaults.headers.common['Authorization'] = `${tokenType} ${token}`;
+                clearUserScopedClientState();
+                set({ token, loading: true });
+                
+                try {
+                    const response = await axios.get(`${API_URL}/auth/me`);
+                    set({ user: response.data, loading: false });
+                } catch (error) {
+                    console.error('Failed to get user info after Google login:', error);
+                    set({ loading: false });
                 }
             },
 
@@ -213,6 +238,8 @@ export const useAuth = () => {
     const loading = useAuthStore((state) => state.loading);
     const login = useAuthStore((state) => state.login);
     const register = useAuthStore((state) => state.register);
+    const googleLogin = useAuthStore((state) => state.googleLogin);
+    const setGoogleToken = useAuthStore((state) => state.setGoogleToken);
     const updateProfile = useAuthStore((state) => state.updateProfile);
     const changePassword = useAuthStore((state) => state.changePassword);
     const logout = useAuthStore((state) => state.logout);
@@ -223,6 +250,8 @@ export const useAuth = () => {
         token,
         login,
         register,
+        googleLogin,
+        setGoogleToken,
         updateProfile,
         changePassword,
         logout,

@@ -1,145 +1,142 @@
 import React, { useState } from 'react';
-import { Search, Database, Hash, Calendar, Tag } from 'lucide-react';
+import { Database, Search, Hash } from 'lucide-react';
 import { motion } from 'framer-motion';
-
-const TYPE_ICONS = {
-    numeric: { icon: Hash, color: '#5B88B2' },
-    integer: { icon: Hash, color: '#5B88B2' },
-    float: { icon: Hash, color: '#5B88B2' },
-    temporal: { icon: Calendar, color: '#a78bfa' },
-    datetime: { icon: Calendar, color: '#a78bfa' },
-    date: { icon: Calendar, color: '#a78bfa' },
-    categorical: { icon: Tag, color: '#10b981' },
-    string: { icon: Tag, color: '#10b981' },
-    unknown: { icon: Database, color: '#64748b' },
-};
+import { cn } from '../../../lib/utils';
 
 const DataPanel = ({ columns, encoding, onUpdateEncoding }) => {
-    const [searchQuery, setSearchQuery] = useState('');
-
-    const filteredColumns = columns.filter(col => {
-        const name = typeof col === 'string' ? col : col.name;
-        return name.toLowerCase().includes(searchQuery.toLowerCase());
-    });
+    const [searchTerm, setSearchTerm] = useState('');
 
     const groupedColumns = {
-        numeric: filteredColumns.filter(col => {
-            const type = typeof col === 'string' ? 'unknown' : col.type?.toLowerCase();
-            return ['numeric', 'integer', 'float', 'int64', 'float64'].includes(type);
+        QUANTITATIVE: columns.filter(c => {
+            const t = (typeof c === 'string' ? 'unknown' : c.type?.toLowerCase()) || '';
+            return ['numeric', 'integer', 'float', 'int64', 'float64'].includes(t);
         }),
-        temporal: filteredColumns.filter(col => {
-            const type = typeof col === 'string' ? 'unknown' : col.type?.toLowerCase();
-            return ['temporal', 'datetime', 'date', 'timestamp'].includes(type);
-        }),
-        categorical: filteredColumns.filter(col => {
-            const type = typeof col === 'string' ? 'unknown' : col.type?.toLowerCase();
-            return ['categorical', 'string', 'object', 'text'].includes(type);
-        }),
-        other: filteredColumns.filter(col => {
-            const type = typeof col === 'string' ? 'unknown' : col.type?.toLowerCase();
-            return !['numeric', 'integer', 'float', 'int64', 'float64', 'temporal', 'datetime', 'date', 'timestamp', 'categorical', 'string', 'object', 'text'].includes(type);
+        CATEGORICAL: columns.filter(c => {
+            const t = (typeof c === 'string' ? 'unknown' : c.type?.toLowerCase()) || '';
+            return !['numeric', 'integer', 'float', 'int64', 'float64'].includes(t);
         }),
     };
 
-    const getFieldName = (col) => typeof col === 'string' ? col : col.name;
-    const getFieldType = (col) => {
-        if (typeof col === 'string') return 'unknown';
-        const type = col.type?.toLowerCase() || 'unknown';
-        if (['numeric', 'integer', 'float', 'int64', 'float64'].includes(type)) return 'numeric';
-        if (['temporal', 'datetime', 'date', 'timestamp'].includes(type)) return 'temporal';
-        if (['categorical', 'string', 'object', 'text'].includes(type)) return 'categorical';
-        return 'unknown';
-    };
-
-    const FieldPill = ({ column }) => {
-        const name = getFieldName(column);
-        const type = getFieldType(column);
-        const typeConfig = TYPE_ICONS[type] || TYPE_ICONS.unknown;
-        const Icon = typeConfig.icon;
-        const isUsed = encoding.x.field === name || encoding.y.field === name;
+    const FieldPill = ({ col }) => {
+        const name = typeof col === 'string' ? col : col.name;
+        const isX = encoding.x.field === name;
+        const isY = encoding.y.field === name;
+        const isActive = isX || isY;
 
         return (
-            <motion.button
-                whileHover={{ x: 2 }}
-                onClick={() => {
-                    // Toggle off if already selected
-                    if (encoding.x.field === name) {
-                        onUpdateEncoding('x', { field: '', type: '' });
-                    } else if (encoding.y.field === name) {
-                        onUpdateEncoding('y', { field: '', type: '' });
-                    } else if (!encoding.x.field) {
-                        onUpdateEncoding('x', { field: name, type });
-                    } else if (!encoding.y.field) {
-                        onUpdateEncoding('y', { field: name, type });
-                    } else {
-                        // Both assigned — replace Y
-                        onUpdateEncoding('y', { field: name, type });
-                    }
-                }}
-                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-[11px] transition-colors ${isUsed
-                        ? 'bg-pearl/[0.06] border border-pearl/[0.12] text-pearl'
-                        : 'bg-transparent border border-transparent hover:bg-pearl/[0.04] text-granite hover:text-pearl'
-                    }`}
-            >
-                <Icon size={12} style={{ color: typeConfig.color }} />
-                <span className="truncate flex-1 font-medium">{name}</span>
-                {isUsed && (
-                    <span
-                        className="text-[9px] px-1 py-px rounded font-bold uppercase"
-                        style={{ backgroundColor: typeConfig.color, color: '#020203' }}
-                    >
-                        {encoding.x.field === name ? 'X' : 'Y'}
-                    </span>
+            <motion.div
+                whileHover={{ x: 3 }}
+                whileTap={{ scale: 0.98 }}
+                className={cn(
+                    "group flex items-center justify-between px-3 py-2.5 rounded-lg transition-all cursor-pointer select-none",
+                    isActive
+                        ? "bg-header text-surface shadow-xl shadow-black/10"
+                        : "bg-transparent hover:bg-secondary/20 text-secondary"
                 )}
-            </motion.button>
-        );
-    };
-
-    const FieldGroup = ({ title, fields, type }) => {
-        if (fields.length === 0) return null;
-        return (
-            <div className="mb-3">
-                <div className="flex items-center justify-between px-2 mb-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-granite">{title}</span>
-                    <span className="text-[10px] text-granite/50">{fields.length}</span>
+                onClick={() => onUpdateEncoding(isActive ? (isX ? 'x' : 'y') : (encoding.x.field ? 'y' : 'x'), isActive ? '' : name)}
+            >
+                <div className="flex items-center gap-3 min-w-0">
+                    <div className={cn(
+                        "w-5 h-5 rounded flex items-center justify-center shrink-0 shadow-inner",
+                        isActive ? "bg-surface/20" : "bg-secondary/10 text-muted group-hover:bg-header group-hover:text-surface"
+                    )}>
+                        <Hash size={11} strokeWidth={3} />
+                    </div>
+                    <span className={cn(
+                        "text-[12.5px] font-bold truncate tracking-tight",
+                        isActive ? "text-surface" : "text-header group-hover:text-primary transition-colors"
+                    )}>
+                        {name}
+                    </span>
                 </div>
-                <div className="space-y-px">
-                    {fields.map((col, idx) => (
-                        <FieldPill key={idx} column={col} />
-                    ))}
-                </div>
-            </div>
+                {isActive && (
+                    <div className="flex items-center gap-1 shrink-0">
+                        <span className="w-5 h-5 rounded bg-surface text-header text-[10px] font-black flex items-center justify-center shadow-md">
+                            {isX ? 'X' : 'Y'}
+                        </span>
+                    </div>
+                )}
+            </motion.div>
         );
     };
 
     return (
-        <div className="h-full flex flex-col bg-midnight border-r border-pearl/[0.06]">
-            {/* Search */}
-            <div className="p-3 border-b border-pearl/[0.06]">
-                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-pearl/[0.04] border border-pearl/[0.06] focus-within:border-ocean/30 transition-colors">
-                    <Search size={12} className="text-granite" />
+        <div className="h-full flex flex-col bg-surface font-sans select-none overflow-hidden">
+            {/* Header */}
+            <div className="px-5 py-6">
+                <h2 className="text-[13px] font-black text-header uppercase tracking-[0.2em] flex items-center gap-3">
+                    <Database size={16} className="text-accent-primary" strokeWidth={3} />
+                    VARIABLES
+                </h2>
+            </div>
+
+            {/* Search - Inset Style, No Border */}
+            <div className="px-5 pb-6">
+                <div className="relative group bg-secondary/30 shadow-inner rounded-lg transition-all focus-within:bg-secondary/50">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={14} strokeWidth={2.5} />
                     <input
                         type="text"
-                        placeholder="Search fields…"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="flex-1 bg-transparent text-[11px] text-pearl outline-none placeholder:text-granite"
+                        placeholder="Search fields..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full bg-transparent pl-9 pr-4 py-3 text-[13px] font-semibold text-header placeholder:text-muted/40 outline-none"
                     />
                 </div>
             </div>
 
-            {/* Fields */}
-            <div className="flex-1 overflow-y-auto p-2 nice-scrollbar">
-                <FieldGroup title="Numeric" fields={groupedColumns.numeric} type="numeric" />
-                <FieldGroup title="Date/Time" fields={groupedColumns.temporal} type="temporal" />
-                <FieldGroup title="Categorical" fields={groupedColumns.categorical} type="categorical" />
-                <FieldGroup title="Other" fields={groupedColumns.other} type="unknown" />
+            {/* List Body */}
+            <div className="flex-1 overflow-y-auto studio-scrollbar px-3 py-2 bg-secondary/10 shadow-inner">
+                {(() => {
+                    let hasResults = false;
+                    const items = Object.entries(groupedColumns).map(([group, fields]) => {
+                        const filteredFields = fields.filter(f =>
+                            (typeof f === 'string' ? f : f.name).toLowerCase().includes(searchTerm.toLowerCase())
+                        );
+                        if (filteredFields.length === 0) return null;
+                        hasResults = true;
 
-                {filteredColumns.length === 0 && (
-                    <div className="text-center py-8 text-[11px] text-granite">
-                        {searchQuery ? 'No matching fields' : 'No fields available'}
+                        return (
+                            <div key={group} className="mb-8 first:mt-2 last:mb-0">
+                                <div className="px-2 mb-3 flex items-center justify-between group/header">
+                                    <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-[0.25em]">
+                                        {group}
+                                    </span>
+                                    <div className="px-1.5 py-0.5 rounded-md bg-secondary/30 text-[9px] font-black text-secondary shadow-inner">
+                                        {filteredFields.length}
+                                    </div>
+                                </div>
+                                <div className="grid gap-0.5">
+                                    {filteredFields.map((field, i) => (
+                                        <FieldPill key={i} col={field} />
+                                    ))}
+                                </div>
+                            </div>
+                        );
+                    });
+
+                    if (!hasResults && searchTerm) {
+                        return (
+                            <div className="h-full flex flex-col items-center justify-center py-20 px-6 opacity-90 transition-opacity">
+                                <Search size={24} className="mb-4 text-accent-primary" />
+                                <p className="text-[13px] font-black uppercase tracking-widest text-secondary text-center leading-relaxed">
+                                    No results found for<br />
+                                    <span className="text-header font-black opacity-100 italic">"{searchTerm}"</span>
+                                </p>
+                            </div>
+                        );
+                    }
+                    return items;
+                })()}
+            </div>
+
+            {/* Status Integration */}
+            <div className="mt-auto p-5 bg-secondary/20 backdrop-blur-sm">
+                <div className="flex items-center justify-between text-[10px] font-black text-muted tracking-widest uppercase opacity-60">
+                    <div className="flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-accent-success" />
+                        SYSTEM READY
                     </div>
-                )}
+                </div>
             </div>
         </div>
     );

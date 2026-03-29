@@ -19,6 +19,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
+
 # -------------------------
 # ENUMS
 # -------------------------
@@ -39,7 +40,11 @@ class ChartType(str, Enum):
     HEATMAP = "heatmap"
     TREEMAP = "treemap"
     GROUPED_BAR = "grouped_bar"
+    STACKED_BAR = "stacked_bar"
     AREA = "area"
+    # Multi-series charts
+    MULTI_LINE = "multi_line"
+    STACKED_AREA = "stacked_area"
     # New chart types
     RADAR = "radar"
     BUBBLE = "bubble"
@@ -49,6 +54,7 @@ class ChartType(str, Enum):
     VIOLIN = "violin"
     SUNBURST = "sunburst"
     GAUGE = "gauge"
+    CORRELATION_MATRIX = "correlation_matrix"
 
 
 class AggregationType(str, Enum):
@@ -58,6 +64,8 @@ class AggregationType(str, Enum):
     NUNIQUE = "nunique"
     FIRST = "first"
     NONE = "none"
+    MAX = "max"
+    MIN = "min"
 
 
 class LayoutGrid(str, Enum):
@@ -105,7 +113,9 @@ class KpiConfig(BaseComponentConfig):
                 "nunique": "nunique",
                 "distinct": "nunique",
                 "first": "first",
-                "none": "none"
+                "none": "none",
+                "max": "max",
+                "min": "min",
             }
             return mapping.get(v, v)
         return v
@@ -117,7 +127,7 @@ class KpiConfig(BaseComponentConfig):
 class ChartConfig(BaseComponentConfig):
     type: Literal[ComponentType.CHART] = ComponentType.CHART
     chart_type: ChartType
-    columns: List[str] = Field(..., min_length=1, max_length=4)
+    columns: List[str] = Field(..., min_length=1, max_length=6)
     aggregation: AggregationType = AggregationType.SUM
     group_by: Optional[List[str]] = None
 
@@ -137,23 +147,56 @@ class ChartConfig(BaseComponentConfig):
     def normalize_chart_type(cls, v):
         if not isinstance(v, str):
             return v
-        
+
         rt = v.lower().strip()
         mapping = {
-            "bar_chart": "bar", "bar": "bar",
-            "line_chart": "line", "line": "line",
-            "pie_chart": "pie", "pie": "pie",
-            "histogram": "histogram", "hist": "histogram",
-            "box_plot": "box_plot", "box": "box_plot",
-            "scatter_plot": "scatter", "scatter": "scatter",
-            "heatmap": "heatmap", "treemap": "treemap",
-            "grouped_bar": "grouped_bar", "grouped_bar_chart": "grouped_bar",
-            "area_chart": "area", "area": "area",
-            "donut": "pie", "donut_chart": "pie"
+            "bar_chart": "bar",
+            "bar": "bar",
+            "line_chart": "line",
+            "line": "line",
+            "multi_line": "multi_line",
+            "multi_line_chart": "multi_line",
+            "multiline": "multi_line",
+            "pie_chart": "pie",
+            "pie": "pie",
+            "histogram": "histogram",
+            "hist": "histogram",
+            "box_plot": "box_plot",
+            "box": "box_plot",
+            "scatter_plot": "scatter",
+            "scatter": "scatter",
+            "heatmap": "heatmap",
+            "treemap": "treemap",
+            "grouped_bar": "grouped_bar",
+            "grouped_bar_chart": "grouped_bar",
+            "stacked_bar": "stacked_bar",
+            "stacked_bar_chart": "stacked_bar",
+            "stacked": "stacked_bar",
+            "stacked_area": "stacked_area",
+            "stacked_area_chart": "stacked_area",
+            "area_chart": "area",
+            "area": "area",
+            "donut": "pie",
+            "donut_chart": "pie",
+            "sunburst": "sunburst",
+            "radar": "radar",
+            "radar_chart": "radar",
+            "bubble": "bubble",
+            "bubble_chart": "bubble",
+            "waterfall": "waterfall",
+            "waterfall_chart": "waterfall",
+            "funnel": "funnel",
+            "funnel_chart": "funnel",
+            "violin": "violin",
+            "violin_plot": "violin",
+            "gauge": "gauge",
+            "correlation_matrix": "correlation_matrix",
+            "correlation": "correlation_matrix",
+            "matrix": "correlation_matrix",
         }
         if rt in mapping:
             return mapping[rt]
-        
+
         # Substring matching fallback
         clean = re.sub(r"[^a-z0-9_]", "_", rt)
         for k, v_mapped in mapping.items():
@@ -186,7 +229,9 @@ class ChartConfig(BaseComponentConfig):
                 "nunique": "nunique",
                 "distinct": "nunique",
                 "first": "first",
-                "none": "none"
+                "none": "none",
+                "max": "max",
+                "min": "min",
             }
             return mapping.get(v, v)
         return v
@@ -200,8 +245,17 @@ class ChartConfig(BaseComponentConfig):
         if t == ChartType.PIE and len(cols) < 1:
             raise ValueError("Pie requires at least one column.")
 
-        if t in [ChartType.BAR, ChartType.LINE] and len(cols) < 2:
-            raise ValueError("Bar/Line require x and y columns.")
+        if (
+            t
+            in [
+                ChartType.BAR,
+                ChartType.LINE,
+                ChartType.GROUPED_BAR,
+                ChartType.STACKED_BAR,
+            ]
+            and len(cols) < 2
+        ):
+            raise ValueError("Bar/Line/Grouped-Bar require at least x and y columns.")
 
         return self
 
@@ -269,6 +323,7 @@ class DashboardBlueprint(BaseModel):
 # SCHEMA REPAIRER
 # -------------------------
 
+
 class SchemaRepairer:
     """
     Pure dict -> dict SchemaRepairer.
@@ -286,7 +341,9 @@ class SchemaRepairer:
     """
 
     @staticmethod
-    def repair(blueprint_dict: Dict[str, Any], schema_columns: Sequence) -> Dict[str, Any]:
+    def repair(
+        blueprint_dict: Dict[str, Any], schema_columns: Sequence
+    ) -> Dict[str, Any]:
         # Defensive inputs
         if not isinstance(blueprint_dict, dict):
             blueprint_dict = {}
@@ -347,16 +404,49 @@ class SchemaRepairer:
             return "bar"
         rt = str(raw).lower().strip()
         mapping = {
-            "bar_chart": "bar", "bar": "bar",
-            "line_chart": "line", "line": "line",
-            "pie_chart": "pie", "pie": "pie",
-            "histogram": "histogram", "hist": "histogram",
-            "box_plot": "box_plot", "box": "box_plot",
-            "scatter_plot": "scatter", "scatter": "scatter",
-            "heatmap": "heatmap", "treemap": "treemap",
-            "grouped_bar": "grouped_bar", "grouped_bar_chart": "grouped_bar",
-            "area_chart": "area", "area": "area",
-            "donut": "pie", "donut_chart": "pie"
+            "bar_chart": "bar",
+            "bar": "bar",
+            "line_chart": "line",
+            "line": "line",
+            "multi_line": "multi_line",
+            "multi_line_chart": "multi_line",
+            "multiline": "multi_line",
+            "pie_chart": "pie",
+            "pie": "pie",
+            "histogram": "histogram",
+            "hist": "histogram",
+            "box_plot": "box_plot",
+            "box": "box_plot",
+            "scatter_plot": "scatter",
+            "scatter": "scatter",
+            "heatmap": "heatmap",
+            "treemap": "treemap",
+            "grouped_bar": "grouped_bar",
+            "grouped_bar_chart": "grouped_bar",
+            "stacked_bar": "stacked_bar",
+            "stacked_bar_chart": "stacked_bar",
+            "stacked": "stacked_bar",
+            "stacked_area": "stacked_area",
+            "stacked_area_chart": "stacked_area",
+            "area_chart": "area",
+            "area": "area",
+            "donut": "pie",
+            "donut_chart": "pie",
+            "sunburst": "sunburst",
+            "radar": "radar",
+            "radar_chart": "radar",
+            "bubble": "bubble",
+            "bubble_chart": "bubble",
+            "waterfall": "waterfall",
+            "waterfall_chart": "waterfall",
+            "funnel": "funnel",
+            "funnel_chart": "funnel",
+            "violin": "violin",
+            "violin_plot": "violin",
+            "gauge": "gauge",
+            "correlation_matrix": "correlation_matrix",
+            "correlation": "correlation_matrix",
+            "matrix": "correlation_matrix",
         }
         if rt in mapping:
             return mapping[rt]
@@ -368,7 +458,9 @@ class SchemaRepairer:
         return "bar"
 
     @staticmethod
-    def _fuzzy_col(candidate: Any, all_cols: List[str], all_cols_lower: Dict[str, str]) -> Optional[str]:
+    def _fuzzy_col(
+        candidate: Any, all_cols: List[str], all_cols_lower: Dict[str, str]
+    ) -> Optional[str]:
         if not candidate or not isinstance(candidate, str):
             return None
         # direct
@@ -389,24 +481,45 @@ class SchemaRepairer:
         return None
 
     @staticmethod
-    def _fix_kpi(comp: Dict[str, Any], all_cols: List[str], all_cols_lower: Dict[str, str]) -> Dict[str, Any]:
+    def _fix_kpi(
+        comp: Dict[str, Any], all_cols: List[str], all_cols_lower: Dict[str, str]
+    ) -> Dict[str, Any]:
         cfg = comp.get("config") or {}
         title = comp.get("title") or cfg.get("title") or "KPI"
         span = int(comp.get("span", 1) or 1)
         # column may be in config or directly present
-        col = cfg.get("column") or (cfg.get("columns") and (cfg.get("columns")[0] if isinstance(cfg.get("columns"), list) else cfg.get("columns"))) or "__all__"
-        col_fixed = SchemaRepairer._fuzzy_col(col, all_cols, all_cols_lower) or "__all__"
+        col = (
+            cfg.get("column")
+            or (
+                cfg.get("columns")
+                and (
+                    cfg.get("columns")[0]
+                    if isinstance(cfg.get("columns"), list)
+                    else cfg.get("columns")
+                )
+            )
+            or "__all__"
+        )
+        col_fixed = (
+            SchemaRepairer._fuzzy_col(col, all_cols, all_cols_lower) or "__all__"
+        )
         agg = (cfg.get("aggregation") or "count").lower()
-        agg = agg if agg in {"sum", "mean", "count", "nunique", "first", "none"} else "count"
+        agg = (
+            agg
+            if agg in {"sum", "mean", "count", "nunique", "first", "none", "max", "min"}
+            else "count"
+        )
         return {
             "type": "kpi",
             "title": title,
             "span": span,
-            "config": {"title": title, "column": col_fixed, "aggregation": agg}
+            "config": {"title": title, "column": col_fixed, "aggregation": agg},
         }
 
     @staticmethod
-    def _fix_chart(comp: Dict[str, Any], all_cols: List[str], all_cols_lower: Dict[str, str]) -> Dict[str, Any]:
+    def _fix_chart(
+        comp: Dict[str, Any], all_cols: List[str], all_cols_lower: Dict[str, str]
+    ) -> Dict[str, Any]:
         cfg = comp.get("config") or {}
         title = comp.get("title") or cfg.get("title") or "Chart"
         span = int(comp.get("span", 2) or 2)
@@ -426,11 +539,21 @@ class SchemaRepairer:
             else:
                 fixed_cols = ["__all__"]
         agg = (cfg.get("aggregation") or "sum").lower()
-        agg = agg if agg in {"sum", "mean", "count", "nunique", "first", "none"} else "sum"
+        agg = (
+            agg
+            if agg in {"sum", "mean", "count", "nunique", "first", "none", "max", "min"}
+            else "sum"
+        )
         group = cfg.get("group_by") or []
         if isinstance(group, str):
             group = [group]
-        fixed_group = [g for g in (SchemaRepairer._fuzzy_col(g, all_cols, all_cols_lower) for g in group) if g]
+        fixed_group = [
+            g
+            for g in (
+                SchemaRepairer._fuzzy_col(g, all_cols, all_cols_lower) for g in group
+            )
+            if g
+        ]
         return {
             "type": "chart",
             "title": title,
@@ -440,12 +563,14 @@ class SchemaRepairer:
                 "chart_type": chart_type,
                 "columns": fixed_cols,
                 "aggregation": agg,
-                "group_by": fixed_group
-            }
+                "group_by": fixed_group,
+            },
         }
 
     @staticmethod
-    def _fix_table(comp: Dict[str, Any], all_cols: List[str], all_cols_lower: Dict[str, str]) -> Dict[str, Any]:
+    def _fix_table(
+        comp: Dict[str, Any], all_cols: List[str], all_cols_lower: Dict[str, str]
+    ) -> Dict[str, Any]:
         cfg = comp.get("config") or {}
         title = comp.get("title") or cfg.get("title") or "Table"
         span = int(comp.get("span", 4) or 4)
@@ -458,7 +583,12 @@ class SchemaRepairer:
             fixed = all_cols[:6]
         limit = int(cfg.get("limit", 200) or 200)
         limit = max(1, min(limit, 1000))
-        return {"type": "table", "title": title, "span": span, "config": {"title": title, "columns": fixed, "limit": limit}}
+        return {
+            "type": "table",
+            "title": title,
+            "span": span,
+            "config": {"title": title, "columns": fixed, "limit": limit},
+        }
 
     @staticmethod
     def _ensure_minimum_components(bp: Dict[str, Any], all_cols: List[str]):
@@ -466,10 +596,36 @@ class SchemaRepairer:
         has_kpi = any(c.get("type") == "kpi" for c in comps)
         has_chart = any(c.get("type") == "chart" for c in comps)
         if not has_kpi:
-            bp["components"].insert(0, {"type": "kpi", "title": "Total Records", "span": 1, "config": {"title": "Total Records", "column": "__all__", "aggregation": "count"}})
+            bp["components"].insert(
+                0,
+                {
+                    "type": "kpi",
+                    "title": "Total Records",
+                    "span": 1,
+                    "config": {
+                        "title": "Total Records",
+                        "column": "__all__",
+                        "aggregation": "count",
+                    },
+                },
+            )
         if not has_chart:
             first = all_cols[0] if all_cols else "__all__"
-            bp["components"].insert(1, {"type": "chart", "title": "Auto Chart", "span": 2, "config": {"title": "Auto Chart", "chart_type": "bar", "columns": [first], "aggregation": "sum", "group_by": []}})
+            bp["components"].insert(
+                1,
+                {
+                    "type": "chart",
+                    "title": "Auto Chart",
+                    "span": 2,
+                    "config": {
+                        "title": "Auto Chart",
+                        "chart_type": "bar",
+                        "columns": [first],
+                        "aggregation": "sum",
+                        "group_by": [],
+                    },
+                },
+            )
 
 
 __all__ = [

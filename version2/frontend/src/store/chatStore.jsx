@@ -11,7 +11,12 @@ const DEFAULT_API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/
 const extractTextFromResponse = (content) => {
   if (!content || typeof content !== 'string') return content || '';
 
-  const trimmed = content.trim();
+  let trimmed = content.trim();
+
+  // Strip markdown code fences — some models wrap JSON in ```json ... ```
+  if (trimmed.startsWith('```')) {
+    trimmed = trimmed.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```\s*$/, '').trim();
+  }
 
   // Check for partial JSON fragments first (e.g., 'ng": "Hello...')
   if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
@@ -38,6 +43,11 @@ const extractTextFromResponse = (content) => {
     if (parsed.message) return parsed.message;
     if (parsed.reasoning) return parsed.reasoning;
     if (parsed.output) return parsed.output;
+
+    // If the payload is structured but only contains chart config, do not dump raw JSON into chat.
+    if (parsed.chart_config && typeof parsed.chart_config === 'object') {
+      return "I've prepared a supporting chart, but the summary text was missing from the model response.";
+    }
 
     // Handle tasks array
     if (parsed.tasks && Array.isArray(parsed.tasks)) {
@@ -72,14 +82,8 @@ const computeHttpBase = () => {
   }
 };
 
-const WS_URL = (() => {
-  const explicit = import.meta.env.VITE_WS_URL;
-  if (explicit) return explicit;
-  const baseUrl = computeHttpBase();
-  const protocol = baseUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-  const path = baseUrl.pathname.endsWith('/') ? baseUrl.pathname.slice(0, -1) : baseUrl.pathname;
-  return `${protocol}//${baseUrl.host}${path}/ws/chat`;
-})();
+const isBackendConversationId = (value) =>
+  typeof value === 'string' && /^[a-f0-9]{24}$/i.test(value);
 
 const useChatStore = create(
   persist(
@@ -111,7 +115,7 @@ const useChatStore = create(
         streamingContent: state.streamingContent + token
       })),
 
-      finishStreaming: (fullContent, chartConfig = null, sql = null) => {
+      finishStreaming: (fullContent, chartConfig = null, sql = null, insights = [], dataSummary = '') => {
         const state = get();
         const { currentConversationId, streamingMessageId } = state;
 
@@ -127,6 +131,8 @@ const useChatStore = create(
           content: extractTextFromResponse(fullContent),
           chart_config: chartConfig,
           sql: sql ?? null,
+          insights: insights,
+          data_summary: dataSummary,
           timestamp: new Date().toISOString(),
         };
 
@@ -149,12 +155,38 @@ const useChatStore = create(
         }));
       },
 
-      cancelStreaming: () => set({
-        isStreaming: false,
-        streamingMessageId: null,
-        streamingContent: '',
-        loading: false
-      }),
+      cancelStreaming: () => {
+        const state = get();
+        const { currentConversationId, streamingMessageId, streamingContent } = state;
+        // Save whatever was streamed so far as a partial message — don't discard the user's wait
+        if (currentConversationId && streamingContent && streamingContent.trim().length > 0) {
+          const partialMessage = {
+            id: streamingMessageId || `msg_${Date.now()}_ai`,
+            role: 'assistant',
+            content: extractTextFromResponse(streamingContent),
+            isCancelled: true,
+            timestamp: new Date().toISOString(),
+          };
+          set(state => ({
+            conversations: {
+              ...state.conversations,
+              [currentConversationId]: {
+                ...state.conversations[currentConversationId],
+                messages: [
+                  ...(state.conversations[currentConversationId]?.messages || []),
+                  partialMessage,
+                ],
+              },
+            },
+            isStreaming: false,
+            streamingMessageId: null,
+            streamingContent: '',
+            loading: false,
+          }));
+        } else {
+          set({ isStreaming: false, streamingMessageId: null, streamingContent: '', loading: false });
+        }
+      },
 
       // Message editing action
       editMessage: (messageId, newContent, conversationId) => {
@@ -369,19 +401,17 @@ const useChatStore = create(
         }
 
         try {
-          const response = await aiAPI.processChat(datasetId, message, conversationId);
+          const persistedConversationId = isBackendConversationId(currentConvId)
+            ? currentConvId
+            : (isBackendConversationId(conversationId) ? conversationId : null);
+
+          const response = await aiAPI.processChat(datasetId, message, persistedConversationId);
 
           // Backend returns: { response, chart_config, conversation_id }
           const backendConvId = response.data.conversation_id;
           const aiResponse = response.data.response;
           const chart_config = response.data.chart_config;
           const sql = response.data.sql || null;
-
-          // Debug logging
-          console.log('Backend Response:', response.data);
-          console.log('Conversation ID from backend:', backendConvId);
-          console.log('AI Response:', aiResponse);
-          console.log('Chart Config:', chart_config);
 
           // If backend returned a different conversation ID (first message), migrate the conversation
           let finalConvId = currentConvId;
@@ -401,17 +431,6 @@ const useChatStore = create(
                 currentConversationId: finalConvId
               };
             });
-          }
-
-          // Add AI response
-          console.log('Chart config from backend:', chart_config);
-          console.log('Chart config has data?', chart_config?.data);
-          console.log('Chart config data length:', chart_config?.data?.length);
-          if (chart_config?.data?.[0]) {
-            console.log('First trace structure:', chart_config.data[0]);
-            console.log('First trace keys:', Object.keys(chart_config.data[0]));
-            console.log('X data sample:', chart_config.data[0].x?.slice(0, 5));
-            console.log('Y data sample:', chart_config.data[0].y?.slice(0, 5));
           }
 
           const aiMessage = {
@@ -595,11 +614,30 @@ const useChatStore = create(
       },
     }),
     {
-      name: 'datasage-chat-store', // unique name for localStorage key
-      partialize: (state) => ({
-        conversations: state.conversations,
-        currentConversationId: state.currentConversationId
-      }), // only persist these fields
+      name: 'datasage-chat-store',
+      // Persist conversations but strip chart_config and data_summary from messages
+      // to prevent localStorage quota exhaustion (chart data can be 50-200KB per message)
+      partialize: (state) => {
+        const slimConversations = {};
+        for (const [id, conv] of Object.entries(state.conversations)) {
+          slimConversations[id] = {
+            ...conv,
+            messages: (conv.messages || []).map(msg => ({
+              id: msg.id,
+              role: msg.role,
+              content: msg.content,
+              sql: msg.sql || null,
+              isEdited: msg.isEdited || false,
+              hasChart: !!msg.chart_config,
+              timestamp: msg.timestamp,
+            })),
+          };
+        }
+        return {
+          conversations: slimConversations,
+          currentConversationId: state.currentConversationId,
+        };
+      },
     }
   ));
 

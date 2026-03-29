@@ -1,5 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
+const isBackendConversationId = (value) =>
+    typeof value === 'string' && /^[a-f0-9]{24}$/i.test(value);
+
 /**
  * Helper to get auth token from Zustand persisted store
  */
@@ -55,10 +58,12 @@ export const useWebSocket = ({
     onToken,
     onResponseComplete,
     onChart,
+    onChartError,
     onDone,
     onError,
     onStatus,
     onThinkingStep,
+    onCancelAck,
     autoConnect = false
 } = {}) => {
     const [isConnected, setIsConnected] = useState(false);
@@ -94,23 +99,27 @@ export const useWebSocket = ({
         setIsConnecting(true);
         cleanup();
 
-        // Note: Token in URL is a security concern - ideally move to message body
-        // when backend supports it. For now, connection uses URL param.
-        const wsUrl = `${WS_URL}?token=${token}`;
+        const wsUrl = WS_URL;
 
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
-            setIsConnected(true);
-            setIsConnecting(false);
-            reconnectAttemptsRef.current = 0; // Reset backoff on successful connect
+            // Send auth token immediately upon connecting
+            ws.send(JSON.stringify({ type: "auth", token }));
         };
 
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
                 const { type, clientMessageId } = data;
+
+                if (type === 'auth_success') {
+                    setIsConnected(true);
+                    setIsConnecting(false);
+                    reconnectAttemptsRef.current = 0; // Reset backoff on successful auth
+                    return;
+                }
 
                 switch (type) {
                     case 'status':
@@ -132,12 +141,22 @@ export const useWebSocket = ({
                         onChart?.(data.chartConfig, clientMessageId);
                         break;
 
+                    case 'chart_error':
+                        onChartError?.(data.reason, clientMessageId);
+                        break;
+
                     case 'done':
                         // Entire processing complete (sql set when backend used SQL execution path)
                         onDone?.({
                             conversationId: data.conversationId,
                             chartConfig: data.chartConfig,
                             sql: data.sql,
+                            insights: data.insights || [],
+                            data_summary: data.data_summary || '',
+                            follow_up_suggestions: data.follow_up_suggestions || [],
+                            rate_limit_remaining: data.rate_limit_remaining ?? null,
+                            sql_fallback: data.sql_fallback ?? false,
+                            column_corrections: data.column_corrections ?? {},
                             clientMessageId
                         });
                         pendingMessagesRef.current.delete(clientMessageId);
@@ -153,6 +172,8 @@ export const useWebSocket = ({
                             conversationId: data.conversationId,
                             chartConfig: data.chartConfig,
                             sql: data.sql,
+                            insights: data.insights || [],
+                            data_summary: data.data_summary || '',
                             clientMessageId
                         });
                         pendingMessagesRef.current.delete(clientMessageId);
@@ -165,6 +186,11 @@ export const useWebSocket = ({
                     case 'error':
                         onError?.(data);
                         pendingMessagesRef.current.delete(clientMessageId);
+                        break;
+
+                    case 'cancel_ack':
+                        console.log('Cancel acknowledged:', clientMessageId);
+                        onCancelAck?.(clientMessageId);
                         break;
 
                     default:
@@ -250,7 +276,7 @@ export const useWebSocket = ({
             clientMessageId,
             message,
             datasetId,
-            conversationId,
+            conversationId: isBackendConversationId(conversationId) ? conversationId : null,
             streaming
         };
 
@@ -259,6 +285,23 @@ export const useWebSocket = ({
 
         return clientMessageId;
     }, [onError]);
+
+    const sendCancel = useCallback((clientMessageId) => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+            console.warn('Cannot cancel - WebSocket not connected');
+            return false;
+        }
+
+        const payload = {
+            type: 'cancel',
+            clientMessageId,
+            timestamp: Date.now()
+        };
+
+        wsRef.current.send(JSON.stringify(payload));
+        console.log('Cancel request sent for:', clientMessageId);
+        return true;
+    }, []);
 
     // Auto-connect on mount if enabled
     useEffect(() => {
@@ -273,7 +316,8 @@ export const useWebSocket = ({
         isConnecting,
         connect,
         disconnect,
-        sendMessage
+        sendMessage,
+        sendCancel
     };
 };
 

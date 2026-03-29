@@ -37,17 +37,17 @@ const FAQSection = () => {
 
                 <div className="space-y-4">
                     {faqs.map((faq, index) => (
-                        <div key={index} className="border-b border-white/10 pb-4">
+                        <div key={index} className="border-b border-white/[0.05] pb-4">
                             <button
-                                className="flex justify-between items-center w-full text-left py-4 focus:outline-none"
+                                className="flex justify-between items-center w-full text-left py-6 focus:outline-none group"
                                 onClick={() => setOpenIndex(openIndex === index ? null : index)}
                             >
-                                <span className="font-medium text-lg text-slate-50">{faq.question}</span>
+                                <span className={`font-medium text-lg transition-colors ${openIndex === index ? 'text-blue-400' : 'text-white'}`}>{faq.question}</span>
                                 <motion.div
                                     animate={{ rotate: openIndex === index ? 180 : 0 }}
                                     transition={{ duration: 0.2 }}
                                 >
-                                    <ChevronDown className="w-5 h-5 text-slate-400" />
+                                    <ChevronDown className={`w-5 h-5 transition-colors ${openIndex === index ? 'text-blue-400' : 'text-neutral-500'}`} />
                                 </motion.div>
                             </button>
                             <AnimatePresence>
@@ -59,7 +59,7 @@ const FAQSection = () => {
                                         transition={{ duration: 0.3, ease: "easeInOut" }}
                                         className="overflow-hidden"
                                     >
-                                        <p className="text-slate-400 pb-4 pr-12">{faq.answer}</p>
+                                        <p className="text-neutral-400 pb-8 pr-12 leading-relaxed">{faq.answer}</p>
                                     </motion.div>
                                 )}
                             </AnimatePresence>
