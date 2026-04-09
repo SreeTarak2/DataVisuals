@@ -661,5 +661,19 @@ class EnhancedDatasetService:
 
         return dataset
 
+    async def load_dataset_as_polars(self, dataset_id: str, user_id: str):
+        """
+        Alias for load_dataset_data for cleaner API.
+        Loads dataset as a Polars DataFrame.
+        
+        Args:
+            dataset_id: Dataset ID
+            user_id: User ID for ownership verification
+            
+        Returns:
+            pl.DataFrame: The loaded dataset
+        """
+        return await self.load_dataset_data(dataset_id, user_id)
+
 
 enhanced_dataset_service = EnhancedDatasetService()

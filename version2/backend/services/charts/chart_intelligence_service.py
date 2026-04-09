@@ -1029,78 +1029,170 @@ class ChartIntelligenceService:
         """
         Apply universal chart patterns that work for any dataset.
         These are selected based on data characteristics, not domain.
+
+        KEY FIX: rotate through available columns instead of always picking
+        [0] — this is the #1 reason dashboards look weak compared to
+        ChatGPT/Claude-generated dashboards.
         """
         charts = []
         story_types = [s.get("story_type") for s in (stories or [])]
         categorical_cols = stats.get("categorical_columns", [])
         numeric_cols = stats.get("numeric_columns", [])
+        low_card_cats = stats.get("low_cardinality_cats", [])
 
+        # Track which columns have been used as primary axes to maximise diversity
+        _used_y = set()
+        _used_x = set()
+
+        def _pick_numeric(exclude: set = None) -> str | None:
+            """Pick the next unused numeric column."""
+            exclude = exclude or set()
+            for c in numeric_cols:
+                if c not in _used_y and c not in exclude:
+                    return c
+            # All used — recycle from the start
+            return numeric_cols[0] if numeric_cols else None
+
+        def _pick_categorical(exclude: set = None) -> str | None:
+            exclude = exclude or set()
+            for c in categorical_cols:
+                if c not in _used_x and c not in exclude:
+                    return c
+            return categorical_cols[0] if categorical_cols else None
+
+        # ── 1. Temporal trend ──
         if stats.get("has_time_column") and stats.get("numeric_count", 0) >= 1:
             if "trend" not in story_types:
                 chart = self._build_universal_temporal_chart(stats)
                 if chart:
                     charts.append(chart)
+                    _used_y.add(numeric_cols[0] if numeric_cols else "")
 
+        # ── 2. Multi-metric trend (skip if no time col — avoids broken charts) ──
         if stats.get("has_time_column") and stats.get("numeric_count", 0) >= 2:
             if "multi_metric_trend" not in story_types:
                 chart = self._build_universal_multi_metric_trend(stats)
                 if chart:
                     charts.append(chart)
 
+        # ── 3. Categorical comparison (rotate y-col) ──
         if (
             stats.get("categorical_count", 0) >= 1
             and stats.get("numeric_count", 0) >= 1
         ):
             if "comparison" not in story_types:
-                chart = self._build_universal_categorical_chart(stats)
-                if chart:
-                    charts.append(chart)
+                y = _pick_numeric()
+                x = _pick_categorical()
+                if x and y:
+                    charts.append({
+                        "chart_type": "bar",
+                        "title": f"{y.replace('_', ' ').title()} by {x.replace('_', ' ').title()}",
+                        "config": {
+                            "columns": [x, y],
+                            "aggregation": "sum",
+                            "group_by": [x],
+                        },
+                        "reason": "Compares values across categories",
+                        "source": "universal_pattern",
+                        "story_type": "comparison",
+                        "priority": 8,
+                        "confidence_multiplier": 1.0,
+                    })
+                    _used_y.add(y)
+                    _used_x.add(x)
 
+        # ── 4. Grouped bar (MUST have a real group_by to avoid falling back to plain bar) ──
         if (
             stats.get("categorical_count", 0) >= 2
             and stats.get("numeric_count", 0) >= 1
         ):
             if "multi_category" not in story_types:
-                chart = self._build_universal_grouped_chart(stats)
-                if chart:
-                    charts.append(chart)
+                # Pick two DIFFERENT categorical columns
+                x = _pick_categorical()
+                group = None
+                for c in (low_card_cats or categorical_cols):
+                    if c != x:
+                        group = c
+                        break
+                y = _pick_numeric()
+                if x and y and group:
+                    charts.append({
+                        "chart_type": "grouped_bar",
+                        "title": f"{y.replace('_', ' ').title()} by {x.replace('_', ' ').title()} (grouped by {group.replace('_', ' ').title()})",
+                        "config": {
+                            "columns": [x, y],
+                            "group_by": [group],
+                            "aggregation": "sum",
+                        },
+                        "reason": "Compare values across multiple category dimensions",
+                        "source": "universal_pattern",
+                        "story_type": "multi_category",
+                        "priority": 8,
+                        "confidence_multiplier": 1.0,
+                    })
+                    _used_y.add(y)
+                    _used_x.add(x)
 
+        # ── 5. Distribution (pick a DIFFERENT numeric col than the bar chart used) ──
         if stats.get("numeric_count", 0) >= 1:
             if "distribution" not in story_types:
-                chart = self._build_universal_distribution_chart(stats)
-                if chart:
-                    charts.append(chart)
+                dist_col = _pick_numeric()
+                if dist_col:
+                    charts.append({
+                        "chart_type": "histogram",
+                        "title": f"Distribution of {dist_col.replace('_', ' ').title()}",
+                        "config": {"columns": [dist_col], "aggregation": "none"},
+                        "reason": "Shows the distribution of values",
+                        "source": "universal_pattern",
+                        "story_type": "distribution",
+                        "priority": 7,
+                        "confidence_multiplier": 0.9,
+                    })
+                    _used_y.add(dist_col)
 
+        # ── 6. Correlation scatter ──
         if (
             stats.get("numeric_count", 0) >= 2
             and stats.get("correlation_strength", 0) > 0.3
         ):
             if "correlation" not in story_types:
-                chart = self._build_universal_correlation_chart(stats)
-                if chart:
-                    charts.append(chart)
+                # Use strong correlation pair if available, else first two numeric
+                strong = stats.get("strong_correlations", [])
+                if strong and "columns" in strong[0]:
+                    pair = strong[0]["columns"]
+                    x_s, y_s = pair[0], pair[1]
+                else:
+                    x_s, y_s = numeric_cols[0], numeric_cols[1]
+                charts.append({
+                    "chart_type": "scatter",
+                    "title": f"{y_s.replace('_', ' ').title()} vs {x_s.replace('_', ' ').title()}",
+                    "config": {
+                        "columns": [x_s, y_s],
+                        "aggregation": "none",
+                    },
+                    "reason": "Shows relationship between variables",
+                    "source": "universal_pattern",
+                    "story_type": "correlation",
+                    "priority": 7,
+                    "confidence_multiplier": 0.9,
+                })
 
-        if stats.get("numeric_count", 0) >= 3:
-            if "three_variable" not in story_types:
-                chart = self._build_universal_bubble_chart(stats)
-                if chart:
-                    charts.append(chart)
-
-        if (
-            stats.get("categorical_count", 0) >= 1
-            and stats.get("numeric_count", 0) >= 3
-        ):
-            if "multi_metric_profile" not in story_types:
-                chart = self._build_universal_radar_chart(stats)
-                if chart:
-                    charts.append(chart)
-
-        if stats.get("low_cardinality_cats"):
+        # ── 7. Concentration pie (only if low-cardinality) ──
+        if low_card_cats:
             if "concentration" not in story_types:
-                chart = self._build_universal_concentration_chart(stats)
-                if chart:
-                    charts.append(chart)
+                pie_col = low_card_cats[0]
+                charts.append({
+                    "chart_type": "pie",
+                    "title": f"Distribution by {pie_col.replace('_', ' ').title()}",
+                    "config": {"columns": [pie_col], "aggregation": "count"},
+                    "reason": "Shows concentration across categories",
+                    "source": "universal_pattern",
+                    "story_type": "concentration",
+                    "priority": 6,
+                    "confidence_multiplier": 0.8,
+                })
 
+        # ── 8. Treemap (hierarchical) ──
         if (
             stats.get("categorical_count", 0) >= 2
             and stats.get("numeric_count", 0) >= 1
@@ -1110,14 +1202,28 @@ class ChartIntelligenceService:
                 if chart:
                     charts.append(chart)
 
+        # ── 9. Waterfall (sequential breakdown — lower priority) ──
         if (
             stats.get("categorical_count", 0) >= 1
             and stats.get("numeric_count", 0) >= 1
         ):
             if "sequential" not in story_types:
-                chart = self._build_universal_waterfall_chart(stats)
-                if chart:
-                    charts.append(chart)
+                w_y = _pick_numeric()
+                w_x = _pick_categorical()
+                if w_x and w_y:
+                    charts.append({
+                        "chart_type": "waterfall",
+                        "title": f"{w_y.replace('_', ' ').title()} Breakdown by {w_x.replace('_', ' ').title()}",
+                        "config": {
+                            "columns": [w_x, w_y],
+                            "aggregation": "sum",
+                        },
+                        "reason": "Sequential breakdown showing cumulative effect",
+                        "source": "universal_pattern",
+                        "story_type": "sequential",
+                        "priority": 6,
+                        "confidence_multiplier": 0.8,
+                    })
 
         return charts
 
@@ -1441,8 +1547,9 @@ class ChartIntelligenceService:
         """Filter charts based on dashboard context (executive vs analyst)."""
         if context == "executive":
             # Executives want: KPIs, trends, high-level comparisons
-            # Avoid: detailed distributions, correlation matrices, outlier analysis
-            excluded_types = ["box", "heatmap", "histogram"]
+            # Only exclude correlation_matrix (too complex for exec dashboards)
+            # Keep histogram, box, heatmap - they're often the most insightful!
+            excluded_types = ["correlation_matrix"]
             return [c for c in charts if c["chart_type"] not in excluded_types]
 
         elif context == "analyst":
@@ -1479,8 +1586,25 @@ class ChartIntelligenceService:
         self, charts: List[Dict], max_charts: int = 5
     ) -> List[Dict]:
         """Rank by priority and remove duplicates."""
+        # Chart type families for deduplication
+        CHART_FAMILIES = {
+            "bar": "bar_family",
+            "grouped_bar": "bar_family",
+            "stacked_bar": "bar_family",
+            "line": "line_family",
+            "multi_line": "line_family",
+            "area": "area_family",
+            "stacked_area": "area_family",
+            "scatter": "scatter_family",
+            "bubble": "scatter_family",
+        }
+
+        def get_chart_family(chart_type: str) -> str:
+            return CHART_FAMILIES.get(chart_type, chart_type)
+
         seen = set()
         unique_charts = []
+        family_counts = {}  # Track charts per family for diversity
 
         for chart in charts:
             cfg = chart.get("config", {})
@@ -1492,7 +1616,12 @@ class ChartIntelligenceService:
             )
             signature = (chart["chart_type"], frozenset(str(c) for c in cols))
             if signature not in seen:
+                # Enforce max 2 per chart family for diversity
+                family = get_chart_family(chart["chart_type"])
+                if family_counts.get(family, 0) >= 2:
+                    continue
                 seen.add(signature)
+                family_counts[family] = family_counts.get(family, 0) + 1
                 unique_charts.append(chart)
 
         # Sort by priority
@@ -1643,10 +1772,10 @@ class ChartIntelligenceService:
     def _get_max_charts(self, context: str) -> int:
         """Get maximum charts based on context."""
         return {
-            "executive": 5,  # Focus on key metrics
+            "executive": 8,  # More charts now that per-chart error handling works
             "analyst": 10,  # More detailed analysis
             "operational": 6,  # Real-time monitoring
-        }.get(context, 5)
+        }.get(context, 8)
 
     def _generate_reasoning(self, charts: List[Dict], domain: str, context: str) -> str:
         """Generate human-readable reasoning for chart selection."""

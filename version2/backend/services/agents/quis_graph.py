@@ -237,8 +237,9 @@ async def analyst_node(state: AgentState) -> Dict[str, Any]:
                 "overall_score": insight.overall_score,
             }
 
+            import json as _json_ser
             return {
-                "execution_result": str(execution_result),
+                "execution_result": _json_ser.dumps(execution_result, default=str),
                 "error_count": 0,  # Reset on success
                 "last_error": None,
                 "iteration_count": state["iteration_count"] + 1,
@@ -246,7 +247,6 @@ async def analyst_node(state: AgentState) -> Dict[str, Any]:
         else:
             return {
                 "execution_result": "No significant insights found for this question.",
-                "current_question_idx": state["current_question_idx"] + 1,
                 "iteration_count": state["iteration_count"] + 1,
             }
 
@@ -300,16 +300,14 @@ async def critic_node(state: AgentState) -> Dict[str, Any]:
                 "issues": [],
                 "suggestions": [],
             },
-            "current_question_idx": state["current_question_idx"] + 1,
             "iteration_count": state["iteration_count"] + 1,
         }
 
     # Parse and validate the insight
     try:
-        import ast
         import json as _json
 
-        insight_dict = ast.literal_eval(execution_result)
+        insight_dict = _json.loads(execution_result)
 
         issues = []
         suggestions = []
@@ -401,6 +399,7 @@ async def critic_node(state: AgentState) -> Dict[str, Any]:
                 "issues": ["parse_error"],
                 "suggestions": ["Ensure insight is in valid format"],
             },
+            "error_count": state.get("error_count", 0) + 1,
             "iteration_count": state["iteration_count"] + 1,
         }
 
@@ -422,12 +421,12 @@ async def novelty_filter_node(state: AgentState) -> Dict[str, Any]:
     import re
 
     # Parse the execution result
+    import json as _json_parse
     try:
-        import ast
-
-        insight_dict = ast.literal_eval(state["execution_result"])
+        insight_dict = _json_parse.loads(state["execution_result"])
         insight_text = insight_dict.get("description", "")
-    except:
+    except (ValueError, TypeError):
+        insight_dict = {}
         insight_text = state["execution_result"]
 
     # Get Belief Store and Bayesian Tracker
@@ -479,12 +478,12 @@ async def novelty_filter_node(state: AgentState) -> Dict[str, Any]:
     if is_novel:
         # Add to approved insights
         try:
-            insight = ast.literal_eval(state["execution_result"])
+            insight = _json_parse.loads(state["execution_result"])
             insight["novelty_score"] = hybrid_score
             insight["semantic_surprisal"] = semantic_surprisal
             insight["bayesian_surprise"] = bayesian_surprise
             approved = state.get("approved_insights", []) + [insight]
-        except:
+        except (ValueError, TypeError):
             approved = state.get("approved_insights", [])
 
         return {
@@ -495,16 +494,17 @@ async def novelty_filter_node(state: AgentState) -> Dict[str, Any]:
             "belief_context": belief_context,
             "approved_insights": approved,
             "current_question_idx": state["current_question_idx"] + 1,
+            "error_count": 0,  # Reset for next question
             "iteration_count": state["iteration_count"] + 1,
         }
     else:
         # Add to boring insights (for debugging)
         try:
-            insight = ast.literal_eval(state["execution_result"])
+            insight = _json_parse.loads(state["execution_result"])
             insight["novelty_score"] = hybrid_score
             insight["similar_to"] = belief_context[0] if belief_context else None
             boring = state.get("boring_insights", []) + [insight]
-        except:
+        except (ValueError, TypeError):
             boring = state.get("boring_insights", [])
 
         logger.info(
@@ -519,6 +519,7 @@ async def novelty_filter_node(state: AgentState) -> Dict[str, Any]:
             "belief_context": belief_context,
             "boring_insights": boring,
             "current_question_idx": state["current_question_idx"] + 1,
+            "error_count": 0,  # Reset for next question
             "iteration_count": state["iteration_count"] + 1,
         }
 

@@ -143,6 +143,16 @@ async def create_indexes():
             [("user_id", 1), ("updated_at", -1)], name="idx_user_recent_conversations"
         )
 
+        # ============================================================
+        # KPI Configs Collection (Financial Services)
+        # ============================================================
+        await db.database.kpi_configs.create_index(
+            [("user_id", 1), ("dataset_id", 1)], 
+            unique=True,
+            name="idx_user_dataset_kpi_config"
+        )
+        await db.database.kpi_configs.create_index("updated_at")
+
         logger.info("Database indexes created successfully")
 
     except Exception as e:
