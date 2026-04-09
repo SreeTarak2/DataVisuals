@@ -128,6 +128,19 @@ def _should_auto_bin(df: pl.DataFrame, col: str, threshold: int = 15) -> bool:
 
 
 def validate_config(df: pl.DataFrame, config: ChartConfig) -> None:
+    """
+    Permissive validation: strip invalid columns, warn on mismatches,
+    but NEVER raise — let the handler decide if it can render.
+
+    Every handler already has graceful degradation:
+      - grouped_bar → bar   |  stacked_bar → bar
+      - multi_line  → line  |  stacked_area → area
+      - bubble → scatter    |  candlestick → line
+      - heatmap → correlation heatmap (0-col fallback)
+      - pie/histogram/treemap → 1-col value_counts
+
+    Raising here kills the ENTIRE /charts endpoint for one bad chart.
+    """
     # Guard: default to "bar" if chart_type is None
     if config.chart_type is None:
         logger.warning("chart_type is None — defaulting to 'bar'")
@@ -139,45 +152,34 @@ def validate_config(df: pl.DataFrame, config: ChartConfig) -> None:
         if hasattr(config.chart_type, "value")
         else config.chart_type
     )
-    chart_def = CHART_DEFINITIONS_BY_ID.get(chart_type_str, {})
-    rules = chart_def.get("rules", {})
 
+    # Strip columns that don't exist in the dataframe
     safe_cols = [c for c in config.columns if c in df.columns]
     if len(safe_cols) < len(config.columns):
+        dropped = set(config.columns) - set(safe_cols)
+        logger.warning(
+            f"validate_config({chart_type_str}): dropped missing columns {dropped}"
+        )
         config.columns = safe_cols
 
-    # Chart types whose handlers have built-in fallback logic for fewer columns:
-    #   pie       → 1 col: value_counts distribution
-    #   heatmap   → <3 cols: correlation heatmap fallback
-    #   histogram → 1 col: standard histogram
-    #   treemap   → 1 col: group-by count
-    HANDLER_MIN_COLUMNS = {
-        "pie": 1,
-        "pie_chart": 1,
-        "donut": 1,
-        "heatmap": 0,
-        "histogram": 1,
-        "treemap": 1,
-    }
-    effective_min = HANDLER_MIN_COLUMNS.get(chart_type_str, rules.get("min_columns", 1))
-
-    if not config.columns and effective_min > 0:
+    # Only hard-fail if there are ZERO columns AND the chart type genuinely
+    # cannot operate without any (heatmap can → correlation fallback)
+    ZERO_COL_OK = {"heatmap"}
+    if not config.columns and chart_type_str not in ZERO_COL_OK:
         raise HydrationError("No valid columns after safety check.")
 
-    if len(config.columns) < effective_min:
-        raise HydrationError("Insufficient columns for chart type.")
-
+    # Soft warnings (informational only — handlers will degrade gracefully)
+    chart_def = CHART_DEFINITIONS_BY_ID.get(chart_type_str, {})
+    rules = chart_def.get("rules", {})
     num_needed = sum(
         1 for req in rules.get("data_types", []) if req["type"] == "numeric"
     )
     actual_num = sum(1 for c in config.columns if df[c].dtype in NUMERIC_DTYPES)
     if actual_num < num_needed:
-        if chart_type_str == "heatmap":
-            logger.info(
-                "Heatmap has limited numeric inputs; using handler fallback when possible."
-            )
-        else:
-            logger.warning("Not enough numeric columns for chart type.")
+        logger.info(
+            f"validate_config({chart_type_str}): {actual_num} numeric cols "
+            f"< {num_needed} ideal — handler will degrade gracefully"
+        )
 
 
 def _safe_aggregate(
@@ -515,11 +517,22 @@ def hydrate_chart(
                and rows_used is the number of data points used
     """
     start = time.time()
-    validate_config(df, config)
 
-    # Use the provided dataframe directly.
-    # The API layer (charts.py) already handles the 'limit' requested by the user.
-    # Hard-coding 10,000 here prevents users from increasing precision.
+    # Validation is now permissive — only raises for truly impossible configs
+    # (e.g. zero columns on a non-heatmap). All other issues are warnings.
+    try:
+        validate_config(df, config)
+    except HydrationError as e:
+        logger.warning(
+            f"Validation failed for {config.chart_type}: {e} — returning empty"
+        )
+        chart_type = (
+            config.chart_type.value
+            if hasattr(config.chart_type, "value")
+            else config.chart_type or "bar"
+        )
+        return ([{"type": chart_type, "x": [], "y": [], "error": str(e)[:100]}], 0)
+
     rows_used = len(df)
 
     # Guard: default to "bar" if chart_type is None

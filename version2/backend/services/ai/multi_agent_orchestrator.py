@@ -421,7 +421,9 @@ class MultiAgentOrchestrator:
             }
 
         except Exception as e:
-            logger.warning(f"Chart recommendation strict validation failed: {e} — attempting partial recovery")
+            logger.warning(
+                f"Chart recommendation strict validation failed: {e} — attempting partial recovery"
+            )
             return self._recover_partial_charts(raw_response or "")
 
     def _recover_partial_charts(self, raw_response) -> dict:
@@ -440,7 +442,7 @@ class MultiAgentOrchestrator:
             try:
                 data = json.loads(raw_response)
             except Exception:
-                match = re.search(r'\{.*\}', raw_response, re.DOTALL)
+                match = re.search(r"\{.*\}", raw_response, re.DOTALL)
                 try:
                     data = json.loads(match.group()) if match else {}
                 except Exception:
@@ -457,10 +459,14 @@ class MultiAgentOrchestrator:
             if isinstance(c, dict) and REQUIRED.issubset(c.keys()):
                 valid.append(c)
 
-        logger.info(f"Partial chart recovery: salvaged {len(valid)} / {len(raw_charts)} charts")
+        logger.info(
+            f"Partial chart recovery: salvaged {len(valid)} / {len(raw_charts)} charts"
+        )
 
         if not valid:
-            logger.error("Chart recommendation agent failed and recovery produced 0 charts")
+            logger.error(
+                "Chart recommendation agent failed and recovery produced 0 charts"
+            )
             return {"error": "chart_generation_failed", "charts": []}
 
         return {
@@ -763,7 +769,7 @@ class MultiAgentOrchestrator:
                 "is_valid": True,  # Don't block the pipeline
                 "errors": [],
                 "warnings": [f"Self-critique unavailable: {str(e)}"],
-                "skipped": True
+                "skipped": True,
             }
 
     # -----------------------------------------------------------
@@ -791,9 +797,14 @@ class MultiAgentOrchestrator:
         summary_stats = data_profile.get("summary_statistics", {})
 
         AGG_TO_STAT = {
-            "mean": "mean", "avg": "mean", "average": "mean",
-            "median": "median", "sum": "sum",
-            "min": "min", "max": "max", "count": "count",
+            "mean": "mean",
+            "avg": "mean",
+            "average": "mean",
+            "median": "median",
+            "sum": "sum",
+            "min": "min",
+            "max": "max",
+            "count": "count",
         }
 
         def _kpi_benchmark(column: str, aggregation: str) -> dict:
@@ -811,17 +822,27 @@ class MultiAgentOrchestrator:
             try:
                 value_f = float(value)
                 median_f = float(median)
-                delta_pct = round(((value_f - median_f) / abs(median_f)) * 100, 1) if median_f != 0 else None
+                delta_pct = (
+                    round(((value_f - median_f) / abs(median_f)) * 100, 1)
+                    if median_f != 0
+                    else None
+                )
                 direction = "above" if value_f >= median_f else "below"
                 benchmark = f"{direction} dataset median of {median_f:,.1f}"
                 if col_min is not None and col_max is not None:
-                    benchmark += f"  ·  range {float(col_min):,.1f}–{float(col_max):,.1f}"
+                    benchmark += (
+                        f"  ·  range {float(col_min):,.1f}–{float(col_max):,.1f}"
+                    )
                 return {
                     "value": value_f,
                     "comparison_value": median_f,
                     "comparison_label": "vs dataset median",
                     "delta_percent": delta_pct,
-                    "delta_direction": "up" if (delta_pct or 0) > 0 else "down" if (delta_pct or 0) < 0 else "neutral",
+                    "delta_direction": "up"
+                    if (delta_pct or 0) > 0
+                    else "down"
+                    if (delta_pct or 0) < 0
+                    else "neutral",
                     "benchmarkText": benchmark,
                 }
             except (TypeError, ValueError):
@@ -856,7 +877,9 @@ class MultiAgentOrchestrator:
             role = (chart.get("diversity_role") or "").upper()
             axes_key = (chart.get("type", ""), chart.get("x", ""), chart.get("y", ""))
             if role and role in seen_roles:
-                logger.info(f"Dedup: dropping chart with duplicate diversity_role={role}")
+                logger.info(
+                    f"Dedup: dropping chart with duplicate diversity_role={role}"
+                )
                 continue
             if axes_key in seen_axes:
                 logger.info(f"Dedup: dropping chart with duplicate axes {axes_key}")
@@ -868,13 +891,28 @@ class MultiAgentOrchestrator:
 
         # Guard: drop scatter charts where either axis looks like an ID / row-index column.
         # These produce meaningless blobs of dots that destroy dashboard credibility.
-        ID_PATTERNS = {"id", "_id", "index", "row", "num", "number", "no", "seq", "serial", "key", "code"}
+        ID_PATTERNS = {
+            "id",
+            "_id",
+            "index",
+            "row",
+            "num",
+            "number",
+            "no",
+            "seq",
+            "serial",
+            "key",
+            "code",
+        }
 
         def _is_id_column(col_name: str) -> bool:
             if not col_name:
                 return False
             lower = col_name.lower().replace(" ", "_")
-            return any(lower == p or lower.endswith(f"_{p}") or lower.startswith(f"{p}_") for p in ID_PATTERNS)
+            return any(
+                lower == p or lower.endswith(f"_{p}") or lower.startswith(f"{p}_")
+                for p in ID_PATTERNS
+            )
 
         safe_charts = []
         for chart in deduped_charts:
@@ -882,7 +920,9 @@ class MultiAgentOrchestrator:
                 x_col = chart.get("x", "")
                 y_col = chart.get("y", "")
                 if _is_id_column(x_col) or _is_id_column(y_col):
-                    logger.info(f"Guard: dropping scatter with ID column (x={x_col}, y={y_col})")
+                    logger.info(
+                        f"Guard: dropping scatter with ID column (x={x_col}, y={y_col})"
+                    )
                     continue
             safe_charts.append(chart)
 
@@ -897,7 +937,8 @@ class MultiAgentOrchestrator:
                 (
                     exp
                     for exp in chart_explanations
-                    if exp.get("chart_id") in (ai_title, chart.get("title_insight"), chart.get("title"))
+                    if exp.get("chart_id")
+                    in (ai_title, chart.get("title_insight"), chart.get("title"))
                 ),
                 {},
             )
@@ -961,7 +1002,7 @@ class MultiAgentOrchestrator:
             "agents": {
                 "chart_recommendation": "deepseek_v32",
                 "kpi_suggestion": "deepseek_v32",
-                "chart_explanation": "mistral_small_32",
+                "chart_explanation": "qwen_2.5_72b",
                 "insight_generation": "deepseek_v32",
             },
         }
@@ -983,7 +1024,9 @@ class MultiAgentOrchestrator:
             from services.ai.dashboard_validator import dashboard_validator
 
             # Run validation
-            validation_result = await dashboard_validator.validate_dashboard(blueprint, None, metadata)
+            validation_result = await dashboard_validator.validate_dashboard(
+                blueprint, None, metadata
+            )
 
             if validation_result["issues"]:
                 logger.info(
@@ -1011,7 +1054,8 @@ class MultiAgentOrchestrator:
         if issue_type == "duplicate_chart" and component_id:
             # Remove the duplicate chart by title
             blueprint["components"] = [
-                c for c in blueprint.get("components", []) 
+                c
+                for c in blueprint.get("components", [])
                 if c.get("title") != component_id
             ]
         elif issue_type == "missing_labels":
@@ -1025,7 +1069,7 @@ class MultiAgentOrchestrator:
                 if c.get("title") == component_id and "config" in c:
                     # Default payload aggregation fallback
                     c["config"]["aggregation"] = error.get("suggested_fix", "sum")
-                    
+
         return blueprint
 
     # -----------------------------------------------------------
@@ -1074,12 +1118,12 @@ class MultiAgentOrchestrator:
             label = type_labels.get(insight_type, insight_type.upper())
             cols_str = " × ".join(columns) if columns else ""
             p_str = f"p={p_val:.4f}" if p_val is not None else ""
-            effect_str = (
-                f"effect={effect:.3f} ({effect_interp})" if effect else ""
-            )
+            effect_str = f"effect={effect:.3f} ({effect_interp})" if effect else ""
             stat_str = " · ".join(filter(None, [p_str, effect_str]))
 
-            business_sentence = insight_interpreter.interpret_quis_finding_business(finding)
+            business_sentence = insight_interpreter.interpret_quis_finding_business(
+                finding
+            )
 
             lines.append(
                 f"  [{i}] {label} | columns: {cols_str} | {stat_str}\n"

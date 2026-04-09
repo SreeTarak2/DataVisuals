@@ -223,8 +223,9 @@ class Settings:
         "requirements_synthesis": "deepseek_v32",
         "layout_designer": "deepseek_v32",
         "dashboard_design": "deepseek_v32",
+        # Chart explanation — Qwen (best for plain English, human-centric)
+        "chart_explanation": "qwen_2.5_72b",
         # Simple/cheap tasks — Mistral (paid)
-        "chart_explanation": "mistral_small_32",
         "visualization_engine": "mistral_small_32",
         "draft_generation": "mistral_small_32",
         "simple_query": "mistral_small_32",
@@ -289,8 +290,8 @@ class Settings:
         "layout_designer": ["deepseek_v32", "minimax_m25"],
         "dashboard_design": ["deepseek_v32", "minimax_m25"],
         "requirements_synthesis": ["deepseek_v32", "minimax_m25"],
-        # Simple tasks — free first, then paid
-        "chart_explanation": ["mistral_small_32", "stepfun_flash"],
+        # Chart explanation — Qwen primary, DeepSeek backup
+        "chart_explanation": ["qwen_2.5_72b", "deepseek_v32"],
         "visualization_engine": ["mistral_small_32", "stepfun_flash"],
         "draft_generation": ["stepfun_flash", "mistral_small_32"],
         "simple_query": ["stepfun_flash", "mistral_small_32"],

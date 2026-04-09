@@ -270,6 +270,54 @@ def _extract_chat_payload_parts(
     return structured_response, ai_text, insights, data_summary, chart_config_raw
 
 
+# Jargon replacements for chat responses (mirrors chart_insights_service)
+_CHAT_JARGON_REPLACEMENTS = {
+    "correlation coefficient": "strength of link",
+    "negative correlation": "inverse relationship",
+    "positive correlation": "direct relationship",
+    "correlation": "link between",
+    "correlates": "is linked to",
+    "operational driver": "key factor",
+    "causal": "cause-and-effect",
+    "skewed": "lopsided",
+    "skew": "lopsided",
+    "volatility": "ups and downs",
+    "volatile": "unstable",
+    "anomaly": "unusual value",
+    "anomalies": "unusual values",
+    "outlier": "extreme value",
+    "outliers": "extreme values",
+    "distribution": "spread",
+    "median": "middle value",
+    "standard deviation": "typical spread from the average",
+    "variance": "spread",
+    "deviation": "difference",
+    "coefficient": "factor",
+    "percentile": "percentage point",
+    "quartile": "quarter",
+    "r-squared": "how well the model fits",
+    "r-value": "strength of link",
+    "p-value": "statistical significance",
+    "regression": "trend line",
+    "statistically significant": "a meaningful pattern (not random chance)",
+    "null hypothesis": "the assumption that nothing changed",
+    "confidence interval": "range of likely values",
+    "multicollinearity": "overlapping factors",
+    "heteroscedasticity": "uneven spread of data",
+    "autocorrelation": "pattern repeating over time",
+}
+
+
+def _humanize_chat_text(text: str) -> str:
+    """Strip technical jargon from chat responses for non-technical users."""
+    if not text:
+        return text
+    result = text
+    for jargon, plain in _CHAT_JARGON_REPLACEMENTS.items():
+        result = re.sub(rf"\b{re.escape(jargon)}\b", plain, result, flags=re.IGNORECASE)
+    return result
+
+
 def _needs_narrative_repair(query: str, ai_text: str, chart_config_raw: Any) -> bool:
     """Chart-only structured output is invalid for summary-style queries."""
     return (
@@ -1550,6 +1598,10 @@ class AIService:
         # but PRESERVE real newlines — they are markdown formatting (headers, bullets, etc.)
         ai_text = ai_text.replace("\\n", "\n")
         ai_text = self._normalize_response_style(ai_text.strip())
+
+        # Strip technical jargon for non-technical users
+        ai_text = _humanize_chat_text(ai_text)
+        insights = [_humanize_chat_text(i) for i in insights if i]
 
         logger.info(f"Extracted ai_text ({len(ai_text)} chars): {ai_text[:200]}...")
 
@@ -2906,6 +2958,10 @@ class AIService:
                             "I've prepared a supporting chart for this question, "
                             "but the narrative summary was missing from the model response."
                         )
+
+                    # Strip technical jargon for non-technical users
+                    full_response = _humanize_chat_text(full_response)
+                    insights = [_humanize_chat_text(i) for i in insights if i]
 
                     words = full_response.split()
                     for i, word in enumerate(words):

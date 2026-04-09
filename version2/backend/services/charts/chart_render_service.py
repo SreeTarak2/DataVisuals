@@ -24,11 +24,7 @@ from datetime import datetime
 import polars as pl
 
 from services.charts.render import ChartRenderer
-from services.charts.hydrate import (
-    hydrate_chart,
-    validate_config,
-    HydrationError
-)
+from services.charts.hydrate import hydrate_chart, HydrationError
 from db.schemas_dashboard import ChartConfig, ChartType, ComponentType
 from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 
@@ -40,7 +36,7 @@ class ChartRenderService:
     Production-grade chart rendering service.
     Orchestrates hydration → rendering → output.
     """
-    
+
     def __init__(self):
         self.renderer = ChartRenderer()
         self._cache = {}  # Simple in-memory cache
@@ -128,7 +124,11 @@ class ChartRenderService:
             sorted_vals = sorted(numeric_values)
             total = sum(numeric_values)
             mean = total / n
-            median = sorted_vals[n // 2] if n % 2 else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
+            median = (
+                sorted_vals[n // 2]
+                if n % 2
+                else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
+            )
             variance = sum((v - mean) ** 2 for v in numeric_values) / max(n - 1, 1)
             std = math.sqrt(variance) if variance > 0 else 0.0
             min_val = sorted_vals[0]
@@ -152,7 +152,9 @@ class ChartRenderService:
             total_records = len(df)
 
             # ── Rank: sorted descending (1 = highest) ──
-            rank_sorted = sorted(range(n), key=lambda i: numeric_values[i], reverse=True)
+            rank_sorted = sorted(
+                range(n), key=lambda i: numeric_values[i], reverse=True
+            )
             rank_map = {}
             for rank_pos, idx in enumerate(rank_sorted):
                 rank_map[idx] = rank_pos + 1
@@ -171,7 +173,16 @@ class ChartRenderService:
 
                 # ── Generate a meaningful insight sentence ──
                 insight = self._generate_point_insight(
-                    val, mean, std, rank, n, vs_avg_pct, is_outlier, percentile, x_key, y_col
+                    val,
+                    mean,
+                    std,
+                    rank,
+                    n,
+                    vs_avg_pct,
+                    is_outlier,
+                    percentile,
+                    x_key,
+                    y_col,
                 )
 
                 points[x_key] = {
@@ -207,7 +218,17 @@ class ChartRenderService:
             return {}
 
     def _generate_point_insight(
-        self, val, mean, std, rank, total, vs_avg_pct, is_outlier, percentile, x_key, y_col
+        self,
+        val,
+        mean,
+        std,
+        rank,
+        total,
+        vs_avg_pct,
+        is_outlier,
+        percentile,
+        x_key,
+        y_col,
     ) -> str:
         """Generate a concise, meaningful insight sentence for a single data point."""
 
@@ -242,7 +263,9 @@ class ChartRenderService:
             elif vs_avg_pct > -40:
                 parts.append(f"{vs_avg_pct:+.1f}% below average — underperforming")
             else:
-                parts.append(f"{vs_avg_pct:+.1f}% below average — significantly trailing")
+                parts.append(
+                    f"{vs_avg_pct:+.1f}% below average — significantly trailing"
+                )
 
         # Add std context for outliers
         if is_outlier and std > 0:
@@ -250,50 +273,51 @@ class ChartRenderService:
             parts.append(f"{z:.1f}σ from the mean")
 
         return " · ".join(parts)
-    
+
     async def render_chart(
-        self,
-        df: pl.DataFrame,
-        chart_config: Dict[str, Any],
-        theme: str = "light"
+        self, df: pl.DataFrame, chart_config: Dict[str, Any], theme: str = "light"
     ) -> Dict[str, Any]:
         """
         Main rendering method: DataFrame + config → Plotly chart.
-        
+
         Args:
             df: Polars DataFrame with data
             chart_config: Chart configuration dict
             theme: Visual theme ("light" or "dark")
-        
+
         Returns:
             Dict with Plotly chart data, layout, and metadata
         """
         start_time = datetime.utcnow()
-        
+
         try:
             # Validate inputs
             if df is None or df.is_empty():
                 raise ValueError("DataFrame is empty")
-            
+
             if not chart_config:
                 raise ValueError("Chart config is required")
-            
+
             # Parse chart config
             config = self._parse_config(chart_config)
-            
-            # Validate config against DataFrame
-            validate_config(df, config)
-            
+
+            # Validate config against DataFrame (now permissive - no longer raises)
+            # Validation is now handled inside hydrate_chart with graceful degradation
+
             # Handle both string and enum types for chart_type
-            chart_type_str = config.chart_type.value if hasattr(config.chart_type, 'value') else config.chart_type
-            
+            chart_type_str = (
+                config.chart_type.value
+                if hasattr(config.chart_type, "value")
+                else config.chart_type
+            )
+
             # Hydrate: DataFrame → Plotly traces
             logger.info(f"Hydrating {chart_type_str} chart...")
             traces, rows_used = hydrate_chart(df, config)
-            
+
             if not traces:
                 raise HydrationError("No traces generated")
-            
+
             # Render: Traces → Final Plotly payload
             logger.info(f"Rendering chart with {len(traces)} trace(s)...")
             chart_payload = self.renderer.render(
@@ -302,16 +326,17 @@ class ChartRenderService:
                 traces=traces,
                 rows_used=rows_used,
                 theme=theme,
-                colorscale=chart_config.get("colorscale")
+                colorscale=chart_config.get("colorscale"),
             )
-            
+
             # Add metadata
             chart_payload["metadata"] = {
                 "rows_used": rows_used,
                 "total_rows": len(df),
                 "columns": config.columns,
                 "chart_type": chart_type_str,
-                "render_time_ms": (datetime.utcnow() - start_time).total_seconds() * 1000
+                "render_time_ms": (datetime.utcnow() - start_time).total_seconds()
+                * 1000,
             }
 
             # ── Compute per-point statistical intelligence ──
@@ -325,26 +350,26 @@ class ChartRenderService:
                     chart_payload["point_intelligence"] = point_intel
             except Exception as e:
                 logger.warning(f"Point intelligence skipped: {e}")
-            
+
             self._render_count += 1
-            logger.info(f"✓ Chart rendered successfully ({chart_payload['metadata']['render_time_ms']:.0f}ms)")
-            
+            logger.info(
+                f"✓ Chart rendered successfully ({chart_payload['metadata']['render_time_ms']:.0f}ms)"
+            )
+
             return chart_payload
-        
+
         except HydrationError as e:
             self._error_count += 1
             logger.error(f"✗ Hydration error: {e}")
             raise
-        
+
         except Exception as e:
             self._error_count += 1
             logger.error(f"✗ Chart rendering failed: {e}", exc_info=True)
             raise
-    
+
     async def render_chart_from_config(
-        self,
-        chart_config: Dict[str, Any],
-        dataset_id: Optional[str] = None
+        self, chart_config: Dict[str, Any], dataset_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Render chart from config with automatic dataset loading.
@@ -374,38 +399,37 @@ class ChartRenderService:
             df = await enhanced_dataset_service.load_dataset_data(ds_id, user_id)
 
             # Now render the chart with the loaded dataframe
-            return await self.render_chart(df, chart_config)  # ← was: render_chart(df, config)
+            return await self.render_chart(
+                df, chart_config
+            )  # ← was: render_chart(df, config)
 
         except Exception as e:
             logger.error(f"✗ Failed to render chart from config: {e}")
             raise
-    
+
     async def render_multiple_charts(
         self,
         df: pl.DataFrame,
         chart_configs: List[Dict[str, Any]],
-        theme: str = "light"
+        theme: str = "light",
     ) -> List[Dict[str, Any]]:
         """
         Render multiple charts in parallel.
-        
+
         Args:
             df: Polars DataFrame
             chart_configs: List of chart configurations
             theme: Visual theme
-        
+
         Returns:
             List of rendered charts
         """
         logger.info(f"Rendering {len(chart_configs)} charts in parallel...")
-        
-        tasks = [
-            self.render_chart(df, config, theme)
-            for config in chart_configs
-        ]
-        
+
+        tasks = [self.render_chart(df, config, theme) for config in chart_configs]
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Filter out errors
         charts = []
         for i, result in enumerate(results):
@@ -413,17 +437,19 @@ class ChartRenderService:
                 logger.error(f"Chart {i} failed: {result}")
             else:
                 charts.append(result)
-        
-        logger.info(f"✓ Rendered {len(charts)}/{len(chart_configs)} charts successfully")
+
+        logger.info(
+            f"✓ Rendered {len(charts)}/{len(chart_configs)} charts successfully"
+        )
         return charts
-    
+
     def _parse_config(self, chart_config: Dict[str, Any]) -> ChartConfig:
         """
         Parse chart config dict to ChartConfig object.
-        
+
         Args:
             chart_config: Raw config dict
-        
+
         Returns:
             ChartConfig object
         """
@@ -434,7 +460,7 @@ class ChartRenderService:
                 chart_type = ChartType(chart_type_str.lower())
             else:
                 chart_type = chart_type_str
-            
+
             # Extract columns
             columns = chart_config.get("columns", [])
             if not columns:
@@ -445,7 +471,7 @@ class ChartRenderService:
                     columns.append(x_axis)
                 if y_axis:
                     columns.append(y_axis)
-            
+
             # Create ChartConfig
             config = ChartConfig(
                 type=ComponentType.CHART,
@@ -454,15 +480,15 @@ class ChartRenderService:
                 columns=columns,
                 aggregation=chart_config.get("aggregation", "none"),
                 group_by=chart_config.get("group_by"),
-                span=chart_config.get("span", 1)
+                span=chart_config.get("span", 1),
             )
-            
+
             return config
-        
+
         except Exception as e:
             logger.error(f"Failed to parse chart config: {e}")
             raise ValueError(f"Invalid chart config: {e}")
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """Get service statistics."""
         return {
@@ -473,7 +499,7 @@ class ChartRenderService:
                 if (self._render_count + self._error_count) > 0
                 else 1.0
             ),
-            "cache_size": len(self._cache)
+            "cache_size": len(self._cache),
         }
 
 
