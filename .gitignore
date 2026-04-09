@@ -82,3 +82,9 @@ jest-results.json
 # -------------------
 *.DS_Store
 Thumbs.db
+
+.opencode
+.claude
+.vscode
+.ruff_cache
+
