@@ -543,3 +543,27 @@ async def delete_conversation(conversation_id: str, user_id: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to delete conversation {conversation_id}: {e}")
         return False
+
+
+# -----------------------------------------------------------
+# Update Conversation Title
+# -----------------------------------------------------------
+
+
+async def update_title(conversation_id: str, user_id: str, title: str) -> bool:
+    """
+    Update the title of a conversation.
+    Returns True if updated successfully.
+    """
+    db = get_database()
+
+    try:
+        result = await db.conversations.update_one(
+            {"_id": ObjectId(conversation_id), "user_id": user_id},
+            {"$set": {"title": title, "updated_at": datetime.utcnow()}},
+        )
+        return result.modified_count > 0
+
+    except Exception as e:
+        logger.error(f"Failed to update conversation title {conversation_id}: {e}")
+        return False

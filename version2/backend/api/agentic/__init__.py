@@ -1,2 +1,3 @@
-from api.$module.routes import router as ${module}_router
-__all__ = ["${module}_router"]
+from api.agentic.routes import router as agentic_router
+
+__all__ = ["agentic_router"]

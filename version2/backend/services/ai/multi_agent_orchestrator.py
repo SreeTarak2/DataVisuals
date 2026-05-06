@@ -452,11 +452,18 @@ class MultiAgentOrchestrator:
 
         raw_charts = data.get("charts", [])
 
-        # Minimal per-chart validation: must have at least type + x/y columns
-        REQUIRED = {"type", "x", "y"}
+        # Minimal per-chart validation: must have type + x-axis + at least one y-variant
+        # Accept y (single value), y_columns (list), metrics, or values for multi-series
         valid = []
         for c in raw_charts:
-            if isinstance(c, dict) and REQUIRED.issubset(c.keys()):
+            if not isinstance(c, dict):
+                continue
+            
+            has_type = "type" in c
+            has_x = "x" in c
+            has_y_variant = any(key in c for key in ["y", "y_columns", "metrics", "values"])
+            
+            if has_type and has_x and has_y_variant:
                 valid.append(c)
 
         logger.info(
@@ -960,6 +967,13 @@ class MultiAgentOrchestrator:
                 else:
                     raw_title = f"{chart_type_name.replace('_', ' ').title()} {i + 1}"
 
+            # Handle multi-series charts properly: y may be a list (for multi_line, stacked_area)
+            # or a string (single series). Flatten it into a proper columns array.
+            x_val = chart.get("x")
+            y_val = chart.get("y")
+            y_list = y_val if isinstance(y_val, list) else [y_val] if y_val else []
+            columns = [x_val] + y_list if x_val else y_list
+            
             components.append(
                 {
                     "type": "chart",
@@ -967,9 +981,9 @@ class MultiAgentOrchestrator:
                     "span": 2,
                     "config": {
                         "chart_type": chart.get("type", "bar"),
-                        "x": chart.get("x"),
-                        "y": chart.get("y"),
-                        "columns": [chart.get("x"), chart.get("y")],
+                        "x": x_val,
+                        "y": y_val,  # preserve original (list or string)
+                        "columns": columns,  # properly flattened
                     },
                     "metadata": {
                         "reasoning": chart.get("reasoning", ""),

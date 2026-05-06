@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
-import { Send, Plus, Database, Copy, ChevronDown, ChevronUp, RotateCcw, Pencil, Sparkles, BarChart3, TrendingUp, MessageSquare, Lightbulb, History, Maximize2, X, ArrowRight, Image, Loader2, Brain, Shield, Eye, Square } from 'lucide-react';
+import { Send, Plus, Database, Copy, ChevronDown, ChevronUp, RotateCcw, Pencil, Sparkles, BarChart3, TrendingUp, MessageSquare, Lightbulb, History, Maximize2, X, ArrowRight, Image, Loader2, Brain, Shield, Eye, Square, Table2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-hot-toast';
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
@@ -42,6 +42,74 @@ const IconActionButton = ({ icon, label, onClick }) => (
     </span>
   </button>
 );
+
+const formatTableValue = (value) => {
+  if (value === null || value === undefined) return '-';
+  if (typeof value === 'number') return Number.isInteger(value) ? value.toLocaleString() : value.toLocaleString(undefined, { maximumFractionDigits: 3 });
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  return String(value);
+};
+
+const getTableColumns = (table) => {
+  if (!table?.columns?.length) {
+    const firstRow = table?.rows?.[0];
+    return firstRow && typeof firstRow === 'object'
+      ? Object.keys(firstRow).map((key) => ({ key, label: key.replace(/_/g, ' ') }))
+      : [];
+  }
+  return table.columns.map((column) => (
+    typeof column === 'string'
+      ? { key: column, label: column.replace(/_/g, ' ') }
+      : { key: column.key, label: column.label || String(column.key).replace(/_/g, ' ') }
+  )).filter((column) => column.key);
+};
+
+const QueryResultTable = ({ table }) => {
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const columns = getTableColumns(table);
+  if (!rows.length || !columns.length) return null;
+
+  const totalRows = table?.totalRows ?? rows.length;
+  const displayedRows = table?.displayedRows ?? rows.length;
+
+  return (
+    <div className="my-5 w-full overflow-hidden rounded-xl border border-border bg-surface shadow-lg">
+      <div className="flex items-center justify-between gap-3 border-b border-border bg-elevated/30 px-4 py-2.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <Table2 size={15} className="shrink-0 text-secondary" />
+          <span className="text-xs font-semibold uppercase tracking-wide text-secondary">Query Results</span>
+        </div>
+        <span className="shrink-0 text-xs text-muted">
+          {displayedRows.toLocaleString()} of {totalRows.toLocaleString()} rows
+        </span>
+      </div>
+      <div className="max-h-[360px] overflow-auto">
+        <table className="w-full border-collapse text-sm">
+          <thead className="sticky top-0 z-10 bg-elevated">
+            <tr>
+              {columns.map((column) => (
+                <th key={column.key} className="border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-secondary whitespace-nowrap">
+                  {column.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex} className="border-b border-border/40 last:border-b-0 hover:bg-elevated/30">
+                {columns.map((column) => (
+                  <td key={`${rowIndex}-${column.key}`} className="px-4 py-3 text-[13.5px] text-pearl-soft whitespace-nowrap">
+                    {formatTableValue(row?.[column.key])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
 
 const getAxisTitleText = (axisTitle) => {
   if (!axisTitle) return '';
@@ -410,10 +478,14 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
   // AI Message — keep existing design
   const { content: contentWithoutLegacySql, sql: legacySql } = extractLegacySqlBlock(msg.content || '');
   const sqlText = (msg.sql || legacySql || '').trim();
-  // Prefer structured follow-ups from backend; fall back to text parsing
+  const canShowFollowUps = msg.show_follow_up_suggestions === true;
   const followUpSuggestions = followUpOverride?.length > 0
     ? followUpOverride
-    : extractFollowUpSuggestions(contentWithoutLegacySql);
+    : canShowFollowUps && msg.follow_up_suggestions?.length > 0
+      ? msg.follow_up_suggestions
+      : canShowFollowUps
+        ? extractFollowUpSuggestions(contentWithoutLegacySql)
+        : [];
   const cleanedContent = (followUpOverride?.length > 0
     ? contentWithoutLegacySql
     : stripFollowUpSection(contentWithoutLegacySql)
@@ -437,7 +509,7 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
       <div
         className={cn(
           "mx-auto flex w-full flex-col items-start pl-12",
-          msg.chart_config ? "max-w-[48rem]" : "max-w-[42rem]"
+          (msg.chart_config || msg.result_table) ? "max-w-[48rem]" : "max-w-[42rem]"
         )}
       >
         {/* Name and Timestamp */}
@@ -450,8 +522,8 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
 
         {/* Cancelled / partial response badge */}
         {msg.isCancelled && (
-          <div className="mb-2 flex items-center gap-1.5 text-[11px] text-amber-400/80">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400/70" />
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] text-yellow-700">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-600" />
             Response stopped — partial answer shown
           </div>
         )}
@@ -468,9 +540,11 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
               </ReactMarkdown>
             </div>
           ) : (
-            <div className="text-red-400 text-sm italic">[Message content missing]</div>
+            <div className="text-red-600 text-sm italic">[Message content missing]</div>
           )}
         </div>
+
+        <QueryResultTable table={msg.result_table} />
 
         {sqlText && (
           <details className="group mt-1 mb-2 w-full overflow-hidden rounded-xl border border-border bg-surface shadow-lg">
@@ -730,7 +804,7 @@ const Chat = () => {
       setThinkingSteps(prev => [...prev, label]);
     }, [rerunState]),
 
-    onDone: useCallback(({ conversationId, chartConfig, sql, follow_up_suggestions, rate_limit_remaining }) => {
+    onDone: useCallback(({ conversationId, chartConfig, sql, resultTable, insights = [], data_summary = '', follow_up_suggestions, show_follow_up_suggestions = false, rate_limit_remaining }) => {
       const localConvId = pendingConvIdRef.current;
 
       // Reset rerun state to idle
@@ -742,7 +816,7 @@ const Chat = () => {
       }
 
       // Store structured follow-up suggestions keyed by the streaming message id
-      if (follow_up_suggestions?.length > 0 && lastStreamingMsgIdRef.current) {
+      if (show_follow_up_suggestions && follow_up_suggestions?.length > 0 && lastStreamingMsgIdRef.current) {
         setFollowUpMap(prev => ({ ...prev, [lastStreamingMsgIdRef.current]: follow_up_suggestions }));
       }
 
@@ -770,7 +844,7 @@ const Chat = () => {
       const content = useChatStore.getState().streamingContent;
       // Use chartConfig from backend, or fall back to the most recent streamed chart (via ref)
       const finalChartConfig = chartConfig || streamingChartConfigRef.current || streamingChartConfig;
-      finishStreaming(content, finalChartConfig, sql);
+      finishStreaming(content, finalChartConfig, sql, insights, data_summary, resultTable, follow_up_suggestions || [], show_follow_up_suggestions);
       setStreamingChartConfig(null);
       streamingChartConfigRef.current = null;
       currentClientMessageIdRef.current = null;
@@ -881,15 +955,29 @@ const Chat = () => {
 
   useEffect(() => {
     const initializeChat = async () => {
-      await loadConversations();
+      // Start loading conversations in the background so the page can render immediately.
+      const loadPromise = loadConversations();
+
       const chatId = searchParams.get('chatId');
       if (chatId) {
         setCurrentChatId(chatId);
         const conversation = getConversation(chatId);
         if (conversation) {
+          // Conversation already cached locally — use it immediately.
           setCurrentConversation(chatId);
         } else {
-          toast.error('Conversation not found');
+          // Wait for remote load to finish and then verify existence.
+          try {
+            const loaded = await loadPromise;
+            if (loaded && loaded[chatId]) {
+              setCurrentConversation(chatId);
+            } else {
+              toast.error('Conversation not found');
+            }
+          } catch (err) {
+            // loadPromise handles its own errors; show a friendly message if needed.
+            console.error('Failed loading conversations during init:', err);
+          }
         }
       } else {
         setCurrentChatId(null);
@@ -899,11 +987,10 @@ const Chat = () => {
       const datasetId = searchParams.get('dataset');
       if (datasetId && datasets.length > 0) {
         const dataset = datasets.find(d => d.id === datasetId);
-        if (dataset) {
-          setSelectedDataset(dataset);
-        }
+        if (dataset) setSelectedDataset(dataset);
       }
     };
+
     initializeChat();
   }, [searchParams, getConversation, setCurrentConversation, loadConversations, datasets, setSelectedDataset]);
 
@@ -974,21 +1061,21 @@ const Chat = () => {
       }
     }));
 
-    // Try WebSocket streaming first
-    if (isConnected) {
-      const msgId = `msg_${Date.now()}_ai`;
-      lastStreamingMsgIdRef.current = msgId;
-      startStreaming(msgId);
+     // Try WebSocket streaming first
+        if (isConnected) {
+            const msgId = `msg_${Date.now()}_ai`;
+            lastStreamingMsgIdRef.current = msgId;
+            startStreaming(msgId);
 
-      const clientMsgId = wsSendMessage({
-        message,
-        datasetId,
-        // Issue 1: use convId not stale currentChatId (React state update is async)
-        conversationId: isBackendConversationId(convId) ? convId : null,
-        streaming: true
-      });
-      currentClientMessageIdRef.current = clientMsgId;
-    } else {
+            const clientMsgId = wsSendMessage({
+                message,
+                datasetId,
+                // Use pendingConvIdRef to avoid stale conversationId
+                conversationId: isBackendConversationId(pendingConvIdRef.current) ? pendingConvIdRef.current : null,
+                streaming: true
+            });
+            currentClientMessageIdRef.current = clientMsgId;
+        } else {
       // Issue 2: user message is already appended above; tell the store action to
       // skip adding it again to prevent the duplicate-message bug.
       const result = await sendMessage(message, datasetId, convId, { skipUserMessage: true });
@@ -1334,9 +1421,9 @@ const Chat = () => {
     if (!text) return '';
     const cleanText = text.replace(/<[^>]*>/g, '');
     const isDark = document.documentElement.classList.contains('dark');
-    const blueColor = isDark ? 'text-blue-400' : 'text-blue-600';
-    const greenColor = isDark ? 'text-green-400' : 'text-green-600';
-    const blueSoftColor = isDark ? 'text-blue-300' : 'text-blue-500';
+    const blueColor = isDark ? 'text-blue-700' : 'text-blue-700';
+    const greenColor = isDark ? 'text-green-700' : 'text-green-700';
+    const blueSoftColor = isDark ? 'text-blue-700' : 'text-blue-700';
 
     return cleanText
       .replace(/(\d+\.?\d*%)/g, `<span class="${blueColor} font-semibold">$1</span>`)
@@ -1351,10 +1438,10 @@ const Chat = () => {
     if (!selectedDataset) return [];
     const name = selectedDataset.name || 'your dataset';
     return [
-      { icon: TrendingUp, text: `What are the key trends in this data?`, color: 'from-blue-500/20 to-blue-600/20 border-blue-500/30' },
-      { icon: BarChart3, text: `Show me a summary of the most important metrics`, color: 'from-blue-500/15 to-blue-700/20 border-blue-500/25' },
-      { icon: Lightbulb, text: `What unusual patterns or outliers exist?`, color: 'from-blue-400/15 to-blue-600/20 border-blue-400/25' },
-      { icon: MessageSquare, text: `Give me an executive summary of this dataset`, color: 'from-blue-300/10 to-blue-500/20 border-blue-300/25' },
+      { icon: TrendingUp, text: `What are the key trends in this data?`, color: 'bg-blue-50 border-blue-200' },
+      { icon: BarChart3, text: `Show me a summary of the most important metrics`, color: 'bg-blue-50 border-blue-200' },
+      { icon: Lightbulb, text: `What unusual patterns or outliers exist?`, color: 'bg-blue-50 border-blue-200' },
+      { icon: MessageSquare, text: `Give me an executive summary of this dataset`, color: 'bg-blue-50 border-blue-200' },
     ];
   }, [selectedDataset]);
 

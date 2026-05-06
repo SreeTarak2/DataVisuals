@@ -24,15 +24,29 @@ export const mapChartDataForRendering = (data = [], config = {}) => {
 const normalizeChartType = (t) => {
   if (!t) return null;
   const lower = t.toString().toLowerCase();
+  
+  // PRESERVE multi-series types — these must survive normalization!
+  if (lower === 'multi_line' || lower === 'multiline') return 'multi_line';
+  if (lower === 'stacked_bar' || lower === 'stackedbar') return 'stacked_bar';
+  if (lower === 'stacked_area' || lower === 'stackedarea') return 'stacked_area';
+  if (lower === 'grouped_bar' || lower === 'groupedbar') return 'grouped_bar';
+  
+  // Single-series types
   if (lower.includes('line')) return 'line_chart';
   if (lower.includes('bar')) return 'bar_chart';
   if (lower.includes('pie')) return 'pie_chart';
   if (lower.includes('scatter')) return 'scatter_plot';
   if (lower.includes('hist')) return 'histogram';
+  if (lower.includes('box')) return 'box_plot';
+  if (lower.includes('violin')) return 'violin_plot';
+  
   // accept short forms
   if (lower === 'line') return 'line_chart';
   if (lower === 'bar') return 'bar_chart';
   if (lower === 'pie') return 'pie_chart';
+  if (lower === 'scatter') return 'scatter_plot';
+  if (lower === 'histogram' || lower === 'hist') return 'histogram';
+  
   return t;
 };
 
@@ -86,8 +100,10 @@ const normalizeComponent = (component = {}, availableColumns = []) => {
     );
     // ensure columns are an array
     // IMPROVEMENT: Multi-agent sends x/y fields, convert to columns array
+    // CRITICAL: Preserve multi-series y as list (multi_line, grouped_bar, stacked_bar, stacked_area)
     if (c.config.x && c.config.y) {
-      c.config.columns = [c.config.x, c.config.y].filter(Boolean);
+      const yValues = Array.isArray(c.config.y) ? c.config.y : [c.config.y];
+      c.config.columns = [c.config.x, ...yValues].filter(Boolean);
     } else if (c.config.x && !c.config.y) {
       // Pie charts might only have x (category) column
       c.config.columns = [c.config.x];

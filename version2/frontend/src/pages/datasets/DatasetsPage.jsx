@@ -41,6 +41,7 @@ import { toast } from "react-hot-toast";
 import useDatasetStore from "../../store/datasetStore";
 import GlobalUploadButton from "../../components/GlobalUploadButton";
 import DeleteConfirmModal from "../../components/common/DeleteConfirmModal";
+import ConnectDatabaseModal from "../../components/features/databases/ConnectDatabaseModal";
 import { cn } from "../../lib/utils";
 
 /* ─── Helpers ─── */
@@ -366,6 +367,7 @@ const DatasetsPage = () => {
   });
   const [deleteModal, setDeleteModal] = useState({ isOpen: false, dataset: null });
   const [showFilter, setShowFilter] = useState(false);
+  const [isDbModalOpen, setIsDbModalOpen] = useState(false);
   const filterRef = useRef(null);
 
   useEffect(() => {
@@ -481,9 +483,18 @@ const DatasetsPage = () => {
             </div>
 
             <div className="flex items-center gap-3">
-              {/* <button className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-surface border border-border text-header hover:bg-elevated transition-all text-[13.5px] font-bold shadow-sm active:scale-95 hover:shadow-md">
-                <Share2 className="w-4 h-4 text-muted" /> Share Workspace
-              </button> */}
+              <button
+                onClick={() => setIsDbModalOpen(true)}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-2xl border transition-all text-[13.5px] font-bold shadow-sm active:scale-95 hover:shadow-md"
+                style={{
+                  backgroundColor: 'var(--bg-surface)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-header)',
+                }}
+              >
+                <Database className="w-4 h-4" style={{ color: 'var(--accent-primary)' }} />
+                Connect Database
+              </button>
               <GlobalUploadButton
                 className="!bg-header !text-page-bg !border-none !rounded-2xl !px-6 !py-3 !h-auto !text-[13.5px] !font-black !flex !items-center !gap-2.5 !shadow-xl !shadow-header/10 !hover:scale-[1.03] !transition-all"
                 label={<><Plus className="w-4.5 h-4.5" strokeWidth={3} /> Add New Asset</>}
@@ -665,6 +676,14 @@ const DatasetsPage = () => {
         onClose={() => setDeleteModal({ isOpen: false, dataset: null })}
         onConfirm={handleDeleteConfirm}
         itemName={getDatasetName(deleteModal.dataset)}
+      />
+
+      <ConnectDatabaseModal
+        isOpen={isDbModalOpen}
+        onClose={() => setIsDbModalOpen(false)}
+        onProcessingStart={(datasetId) => {
+          setIsDbModalOpen(false);
+        }}
       />
     </div>
   );

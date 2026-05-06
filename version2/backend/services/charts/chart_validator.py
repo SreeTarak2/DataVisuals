@@ -578,7 +578,223 @@ class SmartAxisRecommender:
 import numpy as np
 
 
+class FaithfulnessJudge:
+    """
+    LLM-as-a-Judge pattern for chart quality assurance.
+
+    Before rendering, checks if the ChartDefinition actually answers
+    the specific user query. If score < 4/5, triggers repair_request.
+
+    This eliminates "wrong-answer" frustration at the source.
+    """
+
+    def __init__(self):
+        self.judge_prompt_template = """You are a strict chart quality judge. 
+Evaluate whether the chart configuration ANSWERS the user's specific question.
+
+USER'S QUESTION: "{user_query}"
+
+CHART CONFIGURATION:
+- Chart Type: {chart_type}
+- Title: {chart_title}
+- X-Axis Column: {x_column}
+- Y-Axis Column: {y_column}
+- Aggregation: {aggregation}
+- Group By: {group_by}
+
+TASK:
+1. Does the chart title reflect what the user asked for?
+2. Are the columns appropriate for answering this question?
+3. Is the aggregation suitable (e.g., sum for totals, mean for averages)?
+4. Does the chart type match the question intent?
+
+Return JSON with your judgment:
+{{
+    "faithfulness_score": 1-5,
+    "title_alignment": "Does chart title match question intent?",
+    "column_alignment": "Are columns appropriate?",
+    "aggregation_alignment": "Is aggregation suitable?",
+    "type_alignment": "Does chart type match intent?",
+    "issues": ["list of specific issues if any"],
+    "repair_suggestion": "specific fix if score < 4, otherwise null"
+}}"""
+
+    async def judge(
+        self,
+        user_query: str,
+        chart_config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Judge if chart configuration faithfully answers the user query.
+
+        Args:
+            user_query: The original user question
+            chart_config: Chart configuration dict
+
+        Returns:
+            Judgment result with score and repair suggestions
+        """
+        try:
+            prompt = self._build_judge_prompt(user_query, chart_config)
+
+            response = await llm_router.call(
+                prompt=prompt,
+                model_role="chart_recommendation",
+                expect_json=True,
+                temperature=0.1,
+            )
+
+            if isinstance(response, dict):
+                return self._parse_judgment(response, chart_config)
+            else:
+                logger.warning(f"Invalid judgment response: {response}")
+                return self._default_judgment(chart_config)
+
+        except Exception as e:
+            logger.warning(f"Faithfulness judgment failed: {e}")
+            return self._default_judgment(chart_config)
+
+    def _build_judge_prompt(self, user_query: str, chart_config: Dict) -> str:
+        """Build the judge prompt from query and config."""
+        return self.judge_prompt_template.format(
+            user_query=user_query,
+            chart_type=chart_config.get("chart_type", "unknown"),
+            chart_title=chart_config.get("title", "Untitled"),
+            x_column=chart_config.get("config", {}).get("columns", [""])[0]
+            if chart_config.get("config", {}).get("columns")
+            else "N/A",
+            y_column=chart_config.get("config", {}).get("columns", [""])[1]
+            if len(chart_config.get("config", {}).get("columns", [])) > 1
+            else "N/A",
+            aggregation=chart_config.get("config", {}).get("aggregation", "none"),
+            group_by=chart_config.get("config", {}).get("group_by", "none"),
+        )
+
+    def _parse_judgment(self, response: Dict, chart_config: Dict) -> Dict[str, Any]:
+        """Parse LLM judgment response."""
+        score = response.get("faithfulness_score", 3)
+        return {
+            "chart_type": chart_config.get("chart_type"),
+            "faithfulness_score": score,
+            "title_alignment": response.get("title_alignment", "unknown"),
+            "column_alignment": response.get("column_alignment", "unknown"),
+            "aggregation_alignment": response.get("aggregation_alignment", "unknown"),
+            "type_alignment": response.get("type_alignment", "unknown"),
+            "issues": response.get("issues", []),
+            "repair_suggestion": response.get("repair_suggestion"),
+            "needs_repair": score < 4,
+            "judged": True,
+        }
+
+    def _default_judgment(self, chart_config: Dict) -> Dict[str, Any]:
+        """Default judgment when LLM call fails - be permissive."""
+        return {
+            "chart_type": chart_config.get("chart_type"),
+            "faithfulness_score": 3,
+            "title_alignment": "unknown",
+            "column_alignment": "unknown",
+            "aggregation_alignment": "unknown",
+            "type_alignment": "unknown",
+            "issues": [],
+            "repair_suggestion": None,
+            "needs_repair": False,
+            "judged": False,
+        }
+
+    async def judge_batch(
+        self,
+        user_queries: List[str],
+        charts: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Judge multiple charts against their queries in batch.
+
+        Args:
+            user_queries: List of user questions (one per chart)
+            charts: List of chart configurations
+
+        Returns:
+            List of judgment results
+        """
+        if not charts:
+            return []
+
+        try:
+            prompt = self._build_batch_judge_prompt(user_queries, charts)
+
+            response = await llm_router.call(
+                prompt=prompt,
+                model_role="chart_recommendation",
+                expect_json=True,
+                temperature=0.1,
+            )
+
+            if isinstance(response, dict) and "judgments" in response:
+                return self._match_judgments(response["judgments"], charts)
+            else:
+                return [self._default_judgment(c) for c in charts]
+
+        except Exception as e:
+            logger.warning(f"Batch judgment failed: {e}")
+            return [self._default_judgment(c) for c in charts]
+
+    def _build_batch_judge_prompt(
+        self, user_queries: List[str], charts: List[Dict]
+    ) -> str:
+        """Build a batch judgment prompt."""
+        chart_items = []
+        for i, (query, chart) in enumerate(zip(user_queries, charts), 1):
+            chart_items.append(f"""
+Chart {i}:
+- Question: "{query}"
+- Type: {chart.get("chart_type", "unknown")}
+- Title: {chart.get("title", "Untitled")}
+- Columns: {chart.get("config", {}).get("columns", [])}""")
+
+        return f"""You are a strict chart quality judge. Evaluate each chart against its question.
+
+{chr(10).join(chart_items)}
+
+For EACH chart, return JSON:
+{{
+    "judgments": [
+        {{"chart_index": 1, "faithfulness_score": 1-5, "issues": [...], "repair_suggestion": "..."}},
+        ...
+    ]
+}}"""
+
+    def _match_judgments(
+        self, judgments: List[Dict], charts: List[Dict]
+    ) -> List[Dict[str, Any]]:
+        """Match judgment results to corresponding charts."""
+        results = []
+
+        for i, chart in enumerate(charts):
+            judgment = None
+            for j in judgments:
+                if j.get("chart_index") == i + 1:
+                    judgment = j
+                    break
+
+            if judgment:
+                results.append(
+                    {
+                        "chart_type": chart.get("chart_type"),
+                        "faithfulness_score": judgment.get("faithfulness_score", 3),
+                        "issues": judgment.get("issues", []),
+                        "repair_suggestion": judgment.get("repair_suggestion"),
+                        "needs_repair": judgment.get("faithfulness_score", 3) < 4,
+                        "judged": True,
+                    }
+                )
+            else:
+                results.append(self._default_judgment(chart))
+
+        return results
+
+
 # Singleton instances
 chart_validator = ChartValidator()
 story_chart_selector = StoryDrivenChartSelector()
 axis_recommender = SmartAxisRecommender()
+faithfulness_judge = FaithfulnessJudge()

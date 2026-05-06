@@ -1,0 +1,24 @@
+{
+  "template_id": "trend_stability_v1",
+  "primitive": "trend_stability",
+  "category": "diagnostic",
+  "title_template": "{measure_col_label} Stability",
+  "headline_template": "Trend CoV: {cov_formatted} over {period_count} {grain_label}",
+  "key_insight_phrases": {
+    "very_stable": "{measure_col_label} is highly predictable",
+    "stable": "{measure_col_label} shows consistent variation",
+    "volatile": "{measure_col_label} is volatile — forecasting will be difficult",
+    "highly_volatile": "{measure_col_label} is highly volatile — use with caution for forecasting"
+  },
+  "stability_thresholds": {
+    "very_stable": 0.1,
+    "stable": 0.25,
+    "volatile": 0.5,
+    "highly_volatile": 1.0
+  },
+  "caveats": {
+    "denominator_unstable": "The trend itself is unstable (CoV={cov}) — volatility may mask underlying patterns",
+    "low_coverage_adequate": "Data coverage is below optimal ({coverage_pct})",
+    "minimum_data_warning": "Only {period_count} periods — stability estimate may be unreliable"
+  }
+}

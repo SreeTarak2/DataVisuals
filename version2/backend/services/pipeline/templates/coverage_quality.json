@@ -1,0 +1,23 @@
+{
+  "template_id": "coverage_quality_v1",
+  "primitive": "coverage_quality",
+  "category": "diagnostic",
+  "title_template": "Data Coverage",
+  "headline_template": "Data coverage: {coverage_pct_formatted}",
+  "key_insight_phrases": {
+    "excellent": "Data is complete and reliable for analysis",
+    "good": "Data is mostly complete",
+    "fair": "Data has notable gaps — analyses may be biased",
+    "poor": "Significant data gaps — interpret with caution"
+  },
+  "coverage_thresholds": {
+    "excellent": 0.95,
+    "good": 0.9,
+    "fair": 0.7,
+    "poor": 0.0
+  },
+  "caveats": {
+    "low_coverage_adequate": "Data coverage is suboptimal ({coverage_pct}) — missing data may bias analyses",
+    "minimum_data_warning": "Limited rows for coverage assessment"
+  }
+}

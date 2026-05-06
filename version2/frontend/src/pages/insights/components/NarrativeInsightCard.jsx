@@ -5,7 +5,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TrendingUp, AlertCircle, Link2, Users, Info, ChevronDown, ChevronUp, Database, MessageSquare } from 'lucide-react';
-import { AreaChart, Area, ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, ZAxis, Tooltip } from 'recharts';
 import { cn } from '../../../lib/utils';
 import InsightFeedback from '../../../components/features/feedback/InsightFeedback';
 

@@ -2,8 +2,6 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { aiAPI, chatAPI } from '../services/api';
 
-const DEFAULT_API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-
 /**
  * Extract text content from potentially JSON-formatted LLM responses.
  * Handles: { "response": "..." }, partial JSON, malformed streaming responses.
@@ -71,17 +69,6 @@ const extractTextFromResponse = (content) => {
   }
 };
 
-const computeHttpBase = () => {
-  try {
-    const url = new URL(DEFAULT_API_BASE);
-    url.pathname = url.pathname.replace(/\/api\/?$/, '');
-    return url;
-  } catch (err) {
-    console.warn('Failed to parse API base URL, falling back to defaults:', err);
-    return new URL('http://localhost:8000');
-  }
-};
-
 const isBackendConversationId = (value) =>
   typeof value === 'string' && /^[a-f0-9]{24}$/i.test(value);
 
@@ -115,7 +102,7 @@ const useChatStore = create(
         streamingContent: state.streamingContent + token
       })),
 
-      finishStreaming: (fullContent, chartConfig = null, sql = null, insights = [], dataSummary = '') => {
+      finishStreaming: (fullContent, chartConfig = null, sql = null, insights = [], dataSummary = '', resultTable = null, followUpSuggestions = [], showFollowUpSuggestions = false) => {
         const state = get();
         const { currentConversationId, streamingMessageId } = state;
 
@@ -131,6 +118,9 @@ const useChatStore = create(
           content: extractTextFromResponse(fullContent),
           chart_config: chartConfig,
           sql: sql ?? null,
+          result_table: resultTable,
+          follow_up_suggestions: followUpSuggestions,
+          show_follow_up_suggestions: showFollowUpSuggestions,
           insights: insights,
           data_summary: dataSummary,
           timestamp: new Date().toISOString(),
@@ -309,7 +299,9 @@ const useChatStore = create(
         try {
           set({ loading: true, error: null });
           const response = await chatAPI.getConversations();
-          const dbConversations = response.data.conversations || [];
+          const dbConversations = Array.isArray(response.data)
+            ? response.data
+            : response.data?.conversations || [];
 
           // Convert database format to store format
           const conversations = {};
@@ -320,6 +312,9 @@ const useChatStore = create(
               role: msg.role === 'ai' ? 'assistant' : msg.role, // Map "ai" to "assistant"
               content: msg.role !== 'user' ? extractTextFromResponse(msg.content) : msg.content,
               chart_config: msg.chart_config || null,
+              result_table: msg.result_table || null,
+              follow_up_suggestions: msg.follow_up_suggestions || [],
+              show_follow_up_suggestions: msg.show_follow_up_suggestions || false,
               sql: msg.sql || null,
               technical_details: msg.technical_details || null,
               timestamp: msg.timestamp || conv.created_at
@@ -412,6 +407,9 @@ const useChatStore = create(
           const aiResponse = response.data.response;
           const chart_config = response.data.chart_config;
           const sql = response.data.sql || null;
+          const result_table = response.data.result_table || response.data.resultTable || null;
+          const follow_up_suggestions = response.data.follow_up_suggestions || response.data.followUpSuggestions || [];
+          const show_follow_up_suggestions = response.data.show_follow_up_suggestions || response.data.showFollowUpSuggestions || false;
 
           // If backend returned a different conversation ID (first message), migrate the conversation
           let finalConvId = currentConvId;
@@ -439,6 +437,9 @@ const useChatStore = create(
             content: extractTextFromResponse(aiResponse) || 'No response from AI',
             chart_config: chart_config || null,
             sql,
+            result_table,
+            follow_up_suggestions,
+            show_follow_up_suggestions,
             timestamp: new Date().toISOString(),
           };
 

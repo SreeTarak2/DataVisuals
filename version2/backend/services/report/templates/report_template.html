@@ -628,6 +628,76 @@ p  { margin-bottom: 8px; }
 .stat-row:last-child { border-bottom: none; }
 .stat-label { color: #64748b; flex: 0 0 140px; }
 .stat-value { font-weight: 600; color: #1e293b; }
+
+/* ── TABLE OF CONTENTS ── */
+.toc-section {
+    padding: 48px 0 32px;
+}
+.toc-title {
+    font-size: 15pt;
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 28px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #1e40af;
+}
+.toc {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+.toc-item {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 9px 0;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 10pt;
+}
+.toc-item:last-child { border-bottom: none; }
+.toc-num {
+    flex: 0 0 28px;
+    font-size: 8pt;
+    font-weight: 700;
+    color: #6366f1;
+    letter-spacing: 0.5px;
+}
+.toc-item a {
+    color: #1e293b;
+    text-decoration: none;
+    flex: 1;
+    font-weight: 500;
+}
+.toc-item a::after {
+    content: target-counter(attr(href url), page);
+    float: right;
+    font-size: 9pt;
+    color: #94a3b8;
+    font-weight: 400;
+}
+.toc-dots {
+    flex: 1;
+    border-bottom: 1px dotted #cbd5e1;
+    margin: 0 8px 4px;
+}
+
+/* ── SECTION INTRO ── */
+.section-intro {
+    color: #64748b;
+    font-size: 9.5pt;
+    margin-bottom: 16px;
+    line-height: 1.6;
+}
+
+/* ── CHART CONTAINER ── */
+.chart-container {
+    margin: 16px 0;
+    padding: 16px;
+    background: #fafafa;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    page-break-inside: avoid;
+}
 </style>
 </head>
 <body>
@@ -682,9 +752,31 @@ p  { margin-bottom: 8px; }
 
 
 <!-- ══════════════════════════════════════════
+     TABLE OF CONTENTS
+══════════════════════════════════════════ -->
+<section class="toc-section">
+    <h2 class="toc-title">Table of Contents</h2>
+    <nav class="toc">
+        <div class="toc-item"><span class="toc-num">01</span><a href="#section-executive">Executive Narrative</a></div>
+        <div class="toc-item"><span class="toc-num">02</span><a href="#section-findings">Key Findings</a></div>
+        <div class="toc-item"><span class="toc-num">03</span><a href="#section-risks">Risks &amp; Warnings</a></div>
+        <div class="toc-item"><span class="toc-num">04</span><a href="#section-actions">Recommended Actions</a></div>
+        <div class="toc-item"><span class="toc-num">05</span><a href="#section-metrics">Metrics to Monitor</a></div>
+        <div class="toc-item"><span class="toc-num">06</span><a href="#section-correlations">Statistical Analysis: Relationships</a></div>
+        <div class="toc-item"><span class="toc-num">07</span><a href="#section-trends">Statistical Analysis: Trends</a></div>
+        <div class="toc-item"><span class="toc-num">08</span><a href="#section-anomalies">Anomaly Detection</a></div>
+        <div class="toc-item"><span class="toc-num">09</span><a href="#section-quality">Data Quality Report</a></div>
+        <div class="toc-item"><span class="toc-num">10</span><a href="#section-appendix">Appendix: Column Statistics</a></div>
+    </nav>
+</section>
+
+<div class="page-break"></div>
+
+
+<!-- ══════════════════════════════════════════
      EXECUTIVE NARRATIVE
 ══════════════════════════════════════════ -->
-<section class="section">
+<section class="section" id="section-executive" style="page-break-after: always;">
     <h2>Executive Narrative</h2>
 
     <div class="narrative-hook">
@@ -726,7 +818,7 @@ p  { margin-bottom: 8px; }
 <!-- ══════════════════════════════════════════
      KEY FINDINGS
 ══════════════════════════════════════════ -->
-<section class="section">
+<section class="section" id="section-findings">
     <h2>Key Findings</h2>
     <p class="section-intro">
         AI-generated narrative insights ranked by business impact. Each finding is drawn
@@ -741,7 +833,7 @@ p  { margin-bottom: 8px; }
 <!-- ══════════════════════════════════════════
      RISKS & WARNINGS
 ══════════════════════════════════════════ -->
-<section class="section">
+<section class="section" id="section-risks">
     <h2>Risks &amp; Warnings</h2>
     <p class="section-intro">
         Patterns that represent risk to your business goals. Each item includes a specific
@@ -756,7 +848,7 @@ p  { margin-bottom: 8px; }
 <!-- ══════════════════════════════════════════
      ACTION PLAN
 ══════════════════════════════════════════ -->
-<section class="section">
+<section class="section" id="section-actions">
     <h2>Recommended Actions</h2>
     <p class="section-intro">
         Prioritized actions derived from the findings above. Start with the primary action
@@ -771,7 +863,7 @@ p  { margin-bottom: 8px; }
 <!-- ══════════════════════════════════════════
      METRICS TO MONITOR
 ══════════════════════════════════════════ -->
-<section class="section">
+<section class="section" id="section-metrics">
     <h2>Metrics to Monitor</h2>
     <p class="section-intro">
         Track these metrics going forward. Each has a specific threshold that should trigger
@@ -786,12 +878,13 @@ p  { margin-bottom: 8px; }
 <!-- ══════════════════════════════════════════
      STATISTICAL ANALYSIS — CORRELATIONS
 ══════════════════════════════════════════ -->
-<section class="section">
+<section class="section" id="section-correlations">
     <h2>Statistical Analysis: Relationships</h2>
     <p class="section-intro">
         Variable pairs with measurable relationships. Strength is based on the
         absolute correlation coefficient; direction indicates positive or inverse movement.
     </p>
+    <div class="chart-container">{{CORRELATION_CHART}}</div>
     {{CORRELATIONS_TABLE}}
 </section>
 
@@ -801,11 +894,12 @@ p  { margin-bottom: 8px; }
 <!-- ══════════════════════════════════════════
      STATISTICAL ANALYSIS — TRENDS
 ══════════════════════════════════════════ -->
-<section class="section">
+<section class="section" id="section-trends">
     <h2>Statistical Analysis: Trends</h2>
     <p class="section-intro">
         Time-based directional patterns detected across your variables.
     </p>
+    <div class="chart-container">{{TREND_CHART}}</div>
     {{TRENDS_TABLE}}
 </section>
 
@@ -815,7 +909,7 @@ p  { margin-bottom: 8px; }
 <!-- ══════════════════════════════════════════
      ANOMALY DETECTION
 ══════════════════════════════════════════ -->
-<section class="section">
+<section class="section" id="section-anomalies">
     <h2>Anomaly Detection</h2>
     <p class="section-intro">
         Values and patterns that deviate significantly from expected behavior.
@@ -830,12 +924,13 @@ p  { margin-bottom: 8px; }
 <!-- ══════════════════════════════════════════
      DATA QUALITY REPORT
 ══════════════════════════════════════════ -->
-<section class="section">
+<section class="section" id="section-quality">
     <h2>Data Quality Report</h2>
     <p class="section-intro">
         A comprehensive assessment of the dataset's completeness, uniqueness, and consistency.
         Quality issues can affect the reliability of all findings above.
     </p>
+    <div class="chart-container">{{QUALITY_CHART}}</div>
     {{DATA_QUALITY_SECTION}}
 </section>
 
@@ -845,7 +940,7 @@ p  { margin-bottom: 8px; }
 <!-- ══════════════════════════════════════════
      APPENDIX — COLUMN STATISTICS
 ══════════════════════════════════════════ -->
-<section class="section">
+<section class="section" id="section-appendix">
     <h2>Appendix: Column Statistics</h2>
     <p class="section-intro">
         Summary statistics for every column analyzed.

@@ -9,6 +9,8 @@ Generates comprehensive analytical reports with:
 - Appendix: column statistics
 """
 
+import base64
+import io
 import json
 import logging
 import re
@@ -39,7 +41,7 @@ class ReportGenerator:
             raise ValueError(f"Dataset not found: {dataset_id}")
 
         story = await self._fetch_story(dataset_id, dataset)
-        report_data = self._gather_report_data(dataset, story)
+        report_data = self._gather_report_data(dataset, story, include_charts=include_charts)
         html_content = self._render_template(report_data)
 
         if preview:
@@ -293,7 +295,7 @@ class ReportGenerator:
                 "reading_time": metadata.get("reading_time_minutes", 3),
             }
 
-    def _gather_report_data(self, dataset: Dict, story: Optional[Dict]) -> Dict:
+    def _gather_report_data(self, dataset: Dict, story: Optional[Dict], include_charts: bool = True) -> Dict:
         """Gather and normalize all data for the report."""
         insights = dataset.get("insights", {})
         dq = insights.get("data_quality", dataset.get("data_quality", {}))
@@ -363,6 +365,10 @@ class ReportGenerator:
             "count_anomalies": len(self._get_safe_list(insights, "anomalies")),
             "count_trends": len(self._get_safe_list(insights, "trends")),
             "health_score": dq.get("health_score", 0),
+            # Charts (base64 PNG embedded in HTML img tags)
+            "trend_chart_html": self._chart_trends(self._get_safe_list(insights, "trends")) if include_charts else "",
+            "correlation_chart_html": self._chart_correlations(self._get_safe_list(insights, "correlations")) if include_charts else "",
+            "quality_chart_html": self._chart_quality(dq) if include_charts else "",
         }
 
     # ──────────────────────────────────────────────────────────────────
@@ -768,6 +774,140 @@ class ReportGenerator:
         </table>"""
 
     # ──────────────────────────────────────────────────────────────────
+    #  CHART GENERATION
+    # ──────────────────────────────────────────────────────────────────
+
+    def _make_chart_img(self, fig) -> str:
+        """Save a matplotlib figure as a base64 PNG and return an HTML img tag."""
+        import matplotlib.pyplot as plt
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+        buf.seek(0)
+        encoded = base64.b64encode(buf.read()).decode("utf-8")
+        plt.close(fig)
+        return (
+            f'<img src="data:image/png;base64,{encoded}" '
+            'style="width:100%;max-width:640px;height:auto;display:block;'
+            'margin:14px auto;border-radius:6px;border:1px solid #e2e8f0;">'
+        )
+
+    def _chart_trends(self, trends: List[Dict]) -> str:
+        if not trends:
+            return ""
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            items = trends[:12]
+            labels = [t.get("column", t.get("metric", f"Var {i+1}"))[:22] for i, t in enumerate(items)]
+            directions = [t.get("direction", "stable") for t in items]
+            values = [1 if d == "increasing" else -1 if d == "decreasing" else 0 for d in directions]
+            colors = ["#22c55e" if v == 1 else "#ef4444" if v == -1 else "#94a3b8" for v in values]
+
+            fig, ax = plt.subplots(figsize=(8, max(2.5, len(items) * 0.42)), facecolor="white")
+            ax.barh(labels, values, color=colors, alpha=0.82, height=0.6)
+            ax.axvline(0, color="#475569", linewidth=0.8)
+            ax.set_xlim(-1.5, 1.5)
+            ax.set_xticks([-1, 0, 1])
+            ax.set_xticklabels(["Decreasing", "Stable", "Increasing"], fontsize=8, color="#475569")
+            ax.tick_params(axis="y", labelsize=8, colors="#334155")
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["bottom"].set_color("#e2e8f0")
+            ax.spines["left"].set_color("#e2e8f0")
+            ax.set_facecolor("#fafafa")
+            ax.set_title("Trend Directions by Variable", fontsize=10, fontweight="bold", color="#0f172a", pad=8)
+            fig.tight_layout()
+            return self._make_chart_img(fig)
+        except Exception as e:
+            logger.warning(f"Trend chart failed: {e}")
+            return ""
+
+    def _chart_correlations(self, correlations: List[Dict]) -> str:
+        if not correlations:
+            return ""
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            top = sorted(
+                correlations,
+                key=lambda c: abs(float(c.get("value", c.get("correlation", 0)) or 0)),
+                reverse=True,
+            )[:12]
+            if not top:
+                return ""
+
+            labels = [
+                f"{c.get('column1', c.get('x', '?'))[:10]} / {c.get('column2', c.get('y', '?'))[:10]}"
+                for c in top
+            ]
+            values = [float(c.get("value", c.get("correlation", 0)) or 0) for c in top]
+            colors = ["#3b82f6" if v >= 0 else "#ef4444" for v in values]
+
+            fig, ax = plt.subplots(figsize=(8, max(2.5, len(top) * 0.42)), facecolor="white")
+            ax.barh(labels, values, color=colors, alpha=0.82, height=0.6)
+            ax.axvline(0, color="#475569", linewidth=0.8)
+            ax.set_xlim(-1, 1)
+            ax.set_xlabel("Correlation coefficient (r)", fontsize=8, color="#475569")
+            ax.tick_params(axis="both", labelsize=8, colors="#334155")
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["bottom"].set_color("#e2e8f0")
+            ax.spines["left"].set_color("#e2e8f0")
+            ax.set_facecolor("#fafafa")
+            ax.set_title("Top Correlations by Strength", fontsize=10, fontweight="bold", color="#0f172a", pad=8)
+            fig.tight_layout()
+            return self._make_chart_img(fig)
+        except Exception as e:
+            logger.warning(f"Correlation chart failed: {e}")
+            return ""
+
+    def _chart_quality(self, dq: Dict) -> str:
+        if not dq:
+            return ""
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            labels = ["Overall Health", "Completeness", "Uniqueness", "Consistency"]
+            values = [
+                min(100, max(0, float(dq.get("health_score", 0) or 0))),
+                min(100, max(0, float(dq.get("completeness", 0) or 0))),
+                min(100, max(0, float(dq.get("uniqueness", 0) or 0))),
+                min(100, max(0, float(dq.get("consistency", 0) or 0))),
+            ]
+            colors = ["#22c55e" if v >= 80 else "#f59e0b" if v >= 60 else "#ef4444" for v in values]
+
+            fig, ax = plt.subplots(figsize=(7, 3), facecolor="white")
+            bars = ax.bar(range(len(labels)), values, color=colors, alpha=0.85, width=0.5)
+            ax.set_xticks(range(len(labels)))
+            ax.set_xticklabels(labels, fontsize=9, color="#334155")
+            ax.set_ylim(0, 115)
+            ax.set_ylabel("Score (%)", fontsize=8, color="#475569")
+            ax.tick_params(axis="y", labelsize=8, colors="#475569")
+            for bar, val in zip(bars, values):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2, bar.get_height() + 2,
+                    f"{int(val)}%", ha="center", va="bottom",
+                    fontsize=9, fontweight="bold", color="#1e293b",
+                )
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["bottom"].set_color("#e2e8f0")
+            ax.spines["left"].set_color("#e2e8f0")
+            ax.set_facecolor("#fafafa")
+            ax.set_title("Data Quality Scorecard", fontsize=10, fontweight="bold", color="#0f172a", pad=8)
+            fig.tight_layout()
+            return self._make_chart_img(fig)
+        except Exception as e:
+            logger.warning(f"Quality chart failed: {e}")
+            return ""
+
+    # ──────────────────────────────────────────────────────────────────
     #  RENDER
     # ──────────────────────────────────────────────────────────────────
 
@@ -806,6 +946,9 @@ class ReportGenerator:
             "{{ANOMALIES_TABLE}}": self._build_anomalies(data["anomalies"]),
             "{{DATA_QUALITY_SECTION}}": self._build_data_quality(data["data_quality"]),
             "{{COLUMN_STATS_TABLE}}": self._build_column_stats(data["column_stats"]),
+            "{{TREND_CHART}}": data.get("trend_chart_html", ""),
+            "{{CORRELATION_CHART}}": data.get("correlation_chart_html", ""),
+            "{{QUALITY_CHART}}": data.get("quality_chart_html", ""),
         }
 
         result = template

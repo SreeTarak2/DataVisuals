@@ -34,28 +34,6 @@ class Settings:
     # reliability, DeepSeek V3.2 for complex reasoning tasks.
     # -------------------------------------------------------------------------
     OPENROUTER_MODELS: Dict[str, Dict[str, Any]] = {
-        # FREE SPECIFIC — StepFun 3.5 Flash (consistent free model)
-        # #3 on OpenRouter rankings. Fast, reasoning-capable, reliable.
-        "stepfun_flash": {
-            "model": "stepfun/step-3.5-flash:free",
-            "name": "StepFun 3.5 Flash",
-            "strengths": [
-                "speed",
-                "reasoning",
-                "long_context",
-                "instruction_following",
-            ],
-            "best_for": [
-                "chat_streaming",
-                "conversational",
-                "rewrite_engine",
-                "draft_generation",
-                "simple_query",
-            ],
-            "context_window": 256000,
-            "cost": "free",
-            "reasoning_config": {"effort": "medium", "exclude": False},
-        },
         # PAID — Gemini 2.5 Flash Lite ($0.10/$0.40 per M)
         # Cheapest proprietary model. 1M context. Ultra-fast.
         "gemini_flash_lite": {
@@ -241,23 +219,20 @@ class Settings:
     }
 
     FALLBACKS: Dict[str, List[str]] = {
-        # Chat — Gemini primary (paid), OpenRouter Free fallback (free)
+        # Chat — Gemini primary (paid), DeepSeek fallback
         "chat_engine": [
             "gemini_flash_lite",
             "openrouter_free",
-            "stepfun_flash",
             "deepseek_v32",
         ],
         "chat_streaming": [
             "gemini_flash_lite",
             "openrouter_free",
-            "stepfun_flash",
             "deepseek_v32",
         ],
         "conversational": [
             "gemini_flash_lite",
             "openrouter_free",
-            "stepfun_flash",
             "deepseek_v32",
         ],
         # Complex analysis — DeepSeek primary, Chimera reasoning backup, Mistral cheap fallback
@@ -292,28 +267,24 @@ class Settings:
         "requirements_synthesis": ["deepseek_v32", "minimax_m25"],
         # Chart explanation — Qwen primary, DeepSeek backup
         "chart_explanation": ["qwen_2.5_72b", "deepseek_v32"],
-        "visualization_engine": ["mistral_small_32", "stepfun_flash"],
-        "draft_generation": ["stepfun_flash", "mistral_small_32"],
-        "simple_query": ["stepfun_flash", "mistral_small_32"],
-        "rewrite_engine": ["stepfun_flash", "mistral_small_32"],
+        "visualization_engine": ["mistral_small_32"],
+        "draft_generation": ["mistral_small_32"],
+        "simple_query": ["mistral_small_32"],
+        "rewrite_engine": ["mistral_small_32"],
         "intent_engine": [
             "gemini_flash_lite_intent",
-            "stepfun_flash",
             "mistral_small_32",
         ],
         "query_understanding": [
             "gemini_flash_lite_intent",
-            "stepfun_flash",
             "mistral_small_32",
         ],
-        "validation": ["mistral_small_32", "stepfun_flash"],
+        "validation": ["mistral_small_32"],
         "chart_image_analysis": ["mistral_small_32", "deepseek_v32"],
         "visual_extraction": ["mistral_small_32", "deepseek_v32"],
         "layout_from_image": ["mistral_small_32", "deepseek_v32"],
         # Default
         "default": [
-            "openrouter_free",
-            "stepfun_flash",
             "deepseek_v32",
             "mistral_small_32",
         ],

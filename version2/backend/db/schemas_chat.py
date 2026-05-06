@@ -75,6 +75,9 @@ class ChatResponse(BaseModel):
 
     response: str
     chart: Optional[Dict[str, Any]] = None
+    result_table: Optional[Dict[str, Any]] = None
+    follow_up_suggestions: Optional[list[str]] = None
+    show_follow_up_suggestions: bool = False
     metadata_used: bool = False
     rag_used: bool = False
 

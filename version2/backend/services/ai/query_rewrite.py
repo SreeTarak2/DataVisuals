@@ -358,6 +358,15 @@ def _post_validate(original: str, rewritten: str) -> str:
     rewritten_clean = rewritten.strip()
     original_clean = original.strip()
 
+    # Check if rewritten is SQL instead of natural language — reject
+    sql_pattern = re.compile(r'\b(SELECT|FROM|WHERE|GROUP BY|ORDER BY|INSERT|UPDATE|DELETE)\b', re.IGNORECASE)
+    if sql_pattern.search(rewritten_clean):
+        logger.warning(
+            f"Rewrite validation: rewriter produced SQL instead of natural language. "
+            f"Using original: {original_clean[:50]}"
+        )
+        return original
+
     if len(rewritten_clean.split()) <= max(3, len(original_clean.split()) // 4):
         logger.warning(
             f"Rewrite validation: too short "
@@ -409,7 +418,7 @@ def _post_validate(original: str, rewritten: str) -> str:
             )
             return original
 
-    if len(rewritten_clean.split()) > len(original_clean.split()) * 3:
+    if len(rewritten_clean.split()) > len(original_clean.split()) * 5:
         logger.warning(
             f"Rewrite validation: too long "
             f"({len(rewritten_clean.split())} vs {len(original_clean.split())}), "

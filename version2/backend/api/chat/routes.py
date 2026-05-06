@@ -18,15 +18,20 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from db.schemas import ChatRequest
 from services.auth_service import auth_service, get_current_user
 from services.ai.ai_service import ai_service
 from services.audit_service import audit_service
+from services.feedback.event_logger import event_logger
+from services.feedback.user_memory import user_memory_service
+from services.feedback.signal_classifier import signal_classifier
 from core.rate_limiter import limiter, RateLimits
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+security = HTTPBearer()
 
 CHAT_UPLOAD_DIR = (
     Path(__file__).resolve().parent.parent.parent / "data" / "uploads" / "chat_images"
@@ -71,6 +76,9 @@ class WebSocketRateLimiter:
         return cls._memory_connections.get(user_id, 0)
 
 
+from services.conversations import conversation_service
+
+
 @router.get("/conversations")
 @limiter.limit(RateLimits.CHAT_LIST)
 async def list_conversations(
@@ -79,8 +87,6 @@ async def list_conversations(
     limit: int = Query(20, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
 ):
-    from services.conversations.conversation_service import conversation_service
-
     conversations = await conversation_service.get_user_conversations(
         user_id=current_user["id"],
         page=page,
@@ -96,8 +102,6 @@ async def get_conversation(
     conversation_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    from services.conversations.conversation_service import conversation_service
-
     conversation = await conversation_service.get_conversation(
         conversation_id=conversation_id,
         user_id=current_user["id"],
@@ -114,8 +118,6 @@ async def delete_conversation(
     conversation_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    from services.conversations.conversation_service import conversation_service
-
     await conversation_service.delete_conversation(
         conversation_id=conversation_id,
         user_id=current_user["id"],
@@ -131,8 +133,6 @@ async def update_conversation_title(
     title: str,
     current_user: dict = Depends(get_current_user),
 ):
-    from services.conversations.conversation_service import conversation_service
-
     await conversation_service.update_title(
         conversation_id=conversation_id,
         user_id=current_user["id"],
@@ -150,6 +150,39 @@ async def websocket_chat(websocket: WebSocket, token: Optional[str] = None):
     user_id = None
 
     try:
+        # If no token in query params, wait for auth message from client
+        if not token:
+            try:
+                # Wait for the first message to contain authentication
+                first_message = await asyncio.wait_for(
+                    websocket.receive_json(), timeout=30.0
+                )
+                if first_message.get("type") == "auth":
+                    token = first_message.get("token")
+                else:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "detail": "Authentication required. First message must be auth with token.",
+                        }
+                    )
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                    return
+            except asyncio.TimeoutError:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "detail": "Authentication timeout. Please send auth token within 30 seconds.",
+                    }
+                )
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+            except WebSocketDisconnect:
+                return
+            except Exception as e:
+                logger.error(f"Error receiving auth message: {e}")
+                return
+
         if not token:
             await websocket.send_json(
                 {
@@ -160,19 +193,19 @@ async def websocket_chat(websocket: WebSocket, token: Optional[str] = None):
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
-        user = await get_current_user(token)
-        user_id = user["id"]
-
-        connection_count = WebSocketRateLimiter.get_connection_count(user_id)
-        if connection_count >= settings.MAX_WEBSOCKET_CONNECTIONS:
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "detail": f"Maximum concurrent connections ({settings.MAX_WEBSOCKET_CONNECTIONS}) reached.",
-                }
-            )
-            await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER)
+        user = await auth_service.get_user_from_token(token)
+        if not user:
+            await websocket.send_json({"type": "error", "detail": "Invalid token"})
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
+
+        try:
+            await websocket.send_json({"type": "auth_success"})
+        except Exception as e:
+            logger.error(f"Failed to send auth success: {e}")
+        user_id = user["id"]
+        workspace_id = user.get("workspace_id", user_id)
+        event_logger.start_session(user_id, workspace_id)
 
         connection_tracked = True
         WebSocketRateLimiter.increment_connection(user_id)
@@ -185,18 +218,38 @@ async def websocket_chat(websocket: WebSocket, token: Optional[str] = None):
 
         try:
             while True:
-                data = await websocket.receive_json()
+                try:
+                    data = await websocket.receive_json()
+                except WebSocketDisconnect as wsd:
+                    logger.info(f"WebSocket disconnected by client {user_id}: {wsd}")
+                    break
+                except Exception as recv_err:
+                    logger.error(f"Failed to receive websocket message: {recv_err}", exc_info=True)
+                    break
                 client_message_id = data.get("clientMessageId", str(uuid4()))
                 message_type = data.get("type")
+                payload = data.get("payload", {}) if isinstance(data.get("payload", {}), dict) else {}
 
-                if message_type == "chat_message":
-                    payload = data.get("payload", {})
+                legacy_chat_message = (
+                    message_type is None
+                    and (
+                        "message" in data
+                        or "datasetId" in data
+                        or "conversationId" in data
+                        or "streaming" in data
+                    )
+                )
+
+                if message_type == "chat_message" or legacy_chat_message:
+                    if legacy_chat_message:
+                        payload = data
 
                     async def safe_send(message: dict):
                         try:
                             await websocket.send_json(ensure_json_serializable(message))
                             return True
-                        except Exception:
+                        except Exception as send_err:
+                            logger.error(f"Failed to send WebSocket message (type={message.get('type')}): {send_err}")
                             return False
 
                     try:
@@ -208,26 +261,67 @@ async def websocket_chat(websocket: WebSocket, token: Optional[str] = None):
                                 }
                             )
 
-                            async for (
-                                chunk
-                            ) in ai_service.process_chat_message_streaming(
-                                query=payload.get("message", "").strip(),
-                                dataset_id=payload.get("datasetId"),
-                                user_id=user["id"],
-                                conversation_id=payload.get("conversationId"),
-                                mode=payload.get("mode", "learning"),
-                            ):
+                            try:
+                                chunk_count = 0
+                                async for (
+                                    chunk
+                                ) in ai_service.process_chat_message_streaming(
+                                    query=payload.get("message", "").strip(),
+                                    dataset_id=payload.get("datasetId"),
+                                    user_id=user["id"],
+                                    conversation_id=payload.get("conversationId"),
+                                ):
+                                    chunk_type = chunk.get("type", "unknown")
+                                    if chunk_type == "done":
+                                        logger.info(f"📤 Streaming: Sending DONE chunk ({chunk_count} chunks total)")
+                                    elif chunk_count % 20 == 0 or chunk_type not in ["token"]:
+                                        logger.debug(f"📤 Streaming: Chunk {chunk_count} type={chunk_type}")
+                                    chunk_count += 1
+                                    
+                                    send_result = await safe_send(
+                                        {
+                                            "type": "stream_chunk",
+                                            "clientMessageId": client_message_id,
+                                            "chunk": chunk,
+                                        }
+                                    )
+                                    if not send_result and chunk_type == "done":
+                                        logger.error(f"CRITICAL: Failed to send final DONE event! Conv messages will not finalize.")
+                                        break
+                                
+                                logger.info(f"✓ Streaming: Generator finished (sent {chunk_count} total chunks)")
+                            except Exception as streaming_error:
+                                logger.error(
+                                    f"Streaming error: {streaming_error}", exc_info=True
+                                )
                                 await safe_send(
                                     {
-                                        "type": "stream_chunk",
+                                        "type": "error",
                                         "clientMessageId": client_message_id,
-                                        "chunk": chunk,
+                                        "detail": str(streaming_error),
                                     }
                                 )
 
                             await safe_send(
                                 {
                                     "type": "stream_end",
+                                    "clientMessageId": client_message_id,
+                                }
+                            )
+                        elif message_type == "cancel" and client_message_id:
+                            # Handle cancel message
+                            # The frontend sends a cancel message with the clientMessageId to stop
+                            # an ongoing streaming operation
+                            logger.info(
+                                f"Cancel request received for message {client_message_id}"
+                            )
+                            # We need to cancel the ongoing streaming operation
+                            # This is a placeholder - the actual cancellation logic needs to be implemented
+                            # in ai_service.process_chat_message_streaming to support cancellation
+                            # For now, we'll just acknowledge the cancel request
+                            await safe_send(
+                                {
+                                    "type": "cancel_ack",
                                     "clientMessageId": client_message_id,
                                 }
                             )
@@ -247,11 +341,18 @@ async def websocket_chat(websocket: WebSocket, token: Optional[str] = None):
                                     "conversationId": response.get("conversation_id"),
                                     "message": response.get("response"),
                                     "chartConfig": response.get("chart_config"),
+                                    "resultTable": response.get("result_table"),
                                     "technicalDetails": response.get(
                                         "technical_details"
                                     ),
                                     "insights": response.get("insights", []),
                                     "data_summary": response.get("data_summary", ""),
+                                    "follow_up_suggestions": response.get(
+                                        "follow_up_suggestions", []
+                                    ),
+                                    "show_follow_up_suggestions": response.get(
+                                        "show_follow_up_suggestions", False
+                                    ),
                                 }
                             ):
                                 break
@@ -292,6 +393,7 @@ async def websocket_chat(websocket: WebSocket, token: Optional[str] = None):
                 logger.info(
                     f"WebSocket connection closed for user {user_id} (remaining: {remaining_count})"
                 )
+                event_logger.end_session()
             except Exception as cleanup_error:
                 logger.error(
                     f"Failed to decrement connection for {user_id}: {cleanup_error}",

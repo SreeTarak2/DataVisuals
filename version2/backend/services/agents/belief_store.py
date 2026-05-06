@@ -741,8 +741,9 @@ class PassiveBeliefIngestion:
             if len(sent) < 25 or len(sent) > 300:
                 continue
             if re.match(
-                r"^(Here\s|Let me|I can|Sure|I\'ll|I will|Great|Of course|"
-                r"Absolutely|You can|Feel free|Would you|Do you want)",
+                r"^(Here\s|Here'|Let me|I can|Sure|I\'ll|I will|Great|Of course|"
+                r"Absolutely|You can|Feel free|Would you|Do you want|I found|Based on|Looking at|The data|According to|"
+                r"This means|It appears|The results?|This shows|What i|In the)",
                 sent,
                 re.I,
             ):

@@ -1,2 +1,3 @@
-from api.$module.routes import router as ${module}_router
-__all__ = ["${module}_router"]
+from api.datasets.routes import router as datasets_router
+
+__all__ = ["datasets_router"]

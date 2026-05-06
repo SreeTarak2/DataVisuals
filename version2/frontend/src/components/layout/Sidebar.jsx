@@ -184,7 +184,7 @@ const Sidebar = () => {
                     "relative flex items-center rounded-lg transition-all duration-150 group",
                     expanded ? "h-9 px-2.5 gap-2.5" : "h-10 w-10 mx-auto justify-center",
                     isActive
-                      ? "text-[var(--text-header)]"
+                      ? "text-(--text-header)"
                       : "hover:opacity-80"
                   )
                 }
@@ -201,8 +201,8 @@ const Sidebar = () => {
                         className={cn(
                           "absolute rounded-full",
                           expanded
-                            ? "left-0 top-1 bottom-1 w-[4px]"
-                            : "left-[-4px] top-1.5 bottom-1.5 w-[5px]"
+                            ? "left-0 top-1 bottom-1 w-1"
+                            : "-left-1 top-1.5 bottom-1.5 w-1.25"
                         )}
                         style={{
                           backgroundColor: 'var(--accent-primary)',
@@ -218,7 +218,7 @@ const Sidebar = () => {
                         className="absolute inset-x-1 inset-y-0.5 rounded-xl -z-10 bg-accent-primary/10 border border-accent-primary/20"
                       />
                     )}
-                    <item.icon className={cn("shrink-0", expanded ? "w-[18px] h-[18px]" : "w-5 h-5")} />
+                    <item.icon className={cn("shrink-0", expanded ? "w-4.5 h-4.5" : "w-5 h-5")} />
                     {expanded && (
                       <span className="text-sm font-medium truncate flex-1">{item.label}</span>
                     )}
@@ -281,11 +281,18 @@ const Sidebar = () => {
               ) : (
                 <>
                   {recentChats.map((chat) => (
-                    <button
+                    <div
                       key={chat.id}
-                      type="button"
                       onClick={() => openConversation(chat.id, chat.datasetId)}
-                      className="group w-full text-left rounded-lg px-2.5 py-2 transition-all hover:bg-opacity-80 flex items-start justify-between gap-2"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          openConversation(chat.id, chat.datasetId);
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      className="group w-full text-left rounded-lg px-2.5 py-2 transition-all hover:bg-opacity-80 flex items-start justify-between gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent-primary)/40"
                       style={{
                         color: currentConversationId === chat.id ? 'var(--text-header)' : 'var(--text-secondary)',
                         backgroundColor: currentConversationId === chat.id ? 'var(--accent-primary-light)' : 'transparent',
@@ -311,7 +318,7 @@ const Sidebar = () => {
                       >
                         <Trash2 size={14} />
                       </button>
-                    </button>
+                    </div>
                   ))}
 
                   <button

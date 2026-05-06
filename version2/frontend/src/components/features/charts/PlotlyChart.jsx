@@ -613,6 +613,8 @@ const CustomTooltip = ({ visible, x, y, data }) => {
 
 const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartType = 'bar', onPointClick, pointIntelligence, chartTitle, colorOffset = 0 }) => {
   const plotRef = useRef(null);
+  const resizeObserverRef = useRef(null);
+  const resizeFrameRef = useRef(null);
   const dataHashRef = useRef(null);
   const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, data: null });
   const [isLoading, setIsLoading] = useState(true);
@@ -1096,6 +1098,8 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             ...defaultLayout,
             ...layout,
             annotations: mergedAnnotations,
+            autosize: true,
+            useResizeHandler: true,
           }, {
             responsive: true,
             displayModeBar: 'hover',    // Show toolbar only on hover — cleaner
@@ -1258,6 +1262,27 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             onPointClick(clickData);
           });
 
+          const scheduleResize = () => {
+            if (!plotRef.current || !window.Plotly) return;
+            if (resizeFrameRef.current) cancelAnimationFrame(resizeFrameRef.current);
+            resizeFrameRef.current = requestAnimationFrame(() => {
+              try {
+                window.Plotly.Plots.resize(plotRef.current);
+              } catch (err) {
+                console.debug('Plotly resize skipped:', err);
+              }
+            });
+          };
+
+          // Observe the chart container itself so chart cards respond to grid/flex changes,
+          // not just browser window resizes.
+          resizeObserverRef.current?.disconnect();
+          resizeObserverRef.current = new ResizeObserver(() => {
+            scheduleResize();
+          });
+          resizeObserverRef.current.observe(plotRef.current.parentElement || plotRef.current);
+          scheduleResize();
+
         }
       } catch (error) {
         console.error("Plotly load error:", error);
@@ -1268,6 +1293,14 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
     loadPlotly();
     const cleanupPlotElement = plotRef.current;
     return () => {
+      if (resizeFrameRef.current) {
+        cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      if (resizeObserverRef.current) {
+        resizeObserverRef.current.disconnect();
+        resizeObserverRef.current = null;
+      }
       if (cleanupPlotElement && window.Plotly) {
         try {
           window.Plotly.purge(cleanupPlotElement);

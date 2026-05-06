@@ -1,6 +1,7 @@
 import logging
 import math
 from pathlib import Path
+from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -19,6 +20,8 @@ def _sanitize_for_json(obj):
         return {k: _sanitize_for_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [_sanitize_for_json(item) for item in obj]
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
     elif isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
@@ -55,6 +58,30 @@ app.add_middleware(
 async def startup_event():
     logger.info("Starting up the application...")
     await connect_to_mongo()
+    from services.feedback.context_store import context_store
+
+    await context_store.init_indexes()
+    logger.info("Context store initialized")
+    
+    # Initialize token budgeting system
+    try:
+        from services.prompts.measure_templates import init_token_budgets
+        init_token_budgets()
+        logger.info("Token budgets initialized")
+    except Exception as e:
+        logger.warning(f"Token budget initialization failed (non-critical): {e}")
+    
+    # Preload embedding model at startup to avoid cold-start delay (Issue #8)
+    # This ensures the BAAI/bge-large-en-v1.5 model is loaded before first chat
+    try:
+        from services.agents.belief_store import get_belief_store
+        belief_store = get_belief_store()
+        if belief_store and belief_store.embedding_model:
+            logger.info(f"✓ Embedding model preloaded at startup: {belief_store.embedding_model_name}")
+        else:
+            logger.warning("Embedding model preload skipped (not available or disabled)")
+    except Exception as e:
+        logger.warning(f"Embedding model preload failed (non-critical): {e}")
 
 
 @app.on_event("shutdown")
@@ -77,11 +104,13 @@ async def health_check():
 
 
 from api.auth import auth_router
+from api.databases import databases_router
 from api.datasets import datasets_router
 from api.chat import chat_router
 from api.dashboard import dashboard_router
 from api.charts import charts_router
 from api.analysis import analysis_router
+from api.ai import ai_router
 from api.insights import insights_router
 from api.reports import reports_router
 from api.agentic import agentic_router
@@ -92,6 +121,9 @@ from api import models
 
 app.include_router(auth_router, prefix="/api/auth", tags=["1. Authentication"])
 app.include_router(datasets_router, prefix="/api/datasets", tags=["2. Datasets"])
+app.include_router(
+    databases_router, prefix="/api/databases", tags=["2.5 Database Connections"]
+)
 app.include_router(chat_router, prefix="/api/chat", tags=["3. AI Chat & Conversations"])
 
 app.include_router(
@@ -106,6 +138,7 @@ app.include_router(
 app.include_router(
     analysis_router, prefix="/api/ai", tags=["5. Advanced AI & Analysis"]
 )
+app.include_router(ai_router, prefix="/api/ai", tags=["5.5 AI Dashboard Design"])
 app.include_router(insights_router, prefix="/api/insights", tags=["6. Insights"])
 
 app.include_router(reports_router, prefix="/api", tags=["6.5 Reports"])
@@ -125,9 +158,7 @@ app.include_router(
     privacy_router, prefix="/api/privacy", tags=["8. Privacy & Data Protection"]
 )
 
-app.include_router(
-    kpi_router, prefix="/api/kpi", tags=["9. Financial KPIs & Metrics"]
-)
+app.include_router(kpi_router, prefix="/api/kpi", tags=["9. Financial KPIs & Metrics"])
 
 _chat_images_dir = Path(__file__).resolve().parent / "data" / "uploads" / "chat_images"
 _chat_images_dir.mkdir(parents=True, exist_ok=True)

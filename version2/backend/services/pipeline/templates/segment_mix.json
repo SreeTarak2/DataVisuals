@@ -1,0 +1,17 @@
+{
+  "template_id": "segment_mix_v1",
+  "primitive": "segment_mix",
+  "category": "diagnostic",
+  "title_template": "{dimension_col_label} Mix",
+  "headline_template": "{measure_col_label} is led by {top_segments}",
+  "key_insight_phrases": {
+    "concentrated": "{measure_col_label} is concentrated in a few {dimension_col_label} segments",
+    "balanced": "{measure_col_label} is fairly balanced across {dimension_col_label}",
+    "bifurcated": "{measure_col_label} is bifurcated: strong in {top_segments}, weak elsewhere"
+  },
+  "caveats": {
+    "low_coverage_adequate": "Data coverage is below optimal ({coverage_pct}) — segment mix may be incomplete",
+    "minimum_data_warning": "Limited observations in this segment — results may be unreliable",
+    "redundancy_warning": "Segment mix overlaps with another metric — consider deduplication"
+  }
+}

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AlertCircle, Clock, Wifi, WifiOff, RefreshCw, Zap, Info, XCircle, ChevronRight, CheckCircle2, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
+import { HybridSmartLoader } from './ProfessionalLoadingStates';
 
 /**
  * ChatErrorDisplay - Beautiful error messages for chat failures
@@ -18,9 +19,9 @@ const ERROR_CONFIGS = {
     icon: Clock,
     title: "High Demand",
     color: "amber",
-    gradient: "from-amber-500/20 to-orange-500/20",
-    border: "border-amber-500/30",
-    iconColor: "text-amber-400",
+    background: "bg-amber-50",
+    border: "border-amber-200",
+    iconColor: "text-amber-700",
     suggestions: [
       "Check the Dashboard for pre-computed insights",
       "Try Chart Studio for custom visualizations",
@@ -31,9 +32,9 @@ const ERROR_CONFIGS = {
     icon: WifiOff,
     title: "Connection Issue",
     color: "red",
-    gradient: "from-red-500/20 to-rose-500/20",
-    border: "border-red-500/30",
-    iconColor: "text-red-400",
+    background: "bg-red-50",
+    border: "border-red-200",
+    iconColor: "text-red-700",
     suggestions: [
       "Check your internet connection",
       "Try refreshing the page",
@@ -44,9 +45,9 @@ const ERROR_CONFIGS = {
     icon: Clock,
     title: "Request Timed Out",
     color: "blue",
-    gradient: "from-blue-500/20 to-indigo-500/20",
-    border: "border-blue-500/30",
-    iconColor: "text-blue-400",
+    background: "bg-blue-50",
+    border: "border-blue-200",
+    iconColor: "text-blue-700",
     suggestions: [
       "Try a simpler question",
       "Break complex queries into smaller parts",
@@ -56,10 +57,10 @@ const ERROR_CONFIGS = {
   unavailable: {
     icon: XCircle,
     title: "Service Unavailable",
-    color: "purple",
-    gradient: "from-purple-500/20 to-pink-500/20",
-    border: "border-purple-500/30",
-    iconColor: "text-purple-400",
+    color: "red",
+    background: "bg-red-50",
+    border: "border-red-200",
+    iconColor: "text-red-700",
     suggestions: [
       "The AI service is temporarily down",
       "Use Dashboard for available insights",
@@ -70,9 +71,9 @@ const ERROR_CONFIGS = {
     icon: AlertCircle,
     title: "Something Went Wrong",
     color: "slate",
-    gradient: "from-slate-500/20 to-slate-600/20",
-    border: "border-slate-500/30",
-    iconColor: "text-slate-400",
+    background: "bg-gray-50",
+    border: "border-gray-200",
+    iconColor: "text-gray-700",
     suggestions: [
       "Try rephrasing your question",
       "Refresh and try again",
@@ -131,8 +132,8 @@ export const ChatErrorDisplay = ({
       )}
     >
       <div className={cn(
-        "p-4 bg-gradient-to-br border",
-        config.gradient,
+        "p-4 border",
+        config.background,
         config.border
       )}>
         {/* Header */}
@@ -224,16 +225,16 @@ export const RateLimitBanner = ({
         "mx-4 mb-2 px-4 py-2.5 rounded-lg flex items-center justify-between",
         "border",
         isCritical
-          ? "bg-red-500/10 border-red-500/30"
+          ? "bg-red-50 border-red-200"
           : isLow
-            ? "bg-amber-500/10 border-amber-500/30"
-            : "bg-blue-500/10 border-blue-500/30"
+            ? "bg-amber-50 border-amber-200"
+            : "bg-blue-50 border-blue-200"
       )}
     >
       <div className="flex items-center gap-2">
         <Zap className={cn(
           "w-4 h-4",
-          isCritical ? "text-red-400" : isLow ? "text-amber-400" : "text-blue-400"
+          isCritical ? "text-red-700" : isLow ? "text-amber-700" : "text-blue-700"
         )} />
         <span className="text-sm text-secondary">
           {isCritical
@@ -273,18 +274,18 @@ export const ConnectionStatus = ({
     )}>
       {isReconnecting ? (
         <>
-          <RefreshCw className="w-3 h-3 text-amber-400 animate-spin" />
-          <span className="text-amber-400">Reconnecting...</span>
+          <RefreshCw className="w-3 h-3 text-yellow-700 animate-spin" />
+          <span className="text-yellow-700">Reconnecting...</span>
         </>
       ) : isConnected ? (
         <>
-          <Wifi className="w-3 h-3 text-green-400" />
-          <span className="text-green-400">Live</span>
+          <Wifi className="w-3 h-3 text-green-700" />
+          <span className="text-green-700">Live</span>
         </>
       ) : (
         <>
-          <WifiOff className="w-3 h-3 text-red-400" />
-          <span className="text-red-400">Offline</span>
+          <WifiOff className="w-3 h-3 text-red-700" />
+          <span className="text-red-700">Offline</span>
         </>
       )}
     </div>
@@ -299,25 +300,16 @@ export const ThinkingDots = ({
   stage = 'analyzing', // 'analyzing' | 'processing' | 'generating' | 'reanalyzing'
   className
 }) => {
-  const stages = {
-    analyzing: 'Analyzing your question',
-    processing: 'Processing data',
-    generating: 'Generating insights',
-    reanalyzing: 'Reanalyzing'
+  const stageMap = {
+    thinking: 'analyzing',
+    generating: 'generating',
+    chart: 'processing',
+    analyzing: 'analyzing',
+    processing: 'processing',
+    reanalyzing: 'reanalyzing'
   };
 
-  const text = stages[stage] || stages.analyzing;
-
-  return (
-    <div className={cn("thinking-indicator", className)}>
-      <div className="thinking-dots">
-        <span className="dot" />
-        <span className="dot" />
-        <span className="dot" />
-      </div>
-      <span className="thinking-text">{text}...</span>
-    </div>
-  );
+  return <HybridSmartLoader stage={stageMap[stage] || 'analyzing'} className={className} />;
 };
 
 /**

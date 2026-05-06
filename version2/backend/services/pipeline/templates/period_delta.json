@@ -1,0 +1,28 @@
+{
+  "template_id": "period_delta_v1",
+  "primitive": "period_delta",
+  "category": "performance",
+  "title_template": "{measure_col_label} {grain_label}",
+  "headline_template": "{current_value_formatted} this {grain_label}",
+  "delta_narrative_template": "{delta_direction_verb} {abs_delta_formatted} ({delta_pct_formatted}) from prior {prior_grain}",
+  "key_insight_phrases": {
+    "significant_up": "{measure_col_label} is accelerating",
+    "significant_down": "{measure_col_label} is declining",
+    "stable": "{measure_col_label} is holding steady"
+  },
+  "direction_mapping": {
+    "up": "up by",
+    "down": "down by",
+    "stable": "unchanged from"
+  },
+  "significance_thresholds": {
+    "significant": 0.1,
+    "moderate": 0.05,
+    "insignificant": 0.0
+  },
+  "caveats": {
+    "delta_significance_warning": "Prior period not available — no prior comparison",
+    "denominator_unstable": "Prior period showed variability — comparison may mask underlying instability",
+    "low_coverage_adequate": "Data coverage is below optimal ({coverage_pct}) — current value may understate reality"
+  }
+}

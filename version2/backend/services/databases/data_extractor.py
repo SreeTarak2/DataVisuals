@@ -1,11 +1,16 @@
 """
 Data Extraction Service
 Handles extracting data from databases for ETL processes
+Includes security validation and audit logging
 """
 
 from typing import Dict, List, Any, Optional, AsyncIterator
 from .connectors.base import DatabaseConnector
 import asyncio
+import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class DataExtractor:
@@ -114,19 +119,87 @@ class DataExtractor:
         params: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Extract data using custom SQL query
-        Note: This would need to be implemented in each connector
+        Extract data using custom SQL query (PostgreSQL/MySQL only)
 
         Args:
             connector: Database connector instance
-            query: SQL query to execute
-            params: Query parameters
+            query: SQL query to execute (SELECT only)
+            params: Query parameters for parameterized queries
 
         Returns:
             List of dictionaries representing query results
+
+        Raises:
+            ValueError: If query contains SQL injection patterns or is not SELECT
+            NotImplementedError: If used with MongoDB connector
         """
-        # This would require extending the DatabaseConnector interface
-        # For now, we'll raise NotImplementedError to show where it would go
-        raise NotImplementedError(
-            "Custom query extraction requires connector-specific implementation"
-        )
+        start_time = time.time()
+        
+        # Validate query type (SELECT only)
+        if not connector.security_validator.validate_query_type(query, allowed_types=['SELECT']):
+            raise ValueError("Only SELECT queries are allowed for security reasons")
+        
+        # Check for SQL injection patterns
+        if connector.security_validator.detect_sql_injection(query):
+            raise ValueError("Potential SQL injection detected in query")
+        
+        connector_name = type(connector).__name__
+
+        # MongoDB doesn't support SQL queries
+        if connector_name == "MongoDBConnector":
+            raise NotImplementedError("Custom SQL queries are not supported for MongoDB")
+        
+        try:
+            # For PostgreSQL
+            if connector_name == "PostgreSQLConnector":
+                if not connector._pool:
+                    raise RuntimeError("Not connected to database")
+                
+                async with connector._pool.acquire() as conn:
+                    if params:
+                        rows = await conn.fetch(query, *params.values())
+                    else:
+                        rows = await conn.fetch(query)
+                    result = [dict(row) for row in rows]
+            
+            # For MySQL
+            elif connector_name == "MySQLConnector":
+                if not connector._pool:
+                    raise RuntimeError("Not connected to database")
+                
+                try:
+                    import aiomysql
+                except ImportError as exc:
+                    raise RuntimeError("MySQL support requires aiomysql to be installed") from exc
+
+                async with connector._pool.acquire() as conn:
+                    async with conn.cursor(aiomysql.DictCursor) as cur:
+                        if params:
+                            await cur.execute(query, list(params.values()))
+                        else:
+                            await cur.execute(query)
+                        rows = await cur.fetchall()
+                        result = list(rows)
+            else:
+                raise NotImplementedError(f"Custom queries not supported for {type(connector).__name__}")
+            
+            duration_ms = (time.time() - start_time) * 1000
+            connector.audit_logger.log_operation(
+                operation="extract_by_query",
+                details={"query_preview": query[:100], "params_count": len(params) if params else 0},
+                success=True,
+                duration_ms=duration_ms
+            )
+            
+            return result
+            
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            connector.audit_logger.log_operation(
+                operation="extract_by_query",
+                details={"query_preview": query[:100]},
+                success=False,
+                duration_ms=duration_ms,
+                error=str(e)
+            )
+            raise

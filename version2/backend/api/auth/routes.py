@@ -140,3 +140,22 @@ async def update_profile(
 
     updated_user.pop("hashed_password", None)
     return updated_user
+
+# Token refresh endpoint for WebSocket connections
+@router.post("/refresh-token")
+@limiter.limit(RateLimits.AUTH_LOGIN)
+async def refresh_token(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Refreshes the user's access token.
+    This is used by WebSocket connections to get a fresh token when needed.
+    """
+    # In a real implementation, you would generate a new token here
+    # For now, we'll just return the current user's token
+    return {"token": current_user.get("token")}
+
+
+
+

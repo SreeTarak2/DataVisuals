@@ -42,21 +42,25 @@ class ChartIntelligenceService:
     # Statistical Rules for Chart Selection (Data Science Best Practices)
     STATISTICAL_RULES = {
         "correlation_analysis": {
-            "condition": lambda stats: stats.get("correlation_strength", 0) > 0.5,
+            "condition": lambda stats: stats.get("correlation_strength", 0) > 0.65,
             "chart": "scatter",
             "reason": "Strong correlation detected between variables",
-            "priority": 10,
+            "priority": 7,
         },
         "time_series": {
-            "condition": lambda stats: stats.get("has_time_column", False)
-            and stats.get("numeric_count", 0) > 0,
+            "condition": lambda stats: (
+                stats.get("has_time_column", False)
+                and stats.get("numeric_count", 0) > 0
+            ),
             "chart": "line",
             "reason": "Time series data best shown with line chart",
             "priority": 10,
         },
         "categorical_comparison": {
-            "condition": lambda stats: stats.get("categorical_count", 0) > 0
-            and stats.get("numeric_count", 0) > 0,
+            "condition": lambda stats: (
+                stats.get("categorical_count", 0) > 0
+                and stats.get("numeric_count", 0) > 0
+            ),
             "chart": "bar",
             "reason": "Categorical comparison with numeric values",
             "priority": 9,
@@ -68,14 +72,17 @@ class ChartIntelligenceService:
             "priority": 8,
         },
         "part_to_whole": {
-            "condition": lambda stats: stats.get("is_percentage", False)
-            or stats.get("is_composition", False),
+            "condition": lambda stats: (
+                stats.get("is_percentage", False) or stats.get("is_composition", False)
+            ),
             "chart": "pie",
             "reason": "Part-to-whole relationship (use sparingly)",
             "priority": 5,  # Lower priority (pie charts less preferred)
         },
         "outlier_detection": {
-            "condition": lambda stats: stats.get("has_outliers", False),
+            "condition": lambda stats: (
+                stats.get("has_outliers", False) and stats.get("outlier_count", 0) > 3
+            ),
             "chart": "box",
             "reason": "Outliers detected, box plot shows distribution + outliers",
             "priority": 8,
@@ -87,9 +94,11 @@ class ChartIntelligenceService:
             "priority": 9,
         },
         "distribution_comparison": {
-            "condition": lambda stats: stats.get("numeric_count", 0) >= 1
-            and stats.get("categorical_count", 0) >= 1
-            and stats.get("row_count", 0) > 20,
+            "condition": lambda stats: (
+                stats.get("numeric_count", 0) >= 1
+                and stats.get("categorical_count", 0) >= 1
+                and stats.get("row_count", 0) > 20
+            ),
             "chart": "histogram",
             "reason": "Compare probability distributions across segments to find significant shifts",
             "priority": 8,
@@ -565,7 +574,7 @@ class ChartIntelligenceService:
 
         # Check for outliers
         outliers = statistical_findings.get("outliers", [])
-        has_outliers = len(outliers) > 0
+        has_outliers = len(outliers) > 3
 
         # Check cardinality
         cardinality = data_profile.get("cardinality", {})
@@ -601,7 +610,7 @@ class ChartIntelligenceService:
             "outlier_count": len(outliers),
             "is_percentage": len(percentage_cols) > 0,
             "is_composition": len(percentage_cols) > 0,
-            "requires_distribution": len(numeric_cols) > 0,
+            "requires_distribution": len(numeric_cols) > 0 and len(df) >= 30,
             "row_count": len(df),
             "column_count": len(column_metadata),
         }
@@ -1070,10 +1079,9 @@ class ChartIntelligenceService:
 
         # ── 2. Multi-metric trend (skip if no time col — avoids broken charts) ──
         if stats.get("has_time_column") and stats.get("numeric_count", 0) >= 2:
-            if "multi_metric_trend" not in story_types:
-                chart = self._build_universal_multi_metric_trend(stats)
-                if chart:
-                    charts.append(chart)
+            chart = self._build_universal_multi_metric_trend(stats)
+            if chart:
+                charts.append(chart)
 
         # ── 3. Categorical comparison (rotate y-col) ──
         if (
@@ -1084,20 +1092,22 @@ class ChartIntelligenceService:
                 y = _pick_numeric()
                 x = _pick_categorical()
                 if x and y:
-                    charts.append({
-                        "chart_type": "bar",
-                        "title": f"{y.replace('_', ' ').title()} by {x.replace('_', ' ').title()}",
-                        "config": {
-                            "columns": [x, y],
-                            "aggregation": "sum",
-                            "group_by": [x],
-                        },
-                        "reason": "Compares values across categories",
-                        "source": "universal_pattern",
-                        "story_type": "comparison",
-                        "priority": 8,
-                        "confidence_multiplier": 1.0,
-                    })
+                    charts.append(
+                        {
+                            "chart_type": "bar",
+                            "title": f"{y.replace('_', ' ').title()} by {x.replace('_', ' ').title()}",
+                            "config": {
+                                "columns": [x, y],
+                                "aggregation": "sum",
+                                "group_by": [x],
+                            },
+                            "reason": "Compares values across categories",
+                            "source": "universal_pattern",
+                            "story_type": "comparison",
+                            "priority": 8,
+                            "confidence_multiplier": 1.0,
+                        }
+                    )
                     _used_y.add(y)
                     _used_x.add(x)
 
@@ -1110,26 +1120,28 @@ class ChartIntelligenceService:
                 # Pick two DIFFERENT categorical columns
                 x = _pick_categorical()
                 group = None
-                for c in (low_card_cats or categorical_cols):
+                for c in low_card_cats or categorical_cols:
                     if c != x:
                         group = c
                         break
                 y = _pick_numeric()
                 if x and y and group:
-                    charts.append({
-                        "chart_type": "grouped_bar",
-                        "title": f"{y.replace('_', ' ').title()} by {x.replace('_', ' ').title()} (grouped by {group.replace('_', ' ').title()})",
-                        "config": {
-                            "columns": [x, y],
-                            "group_by": [group],
-                            "aggregation": "sum",
-                        },
-                        "reason": "Compare values across multiple category dimensions",
-                        "source": "universal_pattern",
-                        "story_type": "multi_category",
-                        "priority": 8,
-                        "confidence_multiplier": 1.0,
-                    })
+                    charts.append(
+                        {
+                            "chart_type": "grouped_bar",
+                            "title": f"{y.replace('_', ' ').title()} by {x.replace('_', ' ').title()} (grouped by {group.replace('_', ' ').title()})",
+                            "config": {
+                                "columns": [x, y],
+                                "group_by": [group],
+                                "aggregation": "sum",
+                            },
+                            "reason": "Compare values across multiple category dimensions",
+                            "source": "universal_pattern",
+                            "story_type": "multi_category",
+                            "priority": 8,
+                            "confidence_multiplier": 1.0,
+                        }
+                    )
                     _used_y.add(y)
                     _used_x.add(x)
 
@@ -1138,22 +1150,24 @@ class ChartIntelligenceService:
             if "distribution" not in story_types:
                 dist_col = _pick_numeric()
                 if dist_col:
-                    charts.append({
-                        "chart_type": "histogram",
-                        "title": f"Distribution of {dist_col.replace('_', ' ').title()}",
-                        "config": {"columns": [dist_col], "aggregation": "none"},
-                        "reason": "Shows the distribution of values",
-                        "source": "universal_pattern",
-                        "story_type": "distribution",
-                        "priority": 7,
-                        "confidence_multiplier": 0.9,
-                    })
+                    charts.append(
+                        {
+                            "chart_type": "histogram",
+                            "title": f"Distribution of {dist_col.replace('_', ' ').title()}",
+                            "config": {"columns": [dist_col], "aggregation": "none"},
+                            "reason": "Shows the distribution of values",
+                            "source": "universal_pattern",
+                            "story_type": "distribution",
+                            "priority": 7,
+                            "confidence_multiplier": 0.9,
+                        }
+                    )
                     _used_y.add(dist_col)
 
         # ── 6. Correlation scatter ──
         if (
             stats.get("numeric_count", 0) >= 2
-            and stats.get("correlation_strength", 0) > 0.3
+            and stats.get("correlation_strength", 0) > 0.65
         ):
             if "correlation" not in story_types:
                 # Use strong correlation pair if available, else first two numeric
@@ -1163,34 +1177,38 @@ class ChartIntelligenceService:
                     x_s, y_s = pair[0], pair[1]
                 else:
                     x_s, y_s = numeric_cols[0], numeric_cols[1]
-                charts.append({
-                    "chart_type": "scatter",
-                    "title": f"{y_s.replace('_', ' ').title()} vs {x_s.replace('_', ' ').title()}",
-                    "config": {
-                        "columns": [x_s, y_s],
-                        "aggregation": "none",
-                    },
-                    "reason": "Shows relationship between variables",
-                    "source": "universal_pattern",
-                    "story_type": "correlation",
-                    "priority": 7,
-                    "confidence_multiplier": 0.9,
-                })
+                charts.append(
+                    {
+                        "chart_type": "scatter",
+                        "title": f"{y_s.replace('_', ' ').title()} vs {x_s.replace('_', ' ').title()}",
+                        "config": {
+                            "columns": [x_s, y_s],
+                            "aggregation": "none",
+                        },
+                        "reason": "Shows relationship between variables",
+                        "source": "universal_pattern",
+                        "story_type": "correlation",
+                        "priority": 7,
+                        "confidence_multiplier": 0.9,
+                    }
+                )
 
         # ── 7. Concentration pie (only if low-cardinality) ──
         if low_card_cats:
             if "concentration" not in story_types:
                 pie_col = low_card_cats[0]
-                charts.append({
-                    "chart_type": "pie",
-                    "title": f"Distribution by {pie_col.replace('_', ' ').title()}",
-                    "config": {"columns": [pie_col], "aggregation": "count"},
-                    "reason": "Shows concentration across categories",
-                    "source": "universal_pattern",
-                    "story_type": "concentration",
-                    "priority": 6,
-                    "confidence_multiplier": 0.8,
-                })
+                charts.append(
+                    {
+                        "chart_type": "pie",
+                        "title": f"Distribution by {pie_col.replace('_', ' ').title()}",
+                        "config": {"columns": [pie_col], "aggregation": "count"},
+                        "reason": "Shows concentration across categories",
+                        "source": "universal_pattern",
+                        "story_type": "concentration",
+                        "priority": 6,
+                        "confidence_multiplier": 0.8,
+                    }
+                )
 
         # ── 8. Treemap (hierarchical) ──
         if (
@@ -1211,19 +1229,21 @@ class ChartIntelligenceService:
                 w_y = _pick_numeric()
                 w_x = _pick_categorical()
                 if w_x and w_y:
-                    charts.append({
-                        "chart_type": "waterfall",
-                        "title": f"{w_y.replace('_', ' ').title()} Breakdown by {w_x.replace('_', ' ').title()}",
-                        "config": {
-                            "columns": [w_x, w_y],
-                            "aggregation": "sum",
-                        },
-                        "reason": "Sequential breakdown showing cumulative effect",
-                        "source": "universal_pattern",
-                        "story_type": "sequential",
-                        "priority": 6,
-                        "confidence_multiplier": 0.8,
-                    })
+                    charts.append(
+                        {
+                            "chart_type": "waterfall",
+                            "title": f"{w_y.replace('_', ' ').title()} Breakdown by {w_x.replace('_', ' ').title()}",
+                            "config": {
+                                "columns": [w_x, w_y],
+                                "aggregation": "sum",
+                            },
+                            "reason": "Sequential breakdown showing cumulative effect",
+                            "source": "universal_pattern",
+                            "story_type": "sequential",
+                            "priority": 6,
+                            "confidence_multiplier": 0.8,
+                        }
+                    )
 
         return charts
 
@@ -1589,12 +1609,15 @@ class ChartIntelligenceService:
         # Chart type families for deduplication
         CHART_FAMILIES = {
             "bar": "bar_family",
-            "grouped_bar": "bar_family",
-            "stacked_bar": "bar_family",
+            "grouped_bar": "grouped_bar_family",
+            "stacked_bar": "stacked_bar_family",
             "line": "line_family",
-            "multi_line": "line_family",
+            "multi_line": "multi_line_family",
             "area": "area_family",
-            "stacked_area": "area_family",
+            "stacked_area": "stacked_area_family",
+            "histogram": "distribution_family",
+            "box": "distribution_family",
+            "violin": "distribution_family",
             "scatter": "scatter_family",
             "bubble": "scatter_family",
         }
@@ -1796,6 +1819,65 @@ class ChartIntelligenceService:
         if not charts:
             return 0.0
         return sum(c.get("confidence", 0) for c in charts) / len(charts)
+
+    async def judge_chart_faithfulness(
+        self,
+        user_query: str,
+        chart_config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Gatekeeper: Judge if chart configuration faithfully answers the user query.
+
+        This is the Faithfulness Judge pattern - before rendering, check if the
+        chart actually answers what the user asked for. If score < 4/5, trigger
+        repair_request instead of rendering.
+
+        Args:
+            user_query: The original user question
+            chart_config: Chart configuration to judge
+
+        Returns:
+            Judgment result with score and repair suggestions
+        """
+        from services.charts.chart_validator import faithfulness_judge
+
+        return await faithfulness_judge.judge(user_query, chart_config)
+
+    async def judge_and_repair_charts(
+        self,
+        user_queries: List[str],
+        charts: List[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Judge multiple charts and repair those that fail the faithfulness check.
+
+        Returns:
+            Tuple of (passed_charts, charts_needing_repair)
+        """
+        from services.charts.chart_validator import faithfulness_judge
+
+        if not charts:
+            return [], []
+
+        # Batch judge all charts
+        judgments = await faithfulness_judge.judge_batch(user_queries, charts)
+
+        passed = []
+        needs_repair = []
+
+        for chart, judgment in zip(charts, judgments):
+            if judgment.get("needs_repair", False):
+                chart["faithfulness_judgment"] = judgment
+                needs_repair.append(chart)
+            else:
+                chart["faithfulness_judgment"] = judgment
+                passed.append(chart)
+
+        logger.info(
+            f"Faithfulness gate: {len(passed)} passed, {len(needs_repair)} need repair"
+        )
+
+        return passed, needs_repair
 
 
 # Singleton instance

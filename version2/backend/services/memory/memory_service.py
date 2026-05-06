@@ -124,6 +124,26 @@ class MemoryService:
                 if not fact or len(fact) < 10:
                     continue
 
+                # Filter out response preambles and artifacts
+                # Response artifacts start with: "Here's", "I found", "Based on", "Looking at", etc.
+                import re
+                response_artifact_pattern = re.compile(
+                    r"^(here'?s|i found|based on|looking at|the data|according to|"
+                    r"this means|it appears|you can|i can|let me|a breakdown|"
+                    r"the results?|this shows|this tells|this is|what i)",
+                    re.IGNORECASE
+                )
+                if response_artifact_pattern.match(fact):
+                    logger.debug(f"Skipping response preamble as memory: {fact[:50]}")
+                    continue
+
+                # Validate that the fact contains specific data references (column names, numbers, etc.)
+                # A good fact should reference actual data values or column names
+                if not any(char.isdigit() for char in fact) and category == "data_insight":
+                    # Most data insights should have numbers — if this doesn't, it's likely a preamble
+                    logger.debug(f"Skipping non-specific memory (no numbers): {fact[:50]}")
+                    continue
+
                 # Validate category
                 if category not in MEMORY_CATEGORIES:
                     category = "data_insight"

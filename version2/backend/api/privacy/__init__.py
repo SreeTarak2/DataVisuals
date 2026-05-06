@@ -1,2 +1,3 @@
-from api.$module.routes import router as ${module}_router
-__all__ = ["${module}_router"]
+from api.privacy.routes import router as privacy_router
+
+__all__ = ["privacy_router"]

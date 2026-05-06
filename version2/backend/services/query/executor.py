@@ -29,6 +29,11 @@ from core.prompt_templates import (
     get_sql_generation_prompt,
     get_result_interpretation_prompt,
 )
+from services.query.sql_repair_agent import (
+    SQLRepairAgent,
+    extract_columns_from_df,
+    build_column_whitelist_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +247,7 @@ class QueryExecutor:
         ] = {}  # dataset_id -> set of cache keys
         self._max_cache_size = 100
         self._max_result_rows = 1000  # Limit result size for safety
+        self._sql_repair_agent = SQLRepairAgent(llm_router)
 
     def _get_column_schema(self, df: pl.DataFrame) -> str:
         """Generate column schema string for LLM prompt."""
@@ -483,14 +489,20 @@ class QueryExecutor:
 
     async def generate_sql(self, query: str, df: pl.DataFrame) -> Tuple[str, str]:
         """
-        Generate SQL from natural language query.
+        Generate SQL from natural language query with ReAct-style retry loop.
+        Feeds DuckDB errors back into the next generation attempt.
 
         Returns:
             (sql_query, error_message)
         """
-        try:
-            # Build comprehensive context for caching
-            context = f"""
+        max_attempts = 3
+        error_history = []
+        consecutive_pattern_failures = 0  # Track repeated failures of same pattern
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # Build comprehensive context for caching
+                context = f"""
 ## DATASET SCHEMA
 Table name: `data`
 Columns and types:
@@ -503,51 +515,167 @@ Sample data (first 5 rows):
 {self._get_data_stats(df)}
 """
 
-            prompt = get_sql_generation_prompt(
-                column_schema=self._get_column_schema(df),
-                sample_data=self._get_sample_data(df),
-                data_stats=self._get_data_stats(df),
-                user_query=query,
-                include_context=False,
-            )
+                # ESCAPE HATCH: If 2+ consecutive failures, force simple query
+                force_simple_query = False
+                if len(error_history) >= 2:
+                    # Any 2+ errors in a row → likely model hallucinating complex patterns
+                    # Force a pivot to simple SELECT GROUP BY
+                    force_simple_query = True
+                    logger.warning(
+                        f"[ESCAPE HATCH] Detected {len(error_history)} consecutive SQL errors. "
+                        f"Forcing simple GROUP BY query on attempt {attempt}."
+                    )
 
-            # Call LLM for SQL generation with explicit context for caching
-            sql = await llm_router.call(
-                prompt=prompt,
-                model_role="sql_generator",
-                expect_json=False,
-                temperature=0.1,  # Low temperature for deterministic SQL
-                max_tokens=1000,
-                context=context,
-            )
-
-            # Clean up the response
-            sql = sql.strip()
-
-            # Remove markdown code blocks if present
-            if sql.startswith("```"):
-                lines = sql.split("\n")
-                sql = "\n".join(
-                    lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+                allowed_columns = extract_columns_from_df(df)
+                prompt = get_sql_generation_prompt(
+                    column_schema=self._get_column_schema(df),
+                    sample_data=self._get_sample_data(df),
+                    data_stats=self._get_data_stats(df),
+                    user_query=query,
+                    allowed_columns=allowed_columns,
+                    include_context=False,
+                    error_history=error_history if attempt > 1 else None,
+                    force_simple_query=force_simple_query,
                 )
 
-            sql = sql.strip().rstrip(";") + ";"
+                if attempt > 1 and error_history:
+                    logger.info(
+                        f"SQL attempt {attempt} with {len(error_history)} previous errors"
+                    )
 
-            # Apply model-output sanitisation (strips '?', rewrites bad window
-            # patterns, etc.) before the validator sees the SQL.
-            sql = self._sanitize_sql(sql)
+                # Call LLM for SQL generation with explicit context for caching
+                sql = await llm_router.call(
+                    prompt=prompt,
+                    model_role="sql_generator",
+                    expect_json=False,
+                    temperature=0.1,
+                    max_tokens=1000,
+                    context=context,
+                )
 
-            # Validate SQL
-            is_valid, error = SQLValidator.validate(sql)
-            if not is_valid:
-                logger.warning(f"Generated invalid SQL: {error}")
-                return "", f"Generated invalid SQL: {error}"
+                # Clean up the response
+                sql = sql.strip()
 
-            return sql, ""
+                # Remove markdown code blocks if present
+                if sql.startswith("```"):
+                    lines = sql.split("\n")
+                    sql = "\n".join(
+                        lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+                    )
 
-        except Exception as e:
-            logger.error(f"Error generating SQL: {e}", exc_info=True)
-            return "", f"Failed to generate SQL: {str(e)}"
+                sql = sql.strip().rstrip(";") + ";"
+
+                # Apply model-output sanitisation before the validator sees the SQL.
+                sql = self._sanitize_sql(sql)
+
+                # Validate SQL
+                is_valid, error = SQLValidator.validate(sql)
+                if not is_valid:
+                    logger.warning(f"Generated invalid SQL: {error}")
+                    error_history.append(
+                        {
+                            "attempt": attempt,
+                            "sql": sql,
+                            "error": f"Invalid SQL: {error}",
+                        }
+                    )
+                    continue
+
+                # Try to execute to catch runtime errors
+                result_df, exec_error = self.execute_sql(sql, df)
+                if exec_error:
+                    logger.warning(f"SQL execution failed: {exec_error}")
+
+                    # Attempt self-healing repair
+                    repair_result = await self._sql_repair_agent.repair(
+                        sql=sql,
+                        error_msg=exec_error,
+                        df=df,
+                        original_query=query,
+                        schema_block=self._get_column_schema(df),
+                    )
+
+                    if repair_result.was_repaired:
+                        logger.info(
+                            f"[SQLRepairAgent] Repair succeeded via {repair_result.repair_method}"
+                        )
+                        # Re-execute the repaired SQL
+                        result_df, exec_error = self.execute_sql(repair_result.sql, df)
+                        if not exec_error:
+                            sql = repair_result.sql
+                            logger.info(f"SQL repaired and executed successfully")
+                        else:
+                            logger.warning(
+                                f"[SQLRepairAgent] Repaired SQL still failed: {exec_error}"
+                            )
+                            error_history.append(
+                                {"attempt": attempt, "sql": sql, "error": exec_error}
+                            )
+                            if attempt == max_attempts:
+                                return (
+                                    "",
+                                    f"SQL failed after {max_attempts} attempts: {exec_error}",
+                                )
+                            continue
+                    else:
+                        error_history.append(
+                            {"attempt": attempt, "sql": sql, "error": exec_error}
+                        )
+                        # If this was the last attempt, return the error
+                        if attempt == max_attempts:
+                            return (
+                                "",
+                                f"SQL failed after {max_attempts} attempts: {exec_error}",
+                            )
+                        continue
+
+                # Success
+                logger.info(f"SQL generated successfully on attempt {attempt}")
+                return sql, ""
+
+            except Exception as e:
+                logger.error(
+                    f"Error generating SQL (attempt {attempt}): {e}", exc_info=True
+                )
+                error_history.append({"attempt": attempt, "sql": "", "error": str(e)})
+                if attempt == max_attempts:
+                    return "", f"Failed to generate SQL: {str(e)}"
+
+        return "", f"SQL generation exhausted after {max_attempts} attempts"
+
+    def _build_reflection_block(self, error_history: list) -> str:
+        """Build the self-correction context for retries."""
+        history_text = ""
+        for h in error_history:
+            history_text += f"""
+--- Attempt {h["attempt"]} ---
+SQL:
+{h["sql"]}
+
+Error:
+{h["error"]}
+"""
+
+        return f"""
+
+══════════════════════════════════════════════════════════════
+SELF-CORRECTION — PREVIOUS ATTEMPT(S) FAILED
+══════════════════════════════════════════════════════════════
+
+Your previous SQL failed. Study the errors carefully.
+The database error message often contains the CORRECT column names as "Candidate bindings".
+
+{history_text}
+
+CORRECTION RULES:
+1. If error says "column X not found" → use ONLY columns from "Candidate bindings" or DATASET SCHEMA.
+2. If error says "syntax error near Y" → fix that exact token.
+3. If error says "aggregate function cannot contain window function" → use a CTE subquery instead.
+4. NEVER repeat a column name from a failed attempt unless you verified it in DATASET SCHEMA.
+
+Now regenerate the SQL query, correcting ALL of the above errors.
+Output ONLY the corrected SQL — nothing else.
+"""
 
     def execute_sql(
         self, sql: str, df: pl.DataFrame
@@ -679,6 +807,9 @@ Sample data (first 5 rows):
         Use LLM to interpret query results in natural language.
         """
         try:
+            query_complexity = query_classifier.get_query_complexity(query)
+            model_role = llm_router.resolve_conversational_role(query_complexity)
+
             # Format results for LLM
             if len(result_df) == 0:
                 results_str = "The query returned no results (empty dataset)."
@@ -696,7 +827,7 @@ Sample data (first 5 rows):
 
             interpretation = await llm_router.call(
                 prompt=prompt,
-                model_role="conversational",
+                model_role=model_role,
                 expect_json=False,
                 temperature=0.3,
                 max_tokens=500,

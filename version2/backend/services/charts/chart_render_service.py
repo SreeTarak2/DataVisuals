@@ -443,6 +443,49 @@ class ChartRenderService:
         )
         return charts
 
+    def _normalize_chart_type(self, chart_type_str: str) -> str:
+        """
+        Normalize chart type names from various formats to valid ChartType values.
+        
+        Examples:
+        - 'bar_chart' -> 'bar'
+        - 'scatter_plot' -> 'scatter'
+        - 'line_chart' -> 'line'
+        - 'pie_chart' -> 'pie'
+        - 'box_plot' -> 'box_plot' (already valid)
+        - 'box' -> 'box_plot'
+        - 'donut' -> 'pie'
+        """
+        # Mapping from alternative names to canonical ChartType values
+        type_mapping = {
+            # Basic aliases
+            'bar_chart': 'bar',
+            'line_chart': 'line',
+            'pie_chart': 'pie',
+            'histogram_chart': 'histogram',
+            'scatter_plot': 'scatter',
+            'heatmap_chart': 'heatmap',
+            'treemap_chart': 'treemap',
+            'area_chart': 'area',
+            'radar_chart': 'radar',
+            'bubble_chart': 'bubble',
+            'waterfall_chart': 'waterfall',
+            'funnel_chart': 'funnel',
+            'gauge_chart': 'gauge',
+            # Short aliases
+            'donut': 'pie',
+            'donut_chart': 'pie',
+            'box': 'box_plot',
+            # Multi-series aliases
+            'multi_line_chart': 'multi_line',
+            'stacked_area_chart': 'stacked_area',
+            'grouped_bar_chart': 'grouped_bar',
+            'stacked_bar_chart': 'stacked_bar',
+        }
+        
+        normalized = chart_type_str.lower().strip()
+        return type_mapping.get(normalized, normalized)
+
     def _parse_config(self, chart_config: Dict[str, Any]) -> ChartConfig:
         """
         Parse chart config dict to ChartConfig object.
@@ -457,7 +500,9 @@ class ChartRenderService:
             # Handle chart_type
             chart_type_str = chart_config.get("chart_type", "bar")
             if isinstance(chart_type_str, str):
-                chart_type = ChartType(chart_type_str.lower())
+                # Normalize the chart type name first
+                normalized_type = self._normalize_chart_type(chart_type_str)
+                chart_type = ChartType(normalized_type)
             else:
                 chart_type = chart_type_str
 
@@ -488,6 +533,94 @@ class ChartRenderService:
         except Exception as e:
             logger.error(f"Failed to parse chart config: {e}")
             raise ValueError(f"Invalid chart config: {e}")
+
+    # ── Multi-series smart rendering ─────────────────────────────────────────
+
+    MULTI_SERIES_TYPES = {"dual_axis", "facet", "combo", "multi_series"}
+
+    async def render_multi_series(
+        self,
+        df: pl.DataFrame,
+        metric_columns: List[str],
+        x_column: str,
+        title: str = "Chart",
+        analysis_intent: Optional[str] = None,
+        time_indexed: bool = False,
+        theme: str = "light",
+    ) -> Dict[str, Any]:
+        """
+        Smart multi-series rendering via MultiSeriesChartService.
+
+        Runs pattern detection → selects the best strategy → renders with the
+        correct renderer (overlay / dual_axis / facet / combo / grouped / stacked).
+
+        Use this instead of render_chart() when:
+        - You have 2+ metric columns and want the system to choose the right layout
+        - The chart type might be dual_axis or faceted (hydrate.py can't do these)
+        - You want pattern insights attached to the result
+        """
+        from services.charts.multi_series_chart_service import multi_series_chart_service
+
+        return await multi_series_chart_service.generate_chart(
+            df=df,
+            metric_columns=metric_columns,
+            x_column=x_column,
+            title=title,
+            analysis_intent=analysis_intent,
+            time_indexed=time_indexed,
+            auto_strategy=True,
+        )
+
+    async def render_chart_smart(
+        self,
+        df: pl.DataFrame,
+        chart_config: Dict[str, Any],
+        theme: str = "light",
+    ) -> Dict[str, Any]:
+        """
+        Drop-in upgrade to render_chart() that routes multi-series types through
+        MultiSeriesChartService while keeping single-series on the existing path.
+
+        Routing rules:
+        - chart_type in {dual_axis, facet, combo, multi_series} → multi-series path
+        - 3+ columns with multi_line/grouped_bar/stacked_bar → multi-series path
+        - everything else → existing render_chart()
+        """
+        chart_type = chart_config.get("chart_type", "").lower()
+        columns = chart_config.get("columns", [])
+
+        use_multi = (
+            chart_type in self.MULTI_SERIES_TYPES
+            or (chart_type in {"multi_line", "grouped_bar", "stacked_bar", "stacked_area"}
+                and len(columns) >= 3)
+        )
+
+        if use_multi and len(columns) >= 2:
+            x_col = columns[0]
+            metric_cols = columns[1:]
+            intent_map = {
+                "stacked_bar": "composition",
+                "stacked_area": "composition",
+                "grouped_bar": "comparison",
+                "multi_line": "trend",
+                "dual_axis": "comparison",
+                "combo": "diagnosis",
+                "facet": "comparison",
+            }
+            intent = intent_map.get(chart_type, chart_config.get("analysis_intent"))
+            time_indexed = chart_type in {"multi_line", "stacked_area"}
+
+            return await self.render_multi_series(
+                df=df,
+                metric_columns=metric_cols,
+                x_column=x_col,
+                title=chart_config.get("title", "Chart"),
+                analysis_intent=intent,
+                time_indexed=time_indexed,
+                theme=theme,
+            )
+
+        return await self.render_chart(df, chart_config, theme)
 
     def get_stats(self) -> Dict[str, Any]:
         """Get service statistics."""

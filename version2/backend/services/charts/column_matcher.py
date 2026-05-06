@@ -171,11 +171,17 @@ class ColumnMatcher:
                 # Try to match
                 matched, confidence = cls.match(original, available_columns, threshold)
                 
-                if matched and matched != original:
+                # Only substitute if confidence is high enough (75%+)
+                if matched and matched != original and confidence >= 0.75:
                     fixed_config[field] = matched
                     corrections.append(f"{field}: '{original}' → '{matched}' (confidence: {confidence:.0%})")
+                elif matched and matched != original and confidence < 0.75:
+                    # Low confidence match — drop the field instead of guessing wrong
+                    corrections.append(f"{field}: '{original}' → LOW CONFIDENCE ({confidence:.0%}), column name ambiguous")
+                    fixed_config.pop(field, None)  # Remove the low-confidence substitution
                 elif not matched and original not in available_columns:
                     corrections.append(f"{field}: '{original}' → NOT FOUND (below threshold)")
+                    fixed_config.pop(field, None)  # Remove unmatchable column reference
         
         if corrections:
             logger.info(f"Chart config corrections: {corrections}")

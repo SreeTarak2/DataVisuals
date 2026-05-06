@@ -147,9 +147,9 @@ async def create_indexes():
         # KPI Configs Collection (Financial Services)
         # ============================================================
         await db.database.kpi_configs.create_index(
-            [("user_id", 1), ("dataset_id", 1)], 
+            [("user_id", 1), ("dataset_id", 1)],
             unique=True,
-            name="idx_user_dataset_kpi_config"
+            name="idx_user_dataset_kpi_config",
         )
         await db.database.kpi_configs.create_index("updated_at")
 
@@ -164,6 +164,11 @@ def get_database():
     if db.database is None:
         logger.error("Database accessed before connect_to_mongo() was called.")
         raise ConnectionError(
-            "Database not initialized. Ensure connect_to_mongo() is awaited at worker startup."
+            "Database not initialized. Ensure connect_to_mongo() was awaited at worker startup."
         )
     return db.database
+
+
+def get_collection(name: str):
+    """Get a collection by name"""
+    return get_database()[name]

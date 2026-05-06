@@ -14,6 +14,7 @@ import ChartCanvas from '../../components/features/charts/ChartCanvas';
 import FormatPanel from '../../components/features/charts/FormatPanel';
 import EncodingBar from '../../components/features/charts/EncodingBar';
 import ChartInsightsCard from '../../components/features/charts/ChartInsightsCard';
+import { cn } from '../../lib/utils';
 
 // Chart type definitions - all 16 backend-supported types with icons
 const CHART_TYPES = [

@@ -1,0 +1,22 @@
+{
+  "template_id": "cohort_behavior_v1",
+  "primitive": "cohort_behavior",
+  "category": "performance",
+  "title_template": "{entity_col_label} Repeat Rate",
+  "headline_template": "{repeat_rate_pct} of {entity_col_label_plural} show repeat activity",
+  "key_insight_phrases": {
+    "high_retention": "Strong repeat {entity_col_label} engagement — sign of healthy cohorts",
+    "moderate_retention": "Moderate repeat {entity_col_label} activity",
+    "low_retention": "Low repeat {entity_col_label} activity — churn risk or one-time purchasing"
+  },
+  "retention_thresholds": {
+    "high": 0.5,
+    "moderate": 0.25,
+    "low": 0.0
+  },
+  "caveats": {
+    "low_row_count": "Limited {entity_col_label} sample ({total_entities} entities) — rate may be unreliable",
+    "low_coverage_adequate": "Data coverage is below optimal — repeat activity may be unmeasured",
+    "minimum_data_warning": "Insufficient data — repeat rate may not be representative"
+  }
+}

@@ -9,10 +9,6 @@ import {
     BarChart3, Target, Eye, BookOpen, Download, Loader2,
 } from 'lucide-react';
 import { reportsAPI, getAuthToken } from '../../services/api';
-import {
-    AreaChart, Area, ResponsiveContainer, ScatterChart, Scatter,
-    XAxis, YAxis, ZAxis, Tooltip, BarChart, Bar, Cell,
-} from 'recharts';
 import useDatasetStore from '../../store/datasetStore';
 import useDashboardActionStore from '../../store/dashboardActionStore';
 import { useInsightsData } from './hooks/useInsightsData';

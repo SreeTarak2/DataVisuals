@@ -14,10 +14,6 @@ import {
     Cpu, Target, Eye, Sparkles, Info,
     ChevronDown, ChevronRight, MessageSquare, ChevronUp
 } from 'lucide-react';
-import {
-    LineChart, Line, ScatterChart, Scatter,
-    BarChart, Bar, XAxis, YAxis, ZAxis, ResponsiveContainer, Cell,
-} from 'recharts';
 import { cn } from '../../../lib/utils';
 
 // ─── Config ──────────────────────────────────────────────────────────────────

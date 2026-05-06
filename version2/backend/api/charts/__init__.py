@@ -1,2 +1,3 @@
-from api.$module.routes import router as ${module}_router
-__all__ = ["${module}_router"]
+from api.charts.routes import router as charts_router
+
+__all__ = ["charts_router"]

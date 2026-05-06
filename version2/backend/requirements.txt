@@ -48,9 +48,11 @@ python-magic
 
 # ── PDF Generation ──
 weasyprint>=60.0
+matplotlib>=3.8.0
 
 # ── Resilience & Retry ──
 tenacity
+tiktoken
 
 # ── Misc ──
 requests

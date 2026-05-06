@@ -28,6 +28,7 @@ import polars as pl
 from db.database import get_database
 from services.llm_router import llm_router
 from services.datasets.dataset_loader import load_dataset, create_context_string
+from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 from services.datasets.faiss_vector_service import faiss_vector_service
 from core.config import settings
 from services.privacy.privacy_settings_service import privacy_settings_service
@@ -440,6 +441,137 @@ def _extract_columns_from_result(result_data: list) -> list:
     if not result_data:
         return []
     return list(result_data[0].keys()) if isinstance(result_data[0], dict) else []
+
+
+def _label_from_column(column: str) -> str:
+    """Create a compact human label from a dataset column name."""
+    return str(column).replace("_", " ").strip().title()
+
+
+def _build_result_table_payload(
+    result: Dict[str, Any], max_display_rows: int = 50
+) -> Optional[Dict[str, Any]]:
+    """Shape SQL rows as a first-class UI table payload."""
+    rows = result.get("data") or []
+    if not rows:
+        return None
+
+    columns = result.get("columns") or _extract_columns_from_result(rows)
+    display_rows = rows[:max_display_rows]
+
+    return {
+        "columns": [
+            {"key": column, "label": _label_from_column(column)} for column in columns
+        ],
+        "rows": display_rows,
+        "totalRows": result.get("row_count", len(rows)),
+        "displayedRows": len(display_rows),
+    }
+
+
+def _generate_result_followups(
+    query: str, result: Dict[str, Any], metadata: dict
+) -> list[str]:
+    """Generate follow-ups from actual SQL result shape and query intent."""
+    rows = result.get("data") or []
+    columns = result.get("columns") or _extract_columns_from_result(rows)
+    if not rows or not columns:
+        return _generate_follow_up_suggestions(query, "", metadata)
+
+    sample = rows[0] if isinstance(rows[0], dict) else {}
+    numeric_cols = [
+        col
+        for col in columns
+        if isinstance(sample.get(col), (int, float)) and not isinstance(sample.get(col), bool)
+    ]
+    dimension_cols = [col for col in columns if col not in numeric_cols]
+
+    metric = numeric_cols[0] if numeric_cols else None
+    dimension = dimension_cols[0] if dimension_cols else (columns[0] if columns else None)
+    q_lower = query.lower()
+    suggestions: list[str] = []
+
+    if metric and dimension:
+        metric_label = _label_from_column(metric)
+        dimension_label = _label_from_column(dimension)
+
+        if not re.search(r"\b(chart|plot|graph|visuali[sz]e?)\b", q_lower):
+            suggestions.append(f"Visualize {metric_label} by {dimension_label}")
+
+        if re.search(r"\b(top|highest|leading|rank|largest)\b", q_lower):
+            suggestions.append(f"Show the bottom {dimension_label} values by {metric_label}")
+        elif re.search(r"\b(bottom|lowest|smallest)\b", q_lower):
+            suggestions.append(f"Show the top {dimension_label} values by {metric_label}")
+        else:
+            suggestions.append(f"Show top and bottom {dimension_label} by {metric_label}")
+
+        if len(rows) > 5:
+            suggestions.append(f"Explain the gap between leading and trailing {dimension_label}")
+    elif dimension:
+        dimension_label = _label_from_column(dimension)
+        suggestions.append(f"Summarize the distribution of {dimension_label}")
+        suggestions.append(f"Which {dimension_label} values appear most often?")
+
+    for suggestion in _generate_follow_up_suggestions(query, "", metadata):
+        if len(suggestions) >= 3:
+            break
+        if suggestion not in suggestions:
+            suggestions.append(suggestion)
+
+    return suggestions[:3]
+
+
+def _should_show_followups(
+    query: str,
+    response: str,
+    metadata: dict,
+    result: Optional[Dict[str, Any]] = None,
+    chart_data: Optional[Dict[str, Any]] = None,
+    sql_fallback: bool = False,
+) -> bool:
+    """Decide whether follow-up chips add enough value to render."""
+    q_lower = (query or "").strip().lower()
+    response_lower = (response or "").strip().lower()
+    if not q_lower:
+        return False
+
+    if chart_data or sql_fallback:
+        return True
+
+    analysis_patterns = (
+        r"\btrend|trends|compare|comparison|break\s*down|distribution|summary|overview\b",
+        r"\binsight|insights|anomal|outlier|correlation|relationship|driver|segment\b",
+        r"\bwhy|explain|investigate|forecast|predict|rank|top|bottom|highest|lowest\b",
+        r"\bchart|plot|graph|visuali[sz]e\b",
+    )
+    if any(re.search(pattern, q_lower) for pattern in analysis_patterns):
+        return True
+
+    result_rows = result.get("data") if result else []
+    result_columns = result.get("columns") if result else []
+    row_count = result.get("row_count", len(result_rows or [])) if result else 0
+    is_single_answer = row_count <= 1 or (len(result_rows or []) <= 1 and len(result_columns or []) <= 2)
+    transactional_patterns = (
+        r"^\s*(how many|count|what is the count|total|sum|average|mean|median|min|max)\b",
+        r"^\s*(what is|what are|show me|list)\b",
+    )
+    if is_single_answer and any(re.search(pattern, q_lower) for pattern in transactional_patterns):
+        return False
+
+    if row_count >= 8 and len(result_columns or []) >= 2:
+        return True
+
+    ambiguous_markers = (
+        "ambiguous",
+        "unclear",
+        "could",
+        "might",
+        "may want",
+        "investigate",
+        "not enough",
+        "missing",
+    )
+    return any(marker in response_lower for marker in ambiguous_markers)
 
 
 async def _passive_belief_update(
@@ -1210,31 +1342,38 @@ class AIService:
                 ]
                 privacy_info["columns_redacted"] = list(private_columns)
 
+            # Optional: auto-detect PII column names and redact them
             if pii_auto_redact and effective_settings.get("pii_auto_detect", True):
                 columns_to_check = metadata.get("column_metadata", [])
                 for col in columns_to_check:
                     col_name = col.get("name", "")
-                    if col_name not in private_columns:
-                        detection_result = pii_detector.detect_column_pii(
-                            col_name, [], threshold=0.9
-                        )
-                        if detection_result and detection_result.get("has_pii"):
+                    if not col_name or col_name in private_columns:
+                        continue
+                    try:
+                        detection_result = pii_detector.scan_column_name(col_name)
+                        if detection_result:
                             privacy_info["pii_detected"].append(
                                 {
                                     "column": col_name,
-                                    "pii_type": detection_result.get("pii_type"),
-                                    "confidence": detection_result.get("confidence"),
+                                    "pii_type": detection_result.pii_type.value
+                                    if hasattr(detection_result, "pii_type")
+                                    else str(detection_result),
+                                    "confidence": detection_result.confidence
+                                    if hasattr(detection_result, "confidence")
+                                    else 1.0,
                                 }
                             )
-                            if col_name not in private_columns:
-                                private_columns.add(col_name)
-                                metadata["column_metadata"] = [
-                                    c
-                                    for c in metadata["column_metadata"]
-                                    if c.get("name") != col_name
-                                ]
-                                privacy_info["columns_redacted"].append(col_name)
-                                privacy_info["auto_redacted"] = True
+                            # Redact this column from shared metadata
+                            private_columns.add(col_name)
+                            metadata["column_metadata"] = [
+                                c
+                                for c in metadata.get("column_metadata", [])
+                                if c.get("name") != col_name
+                            ]
+                            privacy_info["columns_redacted"].append(col_name)
+                            privacy_info["auto_redacted"] = True
+                    except Exception as det_err:
+                        logger.warning(f"PII detection failed for column {col_name}: {det_err}")
 
             metadata["_privacy_info"] = privacy_info
 
@@ -1252,9 +1391,9 @@ class AIService:
                     privacy_audit_service.log_pii_scan(
                         user_id=user_id,
                         dataset_id=dataset_id,
-                        columns_scanned=len(metadata.get("column_metadata", [])),
-                        columns_with_pii=len(privacy_info["pii_detected"]),
-                        pii_types=[p["pii_type"] for p in privacy_info["pii_detected"]],
+                        columns_found=[p["column"] for p in privacy_info["pii_detected"]],
+                        pii_detected=privacy_info["pii_detected"],
+                        confidence_scores={p["column"]: p.get("confidence", 0.9) for p in privacy_info["pii_detected"]},
                     )
                 )
 
@@ -1381,14 +1520,15 @@ class AIService:
         Process a user query into a data-driven response with optional chart.
 
         Pipeline:
-        1. Intent guardrail: Rejects off-topic queries without LLM calls
-        2. Conversation loading: Retrieves or creates conversation context
-        3. Dataset validation: Ensures dataset exists and is processed
-        4. Query rewriting: Enhances query clarity with dataset context
-        5. LLM invocation: Routes to chart_engine via llm_router
-        6. Response extraction: Robust parsing of response_text and chart_config
-        7. Chart hydration: Converts chart config + data into Plotly format
-        8. Persistence: Saves AI response to conversation history
+        1. Apply Correction Rules - Check and rewrite query with user's corrections
+        2. Intent guardrail: Rejects off-topic queries without LLM calls
+        3. Conversation loading: Retrieves or creates conversation context
+        4. Dataset validation: Ensures dataset exists and is processed
+        5. Query rewriting: Enhances query clarity with dataset context
+        6. LLM invocation: Routes to chart_engine via llm_router
+        7. Response extraction: Robust parsing of response_text and chart_config
+        8. Chart hydration: Converts chart config + data into Plotly format
+        9. Persistence: Saves AI response to conversation history
 
         Args:
             query: User's natural language question about the data
@@ -1401,6 +1541,7 @@ class AIService:
             - response: AI-generated text explanation
             - chart_config: Hydrated Plotly chart data (null if not requested)
             - conversation_id: Database ID of conversation thread
+            - corrections_applied: List of corrections applied to query
 
         Raises:
             HTTPException(404): Dataset not found
@@ -1423,6 +1564,20 @@ class AIService:
         # Use sanitized query for processing
         query = sanitized_query
         query_lower = query.lower()
+
+        # --- CORRECTION RULES: Apply user's defined corrections ---
+        corrections_applied = []
+        try:
+            from services.feedback.correction_rewriter import correction_rewriter
+
+            workspace_id = user_id
+            query, corrections_applied = await correction_rewriter.apply_corrections(
+                query, workspace_id
+            )
+            if corrections_applied:
+                logger.info(f"Applied {len(corrections_applied)} corrections to query")
+        except Exception as e:
+            logger.warning(f"Failed to apply corrections: {e}")
 
         # --- INTENT GUARDRAIL: Reject off-topic queries ---
         if _is_off_topic(query_lower) and not is_data_related_query(query):
@@ -1615,7 +1770,7 @@ class AIService:
                 if not file_path:
                     raise ValueError("Dataset file path not found")
 
-                df = await load_dataset(file_path)
+                df = await enhanced_dataset_service.ensure_dataframe_for_agent(dataset_id, user_id, sample=False)
 
                 # --- COLUMN VALIDATION: Auto-fix LLM column references ---
                 available_columns = list(df.columns)
@@ -1872,7 +2027,7 @@ class AIService:
             raise HTTPException(500, "Dataset file path not found.")
 
         # Load dataset into memory
-        df = await load_dataset(file_path)
+        df = await enhanced_dataset_service.ensure_dataframe_for_agent(dataset_id, user_id, sample=False)
 
         # --- Classify query type ---
         needs_sql = query_classifier.needs_sql_execution(query)
@@ -1893,31 +2048,14 @@ class AIService:
             )
 
             if result["success"]:
-                # Build response with SQL transparency
                 response_parts = [result["response"]]
-
-                # Add data table if results exist
-                if result.get("data") and len(result["data"]) > 1:
-                    response_parts.append("\n\n---\n")
-                    response_parts.append("**Query Results:**\n")
-                    response_parts.append(
-                        query_executor.format_results(
-                            pl.DataFrame(result["data"])
-                            if result["data"]
-                            else pl.DataFrame(),
-                            max_display_rows=10,
-                        )
-                    )
-
-                # Add data-specific follow-up suggestions
-                columns_used = _extract_columns_from_result(result.get("data", []))
-                followups = _generate_data_specific_followups(
-                    metadata, query, result.get("data", [])
+                result_table = _build_result_table_payload(result)
+                follow_up_suggestions = _generate_result_followups(
+                    query, result, metadata
                 )
-                if followups:
-                    response_parts.append(followups)
 
-                # Add anomaly callouts if relevant
+                # Add data-quality callouts if relevant; tables and follow-ups stay structured.
+                columns_used = _extract_columns_from_result(result.get("data", []))
                 anomalies = _extract_relevant_anomalies(metadata, columns_used)
                 if anomalies:
                     response_parts.append(anomalies)
@@ -1937,11 +2075,23 @@ class AIService:
                     chart_data = await self._generate_chart_for_results(
                         result["data"], result.get("columns", []), query
                     )
+                show_follow_ups = _should_show_followups(
+                    query,
+                    ai_text,
+                    metadata,
+                    result=result,
+                    chart_data=chart_data,
+                )
 
                 # Save to conversation
                 ai_message = {"role": "ai", "content": ai_text}
                 if result.get("sql"):
                     ai_message["sql"] = result["sql"]
+                if result_table:
+                    ai_message["result_table"] = result_table
+                if follow_up_suggestions:
+                    ai_message["follow_up_suggestions"] = follow_up_suggestions
+                    ai_message["show_follow_up_suggestions"] = show_follow_ups
                 if chart_data:
                     ai_message["chart_config"] = chart_data
                 messages.append(ai_message)
@@ -1952,7 +2102,10 @@ class AIService:
                     "sql": result.get("sql"),
                     "data": result.get("data"),
                     "row_count": result.get("row_count", 0),
+                    "result_table": result_table,
                     "chart_config": chart_data,
+                    "follow_up_suggestions": follow_up_suggestions,
+                    "show_follow_up_suggestions": show_follow_ups,
                     "conversation_id": str(conv["_id"]),
                     "execution_type": "sql",
                     "execution_time_ms": result.get("execution_time_ms", 0),
@@ -1995,9 +2148,13 @@ class AIService:
             include_context=False,
         )
 
+        conversational_role = llm_router.resolve_conversational_role(
+            QueryComplexityAnalyzer.classify(query)
+        )
+
         llm_response = await llm_router.call(
             prompt,
-            model_role="conversational",
+            model_role=conversational_role,
             expect_json=False,
             is_conversational=True,
             query_complexity=complexity,
@@ -2032,6 +2189,7 @@ class AIService:
             "data_source": "LLM",
             "model_used": _get_model_display_name("conversational"),
             "sql_fallback": sql_fallback,
+            "corrections_applied": corrections_applied,
         }
 
     async def _generate_chart_for_results(
@@ -2468,6 +2626,11 @@ class AIService:
                 "chart_config": response.get("chart_config"),
                 "conversation_id": response.get("conversation_id"),
                 "sql": response.get("sql"),
+                "result_table": response.get("result_table"),
+                "follow_up_suggestions": response.get("follow_up_suggestions", []),
+                "show_follow_up_suggestions": response.get(
+                    "show_follow_up_suggestions", False
+                ),
                 "insights": response.get("insights", []),
                 "data_summary": response.get("data_summary", ""),
             }
@@ -2652,6 +2815,20 @@ class AIService:
             yield {"type": "error", "content": f"Invalid query: {str(e)}"}
             return
 
+        # --- CORRECTION RULES: Apply user's defined corrections ---
+        corrections_applied = []
+        try:
+            from services.feedback.correction_rewriter import correction_rewriter
+
+            workspace_id = user_id
+            query, corrections_applied = await correction_rewriter.apply_corrections(
+                query, workspace_id
+            )
+            if corrections_applied:
+                logger.info(f"Applied {len(corrections_applied)} corrections to query")
+        except Exception as e:
+            logger.warning(f"Failed to apply corrections: {e}")
+
         # --- INTENT GUARDRAIL: Reject off-topic queries ---
         if _is_off_topic(query_lower) and not is_data_related_query(query):
             guardrail_response = (
@@ -2753,7 +2930,7 @@ class AIService:
             file_path = dataset_doc.get("file_path")
             if file_path:
                 try:
-                    df = await load_dataset(file_path)
+                    df = await enhanced_dataset_service.ensure_dataframe_for_agent(dataset_id, user_id, sample=False)
                     yield {
                         "type": "thinking_step",
                         "label": "Executing data query",
@@ -2764,14 +2941,7 @@ class AIService:
                     )
                     if result.get("success") and result.get("response"):
                         ai_text = result["response"]
-                        if result.get("data") and len(result["data"]) > 1:
-                            ai_text += "\n\n---\n\n**Query Results:**\n"
-                            ai_text += query_executor.format_results(
-                                pl.DataFrame(result["data"])
-                                if result["data"]
-                                else pl.DataFrame(),
-                                max_display_rows=10,
-                            )
+                        result_table = _build_result_table_payload(result)
                         chart_data = None
                         _chart_intent = bool(
                             re.search(
@@ -2789,6 +2959,16 @@ class AIService:
                             chart_data = await self._generate_chart_for_results(
                                 result["data"], result.get("columns", []), query
                             )
+                        sql_follow_ups = _generate_result_followups(
+                            query, result, metadata
+                        )
+                        show_follow_ups = _should_show_followups(
+                            query,
+                            ai_text,
+                            metadata,
+                            result=result,
+                            chart_data=chart_data,
+                        )
                         # Stream the pre-computed answer token-by-token for consistent UX
                         words = ai_text.split()
                         for i, word in enumerate(words):
@@ -2800,6 +2980,11 @@ class AIService:
                         ai_message = {"role": "ai", "content": ai_text}
                         if result.get("sql"):
                             ai_message["sql"] = result["sql"]
+                        if result_table:
+                            ai_message["result_table"] = result_table
+                        if sql_follow_ups:
+                            ai_message["follow_up_suggestions"] = sql_follow_ups
+                            ai_message["show_follow_up_suggestions"] = show_follow_ups
                         if chart_data:
                             ai_message["chart_config"] = chart_data
                         messages.append(ai_message)
@@ -2808,15 +2993,14 @@ class AIService:
                         asyncio.create_task(
                             _passive_belief_update(user_id, query, ai_text, dataset_id)
                         )
-                        sql_follow_ups = _generate_follow_up_suggestions(
-                            query, ai_text, metadata
-                        )
                         yield {
                             "type": "done",
                             "conversation_id": str(conv["_id"]),
                             "chart_config": chart_data,
                             "sql": result.get("sql"),
+                            "result_table": result_table,
                             "follow_up_suggestions": sql_follow_ups,
+                            "show_follow_up_suggestions": show_follow_ups,
                         }
                         return
                 except Exception as e:
@@ -2882,6 +3066,7 @@ class AIService:
 
         # Analyze query complexity for adaptive formatting
         query_complexity = QueryComplexityAnalyzer.classify(query)
+        streaming_role = llm_router.resolve_conversational_role(query_complexity)
         logger.info(
             f"Query complexity: {query_complexity} for query: '{query[:50]}...'"
         )
@@ -2894,12 +3079,13 @@ class AIService:
         try:
             async for chunk in llm_router.call_streaming(
                 prompt,
-                model_role="chat_streaming",
+                model_role=streaming_role,
                 is_conversational=True,
                 query_complexity=query_complexity,
             ):
                 if chunk["type"] == "token":
                     full_response += chunk["content"]
+                    yield {"type": "token", "content": chunk["content"]}
 
                 elif chunk["type"] == "error":
                     yield {"type": "error", "content": chunk["content"]}
@@ -2933,7 +3119,7 @@ class AIService:
                         )
                         repaired_response = await llm_router.call(
                             _build_narrative_repair_prompt(prompt),
-                            model_role="chat_streaming",
+                            model_role=streaming_role,
                             expect_json=True,
                             is_conversational=True,
                         )
@@ -2962,11 +3148,6 @@ class AIService:
                     # Strip technical jargon for non-technical users
                     full_response = _humanize_chat_text(full_response)
                     insights = [_humanize_chat_text(i) for i in insights if i]
-
-                    words = full_response.split()
-                    for i, word in enumerate(words):
-                        token = word + (" " if i < len(words) - 1 else "")
-                        yield {"type": "token", "content": token}
 
                     yield {"type": "response_complete", "full_response": full_response}
 
@@ -3108,7 +3289,7 @@ class AIService:
 
                     file_path = dataset_doc.get("file_path")
                     if file_path:
-                        df = await load_dataset(file_path)
+                        df = await enhanced_dataset_service.ensure_dataframe_for_agent(dataset_id, user_id, sample=False)
 
                         # --- COLUMN VALIDATION: Auto-fix LLM column references ---
                         available_columns = list(df.columns)
@@ -3381,6 +3562,23 @@ class AIService:
                 logger.warning(f"Chart generation failed during streaming: {e}")
                 yield {"type": "chart_error", "reason": "Chart couldn't be rendered"}
 
+        try:
+            follow_up_suggestions = _generate_follow_up_suggestions(
+                query, full_response, metadata
+            )
+            logger.info(f"✓ Streaming: Follow-up suggestions generated ({len(follow_up_suggestions)} suggestions)")
+        except Exception as fup_err:
+            logger.error(f"Failed to generate follow-up suggestions: {fup_err}", exc_info=True)
+            follow_up_suggestions = []
+
+        show_follow_ups = _should_show_followups(
+            query,
+            full_response,
+            metadata,
+            chart_data=chart_data,
+            sql_fallback=sql_fallback,
+        )
+
         ai_message = {"role": "ai", "content": full_response}
         if insights:
             ai_message["insights"] = insights
@@ -3388,23 +3586,33 @@ class AIService:
             ai_message["data_summary"] = data_summary
         if chart_data:
             ai_message["chart_config"] = chart_data
+        if follow_up_suggestions:
+            ai_message["follow_up_suggestions"] = follow_up_suggestions
+            ai_message["show_follow_up_suggestions"] = show_follow_ups
 
         messages.append(ai_message)
         await save_conversation(conv["_id"], messages)
+        logger.info(f"✓ Streaming: Conversation saved (conv_id: {conv['_id']})")
 
         # Async memory extraction (fire-and-forget, non-blocking)
-        asyncio.create_task(
-            memory_service.extract_and_store(query, full_response, user_id, dataset_id)
-        )
+        try:
+            asyncio.create_task(
+                memory_service.extract_and_store(query, full_response, user_id, dataset_id)
+            )
+            logger.info("✓ Streaming: Memory extraction task created")
+        except Exception as mem_err:
+            logger.error(f"Failed to create memory task: {mem_err}", exc_info=True)
 
         # Passive belief update (fire-and-forget, no explicit feedback needed)
-        asyncio.create_task(
-            _passive_belief_update(user_id, query, full_response, dataset_id)
-        )
+        try:
+            asyncio.create_task(
+                _passive_belief_update(user_id, query, full_response, dataset_id)
+            )
+            logger.info("✓ Streaming: Belief update task created")
+        except Exception as belief_err:
+            logger.error(f"Failed to create belief task: {belief_err}", exc_info=True)
 
-        follow_up_suggestions = _generate_follow_up_suggestions(
-            query, full_response, metadata
-        )
+        logger.info(f"⚡ Streaming: About to yield DONE event for conversation {conv['_id']}")
         yield {
             "type": "done",
             "conversation_id": str(conv["_id"]),
@@ -3412,9 +3620,11 @@ class AIService:
             "insights": insights,
             "data_summary": data_summary,
             "follow_up_suggestions": follow_up_suggestions,
+            "show_follow_up_suggestions": show_follow_ups,
             "sql_fallback": sql_fallback,
             "column_corrections": column_corrections,
         }
+        logger.info(f"✓ Streaming: DONE event yielded successfully")
 
 
 # Singleton instance

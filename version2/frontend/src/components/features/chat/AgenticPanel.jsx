@@ -1,183 +1,206 @@
 /**
  * AgenticPanel
  * ============
- * Right-side slide-in panel for the Chat page that exposes the full
- * Subjective Novelty Detection + dashboard generation pipeline.
+ * Right-side panel that runs the 6-agent EDA pipeline and streams
+ * live progress via Server-Sent Events.
  *
- * Panels (tab-switched):
- *  1. "Analyse"      – triggers /agentic/analyze, shows novelty-scored
- *                      insight cards + filtered cards in audit mode
- *  2. "Belief Graph" – calls GET /agentic/beliefs, lists all beliefs
- *                      with confidence bars, source tags, delete control
- *  3. "Charts"       – renders viz_configs returned by the pipeline
- *                      as Plotly charts in a bento grid
+ * Tabs:
+ *  1. Analyse  — triggers /agentic/analyze, streams agent progress,
+ *                shows univariate findings + bivariate relationships
+ *  2. Charts   — chart config cards from the visualization agent
+ *  3. Belief   — stored beliefs (unchanged from prior implementation)
  */
 
 import React, { useState, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import Plot from 'react-plotly.js';
 import {
-  Brain, DatabaseZap, BarChart3, X, ChevronDown, ChevronUp,
-  ThumbsUp, EyeOff, Trash2, RefreshCw, Filter, Sparkles,
-  Shield, AlertTriangle, CheckCircle2, Loader2, Info,
+  Brain, BarChart3, X, ChevronDown, ChevronUp,
+  Trash2, RefreshCw, Sparkles, CheckCircle2, Loader2,
+  AlertCircle, TrendingUp, Activity, Eye, DatabaseZap,
+  ArrowRightLeft, Lightbulb, PieChart, ScatterChart,
+  LineChart, BarChart2,
 } from 'lucide-react';
 import { agenticAPI } from '@/services/api';
 import { toast } from 'react-hot-toast';
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── constants ────────────────────────────────────────────────────────────────
 
-const scoreColor = (n) => {
-  if (n >= 0.70) return { bg: 'bg-emerald-500/15', border: 'border-emerald-500/40', text: 'text-emerald-400', dot: 'bg-emerald-400' };
-  if (n >= 0.35) return { bg: 'bg-amber-500/10', border: 'border-amber-500/30', text: 'text-amber-400', dot: 'bg-amber-400' };
-  return { bg: 'bg-elevated/60', border: 'border-border/30', text: 'text-muted', dot: 'bg-muted' };
+const AGENTS = [
+  { id: 'planner',           label: 'Planner',           desc: 'Planning analysis…' },
+  { id: 'data_understanding',label: 'Data Understanding',desc: 'Understanding your data…' },
+  { id: 'univariate',        label: 'Univariate',        desc: 'Exploring each column…' },
+  { id: 'bivariate',         label: 'Bivariate',         desc: 'Finding relationships…' },
+  { id: 'visualization',     label: 'Visualization',     desc: 'Selecting best charts…' },
+  { id: 'critic',            label: 'Critic / QA',       desc: 'Validating results…' },
+];
+
+const CHART_ICONS = {
+  bar: BarChart2, line: LineChart, scatter: ScatterChart,
+  histogram: Activity, box: Activity, heatmap: PieChart, pie: PieChart,
 };
 
-const sourceLabel = {
-  user_dismissed: { label: 'Already knew', color: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
-  user_accepted: { label: 'Useful', color: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
-  document_ingested: { label: 'Document', color: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+const strengthColor = (s) => {
+  if (s === 'strong')   return 'text-green-700 bg-green-50 border-green-200';
+  if (s === 'moderate') return 'text-yellow-700 bg-yellow-50 border-yellow-200';
+  return                       'text-gray-700 bg-gray-50 border-gray-200';
 };
 
-const insightTypeIcon = (type) => {
-  const t = (type || '').toLowerCase();
-  if (t.includes('anom')) return <AlertTriangle size={13} className="text-rose-400" />;
-  if (t.includes('corr')) return <BarChart3 size={13} className="text-violet-400" />;
-  return <Sparkles size={13} className="text-sky-400" />;
+const directionIcon = (d) => {
+  if (!d) return null;
+  if (d === 'positive')    return <TrendingUp size={11} className="text-green-700" />;
+  if (d === 'negative')    return <TrendingUp size={11} className="rotate-180 text-red-700" />;
+  if (d === 'non-linear')  return <Activity size={11} className="text-purple-700" />;
+  return <ArrowRightLeft size={11} className="text-blue-700" />;
 };
 
-// theme-aware plotly template
-const getChartLayout = (title = '') => {
-  const isDark = document.documentElement.classList.contains('dark');
-  const palette = isDark ? {
-    grid: 'rgba(255,255,255,0.06)',
-    tick: '#64748b',
-    title: '#e2e8f0',
-    font: '#94a3b8'
-  } : {
-    grid: '#e2e8f0',
-    tick: '#94a3b8',
-    title: '#334155',
-    font: '#64748b'
-  };
-
-  return {
-    title: { text: title, font: { color: palette.title, size: 13 } },
-    paper_bgcolor: 'rgba(0,0,0,0)',
-    plot_bgcolor: 'rgba(0,0,0,0)',
-    font: { color: palette.font, size: 11 },
-    margin: { t: 36, b: 40, l: 44, r: 12 },
-    xaxis: { gridcolor: palette.grid, color: palette.tick, tickfont: { size: 10 } },
-    yaxis: { gridcolor: palette.grid, color: palette.tick, tickfont: { size: 10 } },
-    showlegend: false,
-  };
-};
+// parse SSE lines from a text chunk
+function* parseSseChunk(text, buffer) {
+  const lines = (buffer + text).split('\n');
+  for (let i = 0; i < lines.length - 1; i++) {
+    const line = lines[i].trim();
+    if (line.startsWith('data: ')) {
+      try { yield JSON.parse(line.slice(6)); } catch { /* skip malformed */ }
+    }
+  }
+  return lines[lines.length - 1]; // leftover for next chunk
+}
 
 // ─── sub-components ──────────────────────────────────────────────────────────
 
-/** A single insight card (presented or filtered) */
-const InsightCard = ({ insight, filtered = false, onFeedback }) => {
+const AgentRow = ({ agent, status, label }) => {
+  const statusIcon = {
+    idle:    <span className="w-2 h-2 rounded-full bg-border/60 shrink-0" />,
+    running: <Loader2 size={13} className="text-purple-700 animate-spin shrink-0" />,
+    done:    <CheckCircle2 size={13} className="text-green-700 shrink-0" />,
+    error:   <AlertCircle size={13} className="text-red-700 shrink-0" />,
+  }[status] || null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0.4 }}
+      animate={{ opacity: status === 'idle' ? 0.45 : 1 }}
+      className="flex items-center gap-2.5 py-1.5"
+    >
+      {statusIcon}
+      <div className="flex-1 min-w-0">
+        <span className={`text-[12px] font-medium ${
+          status === 'done'    ? 'text-secondary' :
+          status === 'running' ? 'text-purple-700' :
+          status === 'error'   ? 'text-red-700'  : 'text-muted'
+        }`}>
+          {agent.label}
+        </span>
+        {status === 'running' && label && (
+          <p className="text-[10px] text-muted mt-0.5">{label}</p>
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
+const FindingCard = ({ finding }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 4 }}
+    animate={{ opacity: 1, y: 0 }}
+    className="rounded-xl border border-border bg-elevated/40 p-3 mb-2"
+  >
+    <div className="flex items-center gap-1.5 mb-1">
+      <Activity size={11} className="text-blue-700 shrink-0" />
+      <span className="text-[10px] font-semibold text-muted uppercase tracking-wider">
+        {finding.column}
+      </span>
+      {finding.dtype && (
+        <span className="text-[9px] px-1.5 py-0.5 rounded bg-surface border border-border text-muted font-mono">
+          {finding.dtype}
+        </span>
+      )}
+    </div>
+    <p className="text-[12px] text-header leading-[1.5]">{finding.finding}</p>
+  </motion.div>
+);
+
+const RelationshipCard = ({ rel, index }) => {
+  const cols = (rel.columns || []).join(' ↔ ');
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.04 }}
+      className="rounded-xl border border-border bg-elevated/40 p-3 mb-2"
+    >
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {directionIcon(rel.direction)}
+          <span className="text-[11px] font-semibold text-sky-300 truncate font-mono">{cols}</span>
+        </div>
+        {rel.strength && (
+          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border shrink-0 ${strengthColor(rel.strength)}`}>
+            {rel.strength}
+          </span>
+        )}
+      </div>
+      <p className="text-[12px] text-header leading-[1.5]">{rel.relationship}</p>
+      {rel.business_implication && (
+        <p className="text-[11px] text-muted mt-1 leading-[1.4]">{rel.business_implication}</p>
+      )}
+    </motion.div>
+  );
+};
+
+const ChartConfigCard = ({ cfg, index }) => {
   const [expanded, setExpanded] = useState(false);
-  const score = insight.novelty_score ?? 0;
-  const { bg, border, text, dot } = scoreColor(score);
-  const pVal = insight.p_value != null ? insight.p_value.toFixed(3) : null;
-  const eff = insight.effect_size != null ? insight.effect_size.toFixed(2) : null;
+  const Icon = CHART_ICONS[cfg.chart_type] || BarChart3;
+  const cols = [cfg.x, cfg.y, cfg.color].filter(Boolean);
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: filtered ? 0.48 : 1, y: 0 }}
-      transition={{ duration: 0.2 }}
-      className={`rounded-xl border ${border} ${bg} p-3 mb-2 ${filtered ? 'grayscale-[30%]' : ''}`}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.06 }}
+      className="rounded-xl border border-border bg-elevated/40 p-3 mb-2"
     >
-      {/* header row */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-1.5 min-w-0">
-          {insightTypeIcon(insight.type)}
-          <span className={`text-[11px] font-semibold uppercase tracking-wider ${filtered ? 'text-muted' : 'text-secondary'}`}>
-            {insight.type || 'insight'}
-          </span>
+      <div className="flex items-start gap-2.5">
+        <div className="w-8 h-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center shrink-0">
+          <Icon size={15} className="text-purple-700" />
         </div>
-
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* novelty badge */}
-          <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold border ${border} ${text}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
-            {score.toFixed(2)}
-          </span>
-          <button onClick={() => setExpanded(e => !e)} className="text-slate-500 hover:text-slate-300 p-0.5 transition-colors">
-            {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-          </button>
+        <div className="flex-1 min-w-0">
+          <p className="text-[12px] font-semibold text-header leading-snug">{cfg.title || 'Chart'}</p>
+          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+            <span className="text-[10px] font-mono text-violet-300 bg-violet-500/10 px-1.5 py-0.5 rounded">
+              {cfg.chart_type}
+            </span>
+            {cols.map(c => (
+              <span key={c} className="text-[10px] font-mono text-slate-400 bg-surface border border-border px-1.5 py-0.5 rounded">
+                {c}
+              </span>
+            ))}
+            {cfg.aggregation && cfg.aggregation !== 'none' && (
+              <span className="text-[10px] text-muted">agg:{cfg.aggregation}</span>
+            )}
+          </div>
         </div>
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="p-0.5 text-muted hover:text-secondary transition-colors shrink-0"
+        >
+          {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
       </div>
 
-      {/* description */}
-      <p className={`text-[13px] leading-[1.55] mt-1.5 ${filtered ? 'text-muted' : 'text-header'}`}>
-        {insight.description || insight.summary || '—'}
-      </p>
-
-      {/* filtered: show matched belief */}
-      {filtered && insight.similar_to && (
-        <div className="mt-1.5 flex items-start gap-1.5 text-[11px] text-muted">
-          <Info size={11} className="mt-0.5 shrink-0" />
-          <span>Matched: <em className="text-secondary">"{insight.similar_to.slice(0, 80)}…"</em></span>
-        </div>
-      )}
-
-      {/* expandable sub-scores */}
       <AnimatePresence>
-        {expanded && (
+        {expanded && cfg.rationale && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             className="overflow-hidden"
           >
-            <div className="mt-2 pt-2 border-t border-border/40 space-y-1">
-              {pVal != null && (
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-muted">p-value</span>
-                  <span className="text-secondary font-mono">{pVal}</span>
-                </div>
-              )}
-              {eff != null && (
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-muted">Effect size</span>
-                  <span className="text-secondary font-mono">{eff}</span>
-                </div>
-              )}
-              {insight.semantic_surprisal != null && (
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-muted">Semantic surprisal</span>
-                  <span className="text-secondary font-mono">{insight.semantic_surprisal.toFixed(2)}</span>
-                </div>
-              )}
-              {insight.bayesian_surprise != null && (
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-muted">Bayesian surprise</span>
-                  <span className="text-secondary font-mono">{insight.bayesian_surprise.toFixed(2)}</span>
-                </div>
-              )}
+            <div className="mt-2 pt-2 border-t border-border/40 flex items-start gap-1.5">
+              <Lightbulb size={11} className="text-yellow-700 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-muted leading-[1.5]">{cfg.rationale}</p>
             </div>
-
-            {/* feedback — only on presented cards */}
-            {!filtered && onFeedback && (
-              <div className="mt-2 flex items-center gap-3 pt-1">
-                <button
-                  onClick={() => onFeedback('useful', insight)}
-                  title="Useful"
-                  className="flex items-center gap-1 text-[11px] text-muted hover:text-emerald-400 transition-colors"
-                >
-                  <ThumbsUp size={13} /> Useful
-                </button>
-                <button
-                  onClick={() => onFeedback('known', insight)}
-                  title="Already knew this"
-                  className="flex items-center gap-1 text-[11px] text-muted hover:text-amber-400 transition-colors"
-                >
-                  <EyeOff size={13} /> Already knew
-                </button>
-              </div>
-            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -185,8 +208,7 @@ const InsightCard = ({ insight, filtered = false, onFeedback }) => {
   );
 };
 
-/** Belief Graph panel listing all stored beliefs */
-const BeliefGraphTab = ({ userId }) => {
+const BeliefGraphTab = () => {
   const [beliefs, setBeliefs] = useState(null);
   const [loading, setLoading] = useState(false);
   const loadedRef = useRef(false);
@@ -205,10 +227,7 @@ const BeliefGraphTab = ({ userId }) => {
     }
   }, [loading]);
 
-  // auto-load on first render
-  React.useEffect(() => {
-    if (!loadedRef.current) load();
-  }, []);
+  React.useEffect(() => { if (!loadedRef.current) load(); }, []);
 
   const handleDelete = async (id) => {
     try {
@@ -220,189 +239,162 @@ const BeliefGraphTab = ({ userId }) => {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted">
-        <Loader2 size={22} className="animate-spin" />
-        <span className="text-sm">Loading beliefs…</span>
-      </div>
-    );
-  }
+  if (loading) return (
+    <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted">
+      <Loader2 size={22} className="animate-spin" />
+      <span className="text-sm">Loading beliefs…</span>
+    </div>
+  );
 
   if (!beliefs) return null;
 
-  if (beliefs.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted text-center px-6">
-        <Brain size={28} className="opacity-30" />
-        <p className="text-sm">No beliefs yet.</p>
-        <p className="text-xs leading-relaxed">
-          Click <strong className="text-amber-400">Already knew</strong> or <strong className="text-emerald-400">Useful</strong> on any insight card to start building your Belief Graph.
-        </p>
-      </div>
-    );
-  }
+  if (beliefs.length === 0) return (
+    <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted text-center px-6">
+      <Brain size={28} className="opacity-30" />
+      <p className="text-sm">No beliefs stored yet.</p>
+    </div>
+  );
 
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between mb-3">
-        <span className="text-xs text-muted">{beliefs.length} belief{beliefs.length !== 1 ? 's' : ''} stored</span>
+        <span className="text-xs text-muted">{beliefs.length} belief{beliefs.length !== 1 ? 's' : ''}</span>
         <button onClick={load} className="flex items-center gap-1 text-[11px] text-muted hover:text-secondary transition-colors">
           <RefreshCw size={11} /> Refresh
         </button>
       </div>
-
       {beliefs.map((b, i) => {
         const conf = typeof b.confidence === 'number' ? b.confidence : (b.metadata?.confidence ?? 0.8);
-        const confDecayed = typeof b.confidence_decayed === 'number' ? b.confidence_decayed : conf;
-        const src = b.metadata?.source || b.source || 'user_confirmed';
-        const tag = sourceLabel[src] || { label: src, color: 'text-slate-400 bg-slate-800 border-slate-700' };
-        const stale = confDecayed < 0.3;
-
         return (
-          <motion.div
-            key={b.id || i}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: stale ? 0.4 : 1, y: 0 }}
-            transition={{ delay: i * 0.03 }}
-            className={`rounded-xl border p-3 ${stale ? 'border-border bg-surface/40' : 'border-border bg-elevated/40'}`}
-          >
+          <div key={b.id || i} className="rounded-xl border border-border bg-elevated/40 p-3">
             <div className="flex items-start gap-2">
-              <div className="flex-1 min-w-0">
-                <p className={`text-[12px] leading-[1.5] ${stale ? 'text-muted' : 'text-header'}`}>
-                  {b.document || b.text || '—'}
-                </p>
-                <div className="flex items-center gap-2 mt-1.5">
-                  <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${tag.color}`}>
-                    {tag.label}
-                  </span>
-                  {stale && (
-                    <span className="text-[10px] text-muted italic">Stale</span>
-                  )}
-                </div>
-
-                {/* confidence bar */}
-                <div className="mt-2 flex items-center gap-2">
-                  <div className="flex-1 h-1 rounded-full bg-border/60">
-                    <div
-                      className={`h-1 rounded-full transition-all ${confDecayed >= 0.7 ? 'bg-emerald-500' : confDecayed >= 0.4 ? 'bg-amber-500' : 'bg-muted'}`}
-                      style={{ width: `${Math.min(100, confDecayed * 100)}%` }}
-                    />
-                  </div>
-                  <span className="text-[10px] text-muted tabular-nums w-7 text-right">
-                    {(confDecayed * 100).toFixed(0)}%
-                  </span>
-                </div>
-              </div>
-
+              <p className="flex-1 text-[12px] text-header leading-[1.5]">{b.document || b.text || '—'}</p>
               <button
                 onClick={() => handleDelete(b.id)}
-                className="shrink-0 p-1 text-muted hover:text-rose-400 transition-colors rounded"
-                title="Remove belief"
+                className="shrink-0 p-1 text-muted hover:text-red-700 transition-colors"
               >
                 <Trash2 size={13} />
               </button>
             </div>
-          </motion.div>
+            <div className="mt-2 flex items-center gap-2">
+              <div className="flex-1 h-1 rounded-full bg-border/60">
+                <div
+                  className={`h-1 rounded-full ${conf >= 0.7 ? 'bg-emerald-500' : conf >= 0.4 ? 'bg-amber-500' : 'bg-muted'}`}
+                  style={{ width: `${Math.min(100, conf * 100)}%` }}
+                />
+              </div>
+              <span className="text-[10px] text-muted tabular-nums w-7 text-right">{(conf * 100).toFixed(0)}%</span>
+            </div>
+          </div>
         );
       })}
     </div>
   );
 };
 
-/** Render viz_configs as plotly charts */
-const ChartsTab = ({ vizConfigs }) => {
-  if (!vizConfigs || vizConfigs.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted text-center px-6">
-        <BarChart3 size={28} className="opacity-30" />
-        <p className="text-sm">No charts yet.</p>
-        <p className="text-xs">Run an analysis to generate visualisations from the pipeline.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      {vizConfigs.map((cfg, i) => (
-        <motion.div
-          key={i}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: i * 0.06 }}
-          className="rounded-xl border border-border bg-surface/60 overflow-hidden"
-        >
-          <Plot
-            data={cfg.data || []}
-            layout={{
-              ...getChartLayout(cfg.layout?.title?.text || cfg.title || `Chart ${i + 1}`),
-              ...(cfg.layout || {}),
-              paper_bgcolor: 'rgba(0,0,0,0)',
-              plot_bgcolor: 'rgba(0,0,0,0)',
-              height: 220,
-              margin: { t: 36, b: 40, l: 44, r: 12 },
-            }}
-            config={{ displayModeBar: false, responsive: true }}
-            style={{ width: '100%' }}
-          />
-        </motion.div>
-      ))}
-    </div>
-  );
-};
-
 // ─── main component ───────────────────────────────────────────────────────────
 
+const INITIAL_AGENT_STATUS = Object.fromEntries(AGENTS.map(a => [a.id, 'idle']));
 const TABS = [
-  { id: 'analyse', label: 'Analyse', icon: Brain },
-  { id: 'beliefs', label: 'Belief Graph', icon: DatabaseZap },
-  { id: 'charts', label: 'Charts', icon: BarChart3 },
+  { id: 'analyse', label: 'Analyse',     icon: Brain },
+  { id: 'charts',  label: 'Charts',      icon: BarChart3 },
+  { id: 'beliefs', label: 'Belief Graph',icon: DatabaseZap },
 ];
 
 const AgenticPanel = ({ datasetId, onClose }) => {
   const [activeTab, setActiveTab] = useState('analyse');
+  const [running, setRunning]     = useState(false);
+  const [agentStatus, setAgentStatus] = useState(INITIAL_AGENT_STATUS);
+  const [agentLabels, setAgentLabels] = useState({});
+  const [edaResult, setEdaResult]     = useState(null);
+  const [error, setError]             = useState(null);
+  const [question, setQuestion]       = useState('');
+  const abortRef = useRef(null);
 
-  // analysis state
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState(null);   // { novel, filtered, stats, vizConfigs }
-  const [showFiltered, setShowFiltered] = useState(false);
-  const [noveltyThreshold, setNoveltyThreshold] = useState(0.35);
-
-  const runAnalysis = async () => {
+  const runPipeline = async () => {
     if (!datasetId) { toast.error('Select a dataset first'); return; }
     setRunning(true);
-    setResult(null);
+    setEdaResult(null);
+    setError(null);
+    setAgentStatus(INITIAL_AGENT_STATUS);
+    setAgentLabels({});
+
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
     try {
-      const res = await agenticAPI.runAnalysis(datasetId, { novelty_threshold: noveltyThreshold });
-      const d = res.data;
-      setResult({
-        novel: d.novel_insights || [],
-        filtered: d.filtered_insights || [],
-        stats: d.stats || {},
-        vizConfigs: d.viz_configs || [],
-        response: d.final_response || '',
-      });
-      toast.success(`Analysis complete — ${d.novel_insights?.length ?? 0} novel insights found`);
+      const response = await agenticAPI.streamAnalysis(
+        datasetId,
+        question.trim() || 'Give me a full exploratory analysis of this dataset',
+      );
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+
+      const reader  = response.body.getReader();
+      const decoder = new TextDecoder();
+      let   buf     = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = (buf + chunk).split('\n');
+        buf = lines.pop(); // keep incomplete last line
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          let event;
+          try { event = JSON.parse(line.slice(6)); } catch { continue; }
+
+          if (event.type === 'agent_start') {
+            setAgentStatus(s => ({ ...s, [event.agent]: 'running' }));
+            setAgentLabels(l => ({ ...l, [event.agent]: event.label }));
+          } else if (event.type === 'agent_done') {
+            setAgentStatus(s => ({ ...s, [event.agent]: 'done' }));
+          } else if (event.type === 'agent_error') {
+            setAgentStatus(s => ({ ...s, [event.agent]: 'error' }));
+          } else if (event.type === 'pipeline_done') {
+            setEdaResult(event.data);
+            setActiveTab('analyse');
+          } else if (event.type === 'pipeline_error') {
+            setError(event.error);
+            toast.error(event.error || 'Pipeline failed');
+          }
+        }
+      }
     } catch (e) {
-      toast.error(e?.response?.data?.detail || 'Analysis failed');
+      if (e.name !== 'AbortError') {
+        const msg = e.message || 'Analysis failed';
+        setError(msg);
+        toast.error(msg);
+      }
     } finally {
       setRunning(false);
+      abortRef.current = null;
     }
   };
 
-  const handleFeedback = async (type, insight) => {
-    try {
-      await agenticAPI.submitFeedback({
-        insight_text: insight.description || insight.summary || '',
-        feedback_type: type,
-        dataset_id: datasetId,
-      });
-      const opt = type === 'useful' ? 'Noted as valuable' : "Won't repeat similar insights";
-      toast.success(opt, { duration: 2200 });
-    } catch {
-      toast.error('Feedback failed');
-    }
+  const cancel = () => {
+    abortRef.current?.abort();
+    setRunning(false);
   };
+
+  const charts = edaResult?.charts || [];
+  const univariateFindings = edaResult?.univariate?.key_findings || [];
+  const relationships      = edaResult?.bivariate?.key_relationships || [];
+  const drivers            = edaResult?.bivariate?.primary_drivers || [];
+  const plannerIntent      = edaResult?.planner?.intent;
+  const validation         = edaResult?.validation;
+  const pipelineErrors     = edaResult?.errors || [];
+  const partialFailure     = edaResult?.partial_failure || false;
+  const timings            = edaResult?.timings || {};
+  const totalTime          = Object.values(timings).reduce((a, b) => a + b, 0);
+  const hasResult          = !!edaResult;
+  const anyRunning         = Object.values(agentStatus).some(s => s === 'running');
 
   return (
     <motion.div
@@ -410,21 +402,31 @@ const AgenticPanel = ({ datasetId, onClose }) => {
       animate={{ x: 0, opacity: 1 }}
       exit={{ x: 380, opacity: 0 }}
       transition={{ type: 'spring', stiffness: 340, damping: 32 }}
-      className="fixed top-0 right-0 h-full w-[370px] z-50 flex flex-col bg-surface border-l border-border shadow-2xl shadow-black/20"
+      className="fixed top-0 right-0 h-full w-[380px] z-50 flex flex-col bg-surface border-l border-border shadow-2xl shadow-black/20"
     >
-      {/* ── header ── */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+      {/* header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
-          <Brain size={16} className="text-violet-400" />
-          <span className="text-sm font-semibold text-header">DataSage SND</span>
+          <Brain size={16} className="text-purple-700" />
+          <span className="text-sm font-semibold text-header">EDA Pipeline</span>
+          {hasResult && (
+            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${
+              partialFailure
+                ? 'bg-yellow-50 border-yellow-200 text-yellow-700'
+                : 'bg-green-50 border-green-200 text-green-700'
+            }`}>
+              {partialFailure ? 'Partial' : 'Done'}
+              {totalTime > 0 && ` · ${totalTime.toFixed(1)}s`}
+            </span>
+          )}
         </div>
         <button onClick={onClose} className="p-1 text-muted hover:text-secondary transition-colors rounded">
           <X size={16} />
         </button>
       </div>
 
-      {/* ── tabs ── */}
-      <div className="flex border-b border-border">
+      {/* tabs */}
+      <div className="flex border-b border-border shrink-0">
         {TABS.map(t => {
           const Icon = t.icon;
           const active = activeTab === t.id;
@@ -434,130 +436,213 @@ const AgenticPanel = ({ datasetId, onClose }) => {
               onClick={() => setActiveTab(t.id)}
               className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[11px] font-semibold transition-colors
                 ${active
-                  ? 'text-violet-300 border-b-2 border-violet-400'
+                  ? 'text-purple-700 border-b-2 border-purple-700'
                   : 'text-muted hover:text-secondary border-b-2 border-transparent'
                 }`}
             >
               <Icon size={13} />
               {t.label}
+              {t.id === 'charts' && charts.length > 0 && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 font-bold ml-0.5">
+                  {charts.length}
+                </span>
+              )}
             </button>
           );
         })}
       </div>
 
-      {/* ── body ── */}
+      {/* body */}
       <div className="flex-1 overflow-y-auto px-4 py-3 scrollbar-thin scrollbar-thumb-muted/30 scrollbar-track-transparent">
 
-        {/* ╔═ ANALYSE TAB ══════════════════════════════════════════════════╗ */}
+        {/* ╔═ ANALYSE TAB ══════════════════════════════════════╗ */}
         {activeTab === 'analyse' && (
           <div>
-            {/* controls */}
-            <div className="flex items-center gap-2 mb-3">
-              <div className="flex-1">
-                <label className="text-[10px] text-muted mb-1 block">Novelty threshold: <strong className="text-secondary">{noveltyThreshold.toFixed(2)}</strong></label>
-                <input
-                  type="range" min="0.10" max="0.90" step="0.05"
-                  value={noveltyThreshold}
-                  onChange={e => setNoveltyThreshold(Number(e.target.value))}
-                  className="w-full accent-violet-500 h-1"
-                />
-              </div>
-              <button
-                onClick={runAnalysis}
-                disabled={running || !datasetId}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white transition-colors shrink-0"
-              >
-                {running
-                  ? <><Loader2 size={13} className="animate-spin" /> Running…</>
-                  : <><Sparkles size={13} /> Analyse</>
-                }
-              </button>
+            {/* question input */}
+            <div className="mb-3">
+              <input
+                type="text"
+                placeholder="What do you want to learn? (optional)"
+                value={question}
+                onChange={e => setQuestion(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !running && runPipeline()}
+                disabled={running}
+                className="w-full text-[12px] bg-elevated border border-border rounded-lg px-3 py-2 text-header placeholder:text-muted/60 focus:outline-none focus:border-violet-500/60 transition-colors"
+              />
             </div>
 
-            {/* stats banner */}
-            {result && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                className="mb-3 p-2.5 rounded-xl bg-elevated/60 border border-border grid grid-cols-3 gap-2 text-center"
+            {/* run / cancel button */}
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={running ? cancel : runPipeline}
+                disabled={!datasetId}
+                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-40
+                  ${running
+                    ? 'bg-rose-600/80 hover:bg-rose-600 text-white'
+                    : 'bg-violet-600 hover:bg-violet-500 text-white'
+                  }`}
               >
-                {[
-                  { label: 'Generated', val: result.stats.total_questions ?? (result.novel.length + result.filtered.length) },
-                  { label: 'Presented', val: result.novel.length, color: 'text-emerald-400' },
-                  { label: 'Filtered', val: result.filtered.length, color: 'text-amber-400' },
-                ].map(s => (
-                  <div key={s.label}>
-                    <div className={`text-lg font-bold ${s.color || 'text-header'}`}>{s.val}</div>
-                    <div className="text-[10px] text-muted">{s.label}</div>
-                  </div>
-                ))}
-              </motion.div>
-            )}
+                {running
+                  ? <><X size={13} /> Cancel</>
+                  : <><Sparkles size={13} /> Run EDA</>
+                }
+              </button>
+              {hasResult && (
+                <button
+                  onClick={() => { setEdaResult(null); setAgentStatus(INITIAL_AGENT_STATUS); setError(null); }}
+                  className="px-3 py-2 rounded-lg text-[12px] text-muted hover:text-secondary border border-border transition-colors"
+                  title="Clear results"
+                >
+                  <RefreshCw size={13} />
+                </button>
+              )}
+            </div>
 
-            {/* running skeleton */}
-            {running && (
-              <div className="space-y-2 mt-2">
-                {[1, 2, 3].map(i => (
-                  <div key={i} className="h-16 rounded-xl bg-elevated animate-pulse border border-border" />
+            {/* agent progress list — show when running or done */}
+            {(running || hasResult || Object.values(agentStatus).some(s => s !== 'idle')) && (
+              <div className="mb-4 p-3 rounded-xl border border-border bg-elevated/40">
+                <p className="text-[10px] font-semibold text-muted uppercase tracking-wider mb-2">Pipeline Progress</p>
+                {AGENTS.map(a => (
+                  <AgentRow
+                    key={a.id}
+                    agent={a}
+                    status={agentStatus[a.id]}
+                    label={agentLabels[a.id]}
+                  />
                 ))}
-                <p className="text-center text-xs text-muted mt-3">Running QUIS pipeline…</p>
               </div>
             )}
 
-            {/* insight cards */}
-            {result && !running && (
+            {/* error banner */}
+            {error && (
+              <div className="mb-3 p-3 rounded-xl border border-rose-500/30 bg-rose-500/5 flex items-start gap-2">
+                <AlertCircle size={14} className="text-red-700 mt-0.5 shrink-0" />
+                <p className="text-[12px] text-rose-300 leading-[1.5]">{error}</p>
+              </div>
+            )}
+
+            {/* pipeline errors (non-fatal) */}
+            {pipelineErrors.length > 0 && (
+              <div className="mb-3 p-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5">
+                <p className="text-[10px] font-semibold text-yellow-700 mb-1">Warnings</p>
+                {pipelineErrors.map((e, i) => (
+                  <p key={i} className="text-[11px] text-amber-300/70">{e}</p>
+                ))}
+              </div>
+            )}
+
+            {/* results */}
+            {hasResult && (
               <>
-                {result.novel.length === 0 && result.filtered.length === 0 && (
-                  <p className="text-sm text-muted text-center py-8">No insights generated — try a larger dataset.</p>
+                {/* planner intent */}
+                {plannerIntent && (
+                  <div className="mb-4 p-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Eye size={12} className="text-purple-700" />
+                      <span className="text-[10px] font-semibold text-violet-300 uppercase tracking-wider">Intent</span>
+                    </div>
+                    <p className="text-[12px] text-secondary leading-[1.5]">{plannerIntent}</p>
+                    {drivers.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {drivers.map(d => (
+                          <span key={d} className="text-[10px] font-mono text-sky-300 bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 rounded">
+                            {d}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 )}
 
-                {result.novel.map((ins, i) => (
-                  <InsightCard key={i} insight={ins} onFeedback={handleFeedback} />
-                ))}
+                {/* validation badge */}
+                {validation && (
+                  <div className={`mb-4 p-2.5 rounded-xl border flex items-center gap-2
+                    ${validation.passed
+                      ? 'border-emerald-500/20 bg-emerald-500/5'
+                      : 'border-amber-500/20 bg-amber-500/5'
+                    }`}
+                  >
+                    <CheckCircle2 size={13} className={validation.passed ? 'text-green-700' : 'text-yellow-700'} />
+                    <span className="text-[11px] text-secondary">
+                      QA {validation.passed ? 'passed' : 'found issues'} · confidence {((validation.confidence_score || 0) * 100).toFixed(0)}%
+                    </span>
+                    {(validation.issues || []).length > 0 && (
+                      <span className="ml-auto text-[10px] text-yellow-700">{validation.issues.length} issue{validation.issues.length !== 1 ? 's' : ''}</span>
+                    )}
+                  </div>
+                )}
 
-                {/* filtered toggle */}
-                {result.filtered.length > 0 && (
-                  <>
-                    <button
-                      onClick={() => setShowFiltered(f => !f)}
-                      className="flex items-center gap-1.5 text-[11px] text-muted hover:text-secondary transition-colors mt-1 mb-2"
-                    >
-                      <Filter size={12} />
-                      {showFiltered ? 'Hide' : 'Show'} {result.filtered.length} filtered insight{result.filtered.length !== 1 ? 's' : ''}
-                      {showFiltered ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                    </button>
+                {/* univariate findings */}
+                {univariateFindings.length > 0 && (
+                  <section className="mb-4">
+                    <p className="text-[10px] font-semibold text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <Activity size={11} /> Column Findings ({univariateFindings.length})
+                    </p>
+                    {univariateFindings.map((f, i) => <FindingCard key={i} finding={f} />)}
+                  </section>
+                )}
 
-                    <AnimatePresence>
-                      {showFiltered && result.filtered.map((ins, i) => (
-                        <InsightCard key={`f-${i}`} insight={ins} filtered />
-                      ))}
-                    </AnimatePresence>
-                  </>
+                {/* bivariate relationships */}
+                {relationships.length > 0 && (
+                  <section className="mb-4">
+                    <p className="text-[10px] font-semibold text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <ArrowRightLeft size={11} /> Relationships ({relationships.length})
+                    </p>
+                    {relationships.map((r, i) => <RelationshipCard key={i} rel={r} index={i} />)}
+                  </section>
+                )}
+
+                {/* charts hint */}
+                {charts.length > 0 && (
+                  <button
+                    onClick={() => setActiveTab('charts')}
+                    className="w-full text-[12px] text-violet-300 bg-violet-500/10 border border-violet-500/20 rounded-xl py-2.5 hover:bg-violet-500/15 transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <BarChart3 size={13} />
+                    View {charts.length} chart recommendation{charts.length !== 1 ? 's' : ''}
+                  </button>
                 )}
               </>
             )}
 
-            {/* empty pre-run state */}
-            {!result && !running && (
+            {/* empty state */}
+            {!running && !hasResult && !error && (
               <div className="flex flex-col items-center justify-center py-14 gap-3 text-muted text-center">
                 <Brain size={32} className="opacity-20" />
-                <p className="text-sm">Run an analysis to surface novel insights filtered against your Belief Graph.</p>
+                <p className="text-sm">Run the 6-agent EDA pipeline to surface insights, relationships, and chart recommendations.</p>
               </div>
             )}
           </div>
         )}
 
-        {/* ╔═ BELIEF GRAPH TAB ═════════════════════════════════════════════╗ */}
-        {activeTab === 'beliefs' && <BeliefGraphTab />}
-
-        {/* ╔═ CHARTS TAB ═══════════════════════════════════════════════════╗ */}
+        {/* ╔═ CHARTS TAB ════════════════════════════════════════╗ */}
         {activeTab === 'charts' && (
-          <ChartsTab vizConfigs={result?.vizConfigs} />
+          <div>
+            {charts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted text-center px-6">
+                <BarChart3 size={28} className="opacity-30" />
+                <p className="text-sm">No chart recommendations yet.</p>
+                <p className="text-xs">Run an analysis to get visualisation suggestions from the pipeline.</p>
+              </div>
+            ) : (
+              <>
+                <p className="text-[11px] text-muted mb-3">
+                  {charts.length} chart recommendation{charts.length !== 1 ? 's' : ''} from the Visualization + Critic agents
+                </p>
+                {charts.map((cfg, i) => <ChartConfigCard key={i} cfg={cfg} index={i} />)}
+              </>
+            )}
+          </div>
         )}
+
+        {/* ╔═ BELIEFS TAB ═══════════════════════════════════════╗ */}
+        {activeTab === 'beliefs' && <BeliefGraphTab />}
       </div>
 
-      {/* ── footer credit ── */}
-      <div className="px-4 py-2 border-t border-border flex items-center gap-1.5">
-        <CheckCircle2 size={12} className="text-emerald-500/60" />
-        <span className="text-[10px] text-slate-600">Powered by ChromaDB · BGE-large-en-v1.5 · LangGraph</span>
+      {/* footer */}
+      <div className="px-4 py-2 border-t border-border flex items-center gap-1.5 shrink-0">
+        <Sparkles size={11} className="text-violet-500/50" />
+        <span className="text-[10px] text-slate-600">6-agent EDA · Planner → Data → Uni → Bi → Viz → QA</span>
       </div>
     </motion.div>
   );

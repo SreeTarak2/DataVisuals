@@ -15,7 +15,7 @@ import DistributionComparison from './features/analysis/DistributionComparison';
 
 const MotionDiv = motion.div;
 
-const getChartHeight = (type, variant, dataPoints = 0) => {
+const getChartHeight = (type, variant) => {
   // Fixed height per variant eliminates gaps and ensures aligned grid
   // No dynamic multipliers or bonuses — consistent alignment
   const fixedHeights = {
@@ -27,12 +27,60 @@ const getChartHeight = (type, variant, dataPoints = 0) => {
   return fixedHeights[variant] || 380;
 };
 
-const DashboardComponent = ({ component: initialComponent, variant, chartIntelligence, colorOffset = 0 }) => {
+const normalizePlotlyChartData = (component = {}) => {
+  const raw = component.chart_data || component.chartData || component.plotly || component;
+  const nested = raw?.chart_data || raw?.chartData;
+
+  if (nested && nested !== raw) {
+    return normalizePlotlyChartData({ chart_data: nested });
+  }
+
+  if (Array.isArray(raw?.data)) {
+    return { data: raw.data, layout: raw.layout || {} };
+  }
+
+  if (Array.isArray(raw?.traces)) {
+    return { data: raw.traces, layout: raw.layout || {} };
+  }
+
+  if (Array.isArray(component.data)) {
+    return { data: component.data, layout: component.layout || {} };
+  }
+
+  if (Array.isArray(component.traces)) {
+    return { data: component.traces, layout: component.layout || {} };
+  }
+
+  return { data: [], layout: {} };
+};
+
+const chartHasRenderableData = (chartData = {}) => {
+  if (!Array.isArray(chartData.data)) return false;
+
+  return chartData.data.some((trace) => {
+    if (!trace || trace.error) return false;
+    const traceType = (trace.type || '').toLowerCase();
+    if (traceType === 'heatmap') {
+      return Array.isArray(trace.z) && trace.z.length > 0 && Array.isArray(trace.z[0]) && trace.z[0].length > 0;
+    }
+    if (traceType === 'pie') {
+      return Array.isArray(trace.values) && trace.values.length > 0;
+    }
+    if (traceType === 'box' || traceType === 'violin') {
+      return Array.isArray(trace.y) && trace.y.length > 0;
+    }
+    return (Array.isArray(trace.x) && trace.x.length > 0) || (Array.isArray(trace.y) && trace.y.length > 0);
+  });
+};
+
+const DashboardComponent = ({ component: initialComponent, variant, chartIntelligence, colorOffset = 0, datasetData = [] }) => {
   const [component, setComponent] = useState(initialComponent);
   const [retrying, setRetrying] = useState(false);
   const [explanationExpanded, setExplanationExpanded] = useState(false);
   const [chartExplanation, setChartExplanation] = useState(null);
   const [explanationLoading, setExplanationLoading] = useState(false);
+  const autoRetryAttemptedRef = useRef(false);
+  const clickTimeout = useRef(null);
   const { colors } = useChartTheme();
   const { crossFilter, setCrossFilter } = useDashboardActionStore();
 
@@ -40,6 +88,7 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
     setComponent(initialComponent);
     setChartExplanation(null);
     setExplanationExpanded(false);
+    autoRetryAttemptedRef.current = false;
   }, [initialComponent]);
 
   const chartType = component.config?.chart_type?.toLowerCase() || '';
@@ -48,14 +97,13 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
     return ['distribution_comparison', 'ridge_plot'].includes(chartType);
   }, [chartType]);
 
-  const chartData = component.chart_data || { data: [], layout: {} };
-  const dataPoints = chartData.data?.[0]?.x?.length || chartData.data?.[0]?.y?.length || 0;
-  const chartHeight = getChartHeight(chartType, variant, dataPoints);
+  const chartData = useMemo(() => normalizePlotlyChartData(component), [component]);
+  const chartHeight = getChartHeight(chartType, variant);
 
   const hasData = useMemo(() => {
     if (isAnalyticsComponent) return true;
-    return chartData.data?.length > 0;
-  }, [chartData.data, isAnalyticsComponent]);
+    return chartHasRenderableData(chartData);
+  }, [chartData, isAnalyticsComponent]);
 
   // Compute AI annotations from chart intelligence
   const computedAnnotations = useMemo(() => {
@@ -107,7 +155,8 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
   const { selectedDataset } = useDatasetStore();
 
   const handleExplainChart = useCallback(async () => {
-    if (!selectedDataset?.id || explanationLoading) return;
+    const datasetId = selectedDataset?.id || selectedDataset?._id;
+    if (!datasetId || explanationLoading) return;
 
     if (chartExplanation) {
       setExplanationExpanded(!explanationExpanded);
@@ -120,7 +169,7 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
     try {
       const chartKey = component.id || component.config?.id || `${chartType}_${component.title || 'chart'}`;
       const res = await chartAPI.explainChart(
-        selectedDataset.id,
+        datasetId,
         chartKey,
         {
           chart_type: chartType,
@@ -150,14 +199,15 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
     } finally {
       setExplanationLoading(false);
     }
-  }, [selectedDataset, component, chartType, chartExplanation, explanationLoading, explanationExpanded]);
+  }, [selectedDataset, component, chartType, chartData, chartExplanation, explanationLoading, explanationExpanded]);
 
-  const handleRetryChart = useCallback(async () => {
-    if (!selectedDataset?.id || retrying) return;
+  const handleRetryChart = useCallback(async ({ silent = false } = {}) => {
+    const datasetId = selectedDataset?.id || selectedDataset?._id;
+    if (!datasetId || retrying) return;
     setRetrying(true);
     try {
       const token = getAuthToken();
-      const res = await fetch(`/api/ai/${selectedDataset.id}/retry-chart`, {
+      const res = await fetch(`/api/ai/${datasetId}/retry-chart`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ component }),
@@ -165,44 +215,81 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
 
       if (res.ok) {
         const result = await res.json();
+        const regeneratedChartData = normalizePlotlyChartData({ chart_data: result.chart_data });
 
-        const hasValidChartData = result.chart_data &&
-          Array.isArray(result.chart_data.data) &&
-          result.chart_data.data.length > 0;
+        const hasValidChartData = chartHasRenderableData(regeneratedChartData);
 
         if (hasValidChartData) {
+          const updatedComponent = {
+            ...component,
+            chart_data: regeneratedChartData,
+            config: {
+              ...component.config,
+              ...result.updated_config
+            }
+          };
+
           setComponent(prev => ({
             ...prev,
-            chart_data: result.chart_data,
+            chart_data: updatedComponent.chart_data,
             config: {
               ...prev.config,
               ...result.updated_config
             }
           }));
 
-          toast.success('Chart regenerated successfully!', {
-            duration: 2500,
-            style: {
-              background: '#1e293b',
-              color: '#e2e8f0',
-              border: '1px solid rgba(52, 211, 153, 0.3)',
-              fontSize: '13px'
-            }
-          });
+          const { dashboardConfigs, setDashboardConfig } = useDatasetStore.getState();
+          const dashboardConfig = dashboardConfigs?.[datasetId];
+          if (dashboardConfig?.components) {
+            const patchedComponents = dashboardConfig.components.map((item) => {
+              if (item === initialComponent) return updatedComponent;
+              if (component.id && item.id === component.id) return updatedComponent;
+              if (component.title && item.title === component.title) return updatedComponent;
+              return item;
+            });
+            setDashboardConfig(datasetId, {
+              ...dashboardConfig,
+              components: patchedComponents,
+            });
+          }
+
+          if (!silent) {
+            toast.success('Chart regenerated successfully!', {
+              duration: 2500,
+              style: {
+                background: '#1e293b',
+                color: '#e2e8f0',
+                border: '1px solid rgba(52, 211, 153, 0.3)',
+                fontSize: '13px'
+              }
+            });
+          }
         } else {
-          toast.error('Chart data generation failed - empty result', { duration: 3000 });
+          if (!silent) toast.error('Chart data generation failed - empty result', { duration: 3000 });
         }
       } else {
         const err = await res.json().catch(() => ({ detail: 'Failed to retry chart' }));
-        toast.error(err.detail || 'Failed to load chart', { duration: 3000 });
+        if (!silent) toast.error(err.detail || 'Failed to load chart', { duration: 3000 });
       }
     } catch (e) {
       console.error('Retry chart failed:', e);
-      toast.error('Network error — could not retry', { duration: 3000 });
+      if (!silent) toast.error('Network error — could not retry', { duration: 3000 });
     } finally {
       setRetrying(false);
     }
-  }, [selectedDataset, component, retrying]);
+  }, [selectedDataset, component, retrying, initialComponent]);
+
+  useEffect(() => {
+    if (component.type !== 'chart' || isAnalyticsComponent || hasData || retrying || autoRetryAttemptedRef.current) {
+      return;
+    }
+
+    const datasetId = selectedDataset?.id || selectedDataset?._id;
+    if (!datasetId || !component.config) return;
+
+    autoRetryAttemptedRef.current = true;
+    handleRetryChart({ silent: true });
+  }, [component, handleRetryChart, hasData, isAnalyticsComponent, retrying, selectedDataset]);
 
   const handlePointClick = useCallback((clickData) => {
     if (clickTimeout.current) {
@@ -241,7 +328,7 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
         setCrossFilter(String(clickData.x));
       }
     }, 250);
-  }, [component.title]);
+  }, [component.title, setCrossFilter]);
 
   switch (component.type) {
     case 'kpi':
@@ -250,41 +337,32 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
           title={component.title}
           value={component.value ?? 0}
           format={component.format || 'number'}
-          definition={component.definition || null}
-          comparisonValue={component.comparisonValue ?? null}
-          comparisonLabel={component.comparisonLabel || null}
-          deltaPercent={component.deltaPercent ?? null}
-          benchmarkText={component.benchmarkText || null}
+          definition={component.definition || component.subtitle || null}
+          comparisonValue={component.comparisonValue ?? component.comparison_value ?? null}
+          comparisonLabel={component.comparisonLabel || component.comparison_label || null}
+          deltaPercent={component.deltaPercent ?? component.delta_percent ?? null}
+          benchmarkValue={component.benchmarkValue ?? component.benchmark_value ?? null}
+          benchmarkLabel={component.benchmarkLabel ?? component.benchmark_label ?? null}
+          benchmarkText={component.benchmarkText || component.benchmark_text || null}
           isOutlier={component.isOutlier || false}
-          aiSuggestion={component.aiSuggestion || null}
+          aiSuggestion={component.aiSuggestion || component.ai_suggestion || null}
           targetValue={component.targetValue}
           targetLabel={component.targetLabel}
-          sparklineData={component.sparklineData || []}
+          sparklineData={component.sparklineData || component.sparkline_data || []}
           topValues={component.topValues || null}
-          recordCount={component.recordCount ?? null}
+          recordCount={component.recordCount ?? component.record_count ?? null}
+          datasetData={datasetData}
+          unitPrefix={component.unitPrefix || component.unit_prefix || null}
+          unitSuffix={component.unitSuffix || component.unit_suffix || null}
           status={component.status}
           icon={component.icon || 'BarChart3'}
           animationDelay={0}
+          accentColor={component.accentColor || component.accent_color || null}
+          actionPrompt={component.actionPrompt || component.action_prompt || null}
         />
       );
 
     case 'chart': {
-      const chartData = component.chart_data || { data: [], layout: {} };
-      const hasData = Array.isArray(chartData.data) && chartData.data.some((trace) => {
-        if (!trace || trace.error) return false;
-        const traceType = (trace.type || '').toLowerCase();
-        if (traceType === 'heatmap') {
-          return Array.isArray(trace.z) && trace.z.length > 0 && Array.isArray(trace.z[0]) && trace.z[0].length > 0;
-        }
-        if (traceType === 'pie') {
-          return Array.isArray(trace.values) && trace.values.length > 0;
-        }
-        if (traceType === 'box' || traceType === 'violin') {
-          return Array.isArray(trace.y) && trace.y.length > 0;
-        }
-        return (Array.isArray(trace.x) && trace.x.length > 0) || (Array.isArray(trace.y) && trace.y.length > 0);
-      });
-
       return (
         <MotionDiv
           initial={{ opacity: 0, y: 20 }}
@@ -538,7 +616,7 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
                   {tableData.map((row, i) => (
                     <tr key={i} className="transition-colors duration-150" style={{ borderBottom: `1px solid ${colors.border}` }}>
                       {columns.map(col => (
-                        <td key={col} className="px-4 py-3 truncate max-w-[200px] tabular-nums" style={{ color: colors.textMuted }}>{String(row[col])}</td>
+                        <td key={col} className="px-4 py-3 truncate max-w-50 tabular-nums" style={{ color: colors.textMuted }}>{String(row[col])}</td>
                       ))}
                     </tr>
                   ))}

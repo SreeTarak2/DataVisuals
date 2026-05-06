@@ -39,6 +39,19 @@ class AuthService:
     def __init__(self):
         self.db = None
 
+    async def get_user_from_token(self, token: str) -> Optional[dict]:
+        """Decode JWT token and return user - for WebSocket auth"""
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id: str = payload.get("sub")
+            if user_id is None:
+                return None
+        except JWTError:
+            return None
+
+        user = await self.get_user_by_id(user_id)
+        return user
+
     def _get_db(self):
         """Get database connection"""
         if self.db is None:
@@ -401,33 +414,34 @@ class AuthService:
                 detail="Failed to change password",
             )
 
-    async def update_user_profile(self, user_id: str, profile_data: dict) -> Optional[dict]:
+    async def update_user_profile(
+        self, user_id: str, profile_data: dict
+    ) -> Optional[dict]:
         """Update user profile information"""
         try:
             db = self._get_db()
             from bson import ObjectId
-            
+
             # Remove none values
             update_data = {k: v for k, v in profile_data.items() if v is not None}
             if not update_data:
                 return await self.get_user_by_id(user_id)
-                
+
             # If updating username, check for uniqueness
             if "username" in update_data:
-                existing_username = await db.users.find_one({"username": update_data["username"]})
+                existing_username = await db.users.find_one(
+                    {"username": update_data["username"]}
+                )
                 if existing_username and str(existing_username["_id"]) != user_id:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Username already taken",
                     )
-                    
+
             update_data["updated_at"] = datetime.utcnow()
-            
-            await db.users.update_one(
-                {"_id": ObjectId(user_id)},
-                {"$set": update_data}
-            )
-            
+
+            await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
+
             return await self.get_user_by_id(user_id)
         except HTTPException:
             raise

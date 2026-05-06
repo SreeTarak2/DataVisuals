@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Sparkles, Target, BarChart3, Zap, ArrowRight } from 'lucide-react';
+import { Sparkles, Target, BarChart3, Zap, ArrowRight, RefreshCw } from 'lucide-react';
 import useDatasetStore from '../../store/datasetStore';
 import useDashboardActionStore from '../../store/dashboardActionStore';
 
@@ -9,6 +9,7 @@ import useDashboardActionStore from '../../store/dashboardActionStore';
 import { useDashboardData } from './hooks/useDashboardData';
 import { useDashboardGeneration } from './hooks/useDashboardGeneration';
 import { useKpiHydration } from './hooks/useKpiHydration';
+import { useIntelligentKpis } from './hooks/useIntelligentKpis';
 import { useDataPreview } from './hooks/useDataPreview';
 
 // Components
@@ -18,6 +19,7 @@ import DataPreviewTable from './components/DataPreviewTable';
 import RedesignLimitModal from './components/RedesignLimitModal';
 import LoadingState from './components/LoadingState';
 import DashboardComponent from '../../components/DashboardComponent';
+import EnterpriseKpiCard from '../../components/ui/EnterpriseKpiCard';
 import UploadModal from '../../components/UploadModal';
 import PowerBIInsightCards from '../insights/components/PowerBIInsightCards';
 
@@ -215,6 +217,13 @@ const Dashboard = () => {
 
     const { hydrateComponents } = useKpiHydration(datasetData);
 
+    // Intelligent KPIs — data-science-grade, served from cache or generated on demand
+    const {
+        kpis: intelligentKpis,
+        loading: kpisLoading,
+        refresh: refreshKpis,
+    } = useIntelligentKpis(selectedDataset?.id || selectedDataset?._id);
+
     // Handle redesign with limit check (memoized to prevent infinite loops)
     const onRegenerateClick = useCallback(() => {
         const success = handleRegenerate();
@@ -251,10 +260,11 @@ const Dashboard = () => {
     }, [aiDashboardConfig, hydrateComponents]);
     const curatedKpis = useMemo(() => curateKpiComponents(hydratedKpis), [hydratedKpis]);
 
-    // Show AI-designer KPIs only — no fast-path fallback KPIs.
-    // Fast-path KPIs from the overview API produce low-quality cards (e.g. "Unique Gender: 3")
-    // because they use count_unique on any non-numeric column with no business filtering.
-    const visibleKpis = curatedKpis;
+    // KPI priority order:
+    //   1. Intelligent KPIs (data-science-grade, from /api/datasets/{id}/kpis)
+    //   2. Blueprint KPIs from AI dashboard designer (curated from aiDashboardConfig)
+    // Intelligent KPIs win when ready — they pass the 3-gate business filter.
+    const visibleKpis = intelligentKpis.length > 0 ? intelligentKpis : curatedKpis;
 
     const bentoLayout = useMemo(() => createBentoLayout(finalChartItems), [finalChartItems]);
 
@@ -445,19 +455,34 @@ const Dashboard = () => {
                 </MotionDiv>
             )}
 
-            {/* KPI Cards — AI-generated only */}
-            {visibleKpis.length > 0 && (
+            {/* KPI Cards — intelligent data-science-grade cards */}
+            {(visibleKpis.length > 0 || kpisLoading) && (
                 <div className="space-y-4">
-                    <div className="mb-3 flex items-center gap-3">
+                    <div className="mb-3 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2">
                             <div className="p-1.5 rounded-lg" style={{ background: 'var(--accent-success)', opacity: 0.1, border: '1px solid var(--accent-success)', borderColor: 'rgba(63, 185, 80, 0.15)' }}>
                                 <Target className="w-3.5 h-3.5" style={{ color: 'var(--accent-success)' }} />
                             </div>
                             <span className="text-sm font-semibold tracking-tight" style={{ color: 'var(--text-primary)' }}>Key Metrics</span>
-                            <span className="px-1.5 py-0.5 rounded-md text-xs font-medium tabular-nums" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-                                {visibleKpis.length}
-                            </span>
+                            {visibleKpis.length > 0 && (
+                                <span className="px-1.5 py-0.5 rounded-md text-xs font-medium tabular-nums" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+                                    {visibleKpis.length}
+                                </span>
+                            )}
+                            {kpisLoading && (
+                                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Generating…</span>
+                            )}
                         </div>
+                        <button
+                            onClick={refreshKpis}
+                            disabled={kpisLoading}
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all"
+                            style={{ color: 'var(--text-secondary)', border: '1px solid var(--border)', background: 'transparent' }}
+                            title="Regenerate KPI cards"
+                        >
+                            <RefreshCw className={`w-3 h-3 ${kpisLoading ? 'animate-spin' : ''}`} />
+                            Regenerate
+                        </button>
                     </div>
                     <MotionDiv
                         className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6"
@@ -465,14 +490,29 @@ const Dashboard = () => {
                         initial="hidden"
                         animate="visible"
                     >
-                        {visibleKpis.map((component, index) => (
-                            <MotionDiv
-                                key={`kpi-${index}`}
-                                variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
-                            >
-                                <DashboardComponent component={component} datasetData={datasetData} />
-                            </MotionDiv>
-                        ))}
+                        {kpisLoading && visibleKpis.length === 0
+                            ? [0, 1, 2, 3].map((i) => (
+                                <MotionDiv
+                                    key={`kpi-skeleton-${i}`}
+                                    variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
+                                >
+                                    <EnterpriseKpiCard
+                                        title=""
+                                        value={0}
+                                        state="loading"
+                                        animationDelay={i * 0.08}
+                                    />
+                                </MotionDiv>
+                            ))
+                            : visibleKpis.map((component, index) => (
+                                <MotionDiv
+                                    key={`kpi-${component.column || index}`}
+                                    variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
+                                >
+                                    <DashboardComponent component={component} datasetData={datasetData} />
+                                </MotionDiv>
+                            ))
+                        }
                     </MotionDiv>
                 </div>
             )}

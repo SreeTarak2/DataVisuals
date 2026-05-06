@@ -108,6 +108,32 @@ export const datasetAPI = {
       query,
       novelty_threshold: noveltyThreshold
     }),
+
+  // Intelligent KPI cards — data-science-grade, pre-computed during upload
+  // refresh=true forces regeneration even when cached
+  getKpis: (id, refresh = false) =>
+    api.get(`/datasets/${id}/kpis${refresh ? '?refresh=true' : ''}`),
+};
+
+// Database Connection API calls
+export const databaseAPI = {
+  // Test credentials without saving
+  testConnection: (config) => api.post('/databases/test', config),
+
+  // Save a verified connection (encrypts password server-side)
+  saveConnection: (data) => api.post('/databases/', data),
+
+  // List all saved connections for current user
+  listConnections: () => api.get('/databases/'),
+
+  // List tables inside a saved connection (cached 5 min server-side)
+  getTables: (connId) => api.get(`/databases/${connId}/tables`),
+
+  // Extract a table → creates a dataset + fires Celery pipeline
+  extractTable: (connId, body) => api.post(`/databases/${connId}/extract`, body),
+
+  // Remove a saved connection
+  deleteConnection: (connId) => api.delete(`/databases/${connId}`),
 };
 
 // AI API calls
@@ -350,9 +376,19 @@ export const reportsAPI = {
 
 // Agentic AI & Belief Store API calls
 export const agenticAPI = {
-  // Run agentic QUIS analysis
-  runAnalysis: (datasetId, options = {}) =>
-    api.post('/agentic/analyze', { dataset_id: datasetId, ...options }),
+  // Stream EDA pipeline via Server-Sent Events (fetch + ReadableStream)
+  // Returns a native fetch Response — caller reads body with getReader()
+  streamAnalysis: (datasetId, question = 'Give me a full exploratory analysis of this dataset') => {
+    const token = getAuthToken();
+    return fetch(`${API_URL}/agentic/analyze`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ dataset_id: datasetId, question }),
+    });
+  },
 
   // Submit feedback on an insight (feeds the Belief Store)
   submitFeedback: ({ insight_text, feedback_type, dataset_id = null }) =>

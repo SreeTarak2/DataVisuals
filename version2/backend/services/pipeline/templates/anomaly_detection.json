@@ -1,0 +1,26 @@
+{
+  "template_id": "anomaly_detection_v1",
+  "primitive": "anomaly_detection",
+  "category": "risk",
+  "title_template": "{measure_col_label} Anomalies",
+  "headline_template": "Most recent {grain_label}: {latest_z_score_magnitude} standard deviations from mean",
+  "key_insight_phrases": {
+    "significant_anomaly": "Recent {grain_label} shows significant deviation from historical norm",
+    "moderate_anomaly": "Recent {grain_label} deviates modestly from historical norm",
+    "normal": "Recent {grain_label} is within normal variation"
+  },
+  "anomaly_thresholds": {
+    "significant": 2.5,
+    "moderate": 2.0,
+    "normal": 0.0
+  },
+  "anomaly_direction": {
+    "high": "above",
+    "low": "below"
+  },
+  "caveats": {
+    "denominator_unstable": "Historical volatility is high (CoV={cov:.2f}) — threshold-based detection may be unreliable",
+    "low_coverage_adequate": "Data coverage is below optimal — recent period may be incomplete",
+    "minimum_data_warning": "Only {period_count} periods for baseline — anomaly thresholds may be unstable"
+  }
+}

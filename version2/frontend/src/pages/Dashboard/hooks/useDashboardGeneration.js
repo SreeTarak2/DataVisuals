@@ -187,7 +187,7 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
             setDashboardLoading(true);
             const token = getAuthToken();
             console.log('Loading cached AI dashboard for dataset:', selectedDatasetId);
-            const response = await fetch(`/api/ai/${selectedDatasetId}/dashboard`, {
+            let response = await fetch(`/api/ai/${selectedDatasetId}/dashboard`, {
                 method: 'GET',
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -197,9 +197,15 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
             });
 
             if (response.status === 404) {
-                console.log('No cached dashboard found for dataset');
-                setAiDashboardConfig(null);
-                return;
+                console.log('AI dashboard route not found, trying dashboard config endpoint');
+                response = await fetch(`/api/dashboard/${selectedDatasetId}/config`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    signal: controller.signal
+                });
             }
 
             if (!response.ok) {
@@ -216,6 +222,20 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
                     design_pattern: dashboardConfig.design_pattern,
                     pattern_name: dashboardConfig.pattern_name,
                     reasoning: dashboardConfig.reasoning
+                });
+                setAiDashboardConfig(normalized);
+                setDashboardConfig(selectedDatasetId, normalized);
+                return;
+            }
+
+            if (Array.isArray(dashboardConfig.components) && dashboardConfig.components.length > 0) {
+                const normalized = normalizeDashboardConfig({
+                    components: dashboardConfig.components,
+                    layout_grid: dashboardConfig.layout_grid || "repeat(4, 1fr)",
+                    design_pattern: dashboardConfig.design_pattern,
+                    pattern_name: dashboardConfig.pattern_name,
+                    reasoning: dashboardConfig.reasoning,
+                    summary: dashboardConfig.summary,
                 });
                 setAiDashboardConfig(normalized);
                 setDashboardConfig(selectedDatasetId, normalized);

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
-import { Send, Sparkles, Loader2, RefreshCw, X, History, ChevronDown, ChevronUp, Copy, Check, Edit, ArrowRight, ChevronRight, Plus, WifiOff, Square, TrendingUp, BarChart3, Lightbulb, MessageSquare } from 'lucide-react';
+import { Send, Sparkles, Loader2, RefreshCw, X, History, ChevronDown, ChevronUp, Copy, Check, Edit, ArrowRight, ChevronRight, Plus, WifiOff, Square, TrendingUp, BarChart3, Lightbulb, MessageSquare, Table2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-hot-toast';
 import { cn } from '@/lib/utils';
@@ -44,6 +44,68 @@ const CopyButton = memo(({ text, size = 13 }) => {
 });
 CopyButton.displayName = 'CopyButton';
 
+const formatTableValue = (value) => {
+    if (value === null || value === undefined) return '-';
+    if (typeof value === 'number') return Number.isInteger(value) ? value.toLocaleString() : value.toLocaleString(undefined, { maximumFractionDigits: 3 });
+    if (typeof value === 'boolean') return value ? 'True' : 'False';
+    return String(value);
+};
+
+const getTableColumns = (table) => {
+    if (!table?.columns?.length) {
+        const firstRow = table?.rows?.[0];
+        return firstRow && typeof firstRow === 'object'
+            ? Object.keys(firstRow).map((key) => ({ key, label: key.replace(/_/g, ' ') }))
+            : [];
+    }
+    return table.columns.map((column) => (
+        typeof column === 'string'
+            ? { key: column, label: column.replace(/_/g, ' ') }
+            : { key: column.key, label: column.label || String(column.key).replace(/_/g, ' ') }
+    )).filter((column) => column.key);
+};
+
+const QueryResultTable = ({ table }) => {
+    const rows = Array.isArray(table?.rows) ? table.rows : [];
+    const columns = getTableColumns(table);
+    if (!rows.length || !columns.length) return null;
+
+    const totalRows = table?.totalRows ?? rows.length;
+    const displayedRows = table?.displayedRows ?? rows.length;
+
+    return (
+        <div className="chat-table-wrapper mt-3">
+            <div className="flex items-center justify-between gap-2 border-b border-border bg-elevated/40 px-3 py-2">
+                <div className="flex items-center gap-2 min-w-0">
+                    <Table2 size={13} className="text-muted shrink-0" />
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Query Results</span>
+                </div>
+                <span className="text-[10px] text-muted shrink-0">{displayedRows.toLocaleString()} of {totalRows.toLocaleString()}</span>
+            </div>
+            <div className="max-h-[260px] overflow-auto bg-surface">
+                <table>
+                    <thead>
+                        <tr>
+                            {columns.map((column) => (
+                                <th key={column.key}>{column.label}</th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map((row, rowIndex) => (
+                            <tr key={rowIndex}>
+                                {columns.map((column) => (
+                                    <td key={`${rowIndex}-${column.key}`}>{formatTableValue(row?.[column.key])}</td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
+
 // =============================================================================
 // ChatMessage — Enhanced with animations, avatar, timestamps
 // =============================================================================
@@ -71,6 +133,13 @@ const ChatMessage = memo(({ msg, index, isUser, toggleTechnicalDetails, expanded
         );
     }
 
+    const canShowFollowUps = msg.show_follow_up_suggestions === true;
+    const visibleFollowUps = followUpOverride?.length > 0
+        ? followUpOverride
+        : canShowFollowUps
+            ? (msg.follow_up_suggestions || [])
+            : [];
+
     // AI message
     return (
         <motion.div className="chat-message--ai" variants={msgVariants} initial="hidden" animate="visible">
@@ -82,8 +151,8 @@ const ChatMessage = memo(({ msg, index, isUser, toggleTechnicalDetails, expanded
 
                 <div className="chat-ai-body">
                     {msg.isCancelled && (
-                        <div className="flex items-center gap-1.5 text-[10px] text-amber-400/80 mb-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 inline-block" />
+                        <div className="flex items-center gap-1.5 text-[10px] text-yellow-700 mb-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-yellow-600 inline-block" />
                             Partial response — stopped
                         </div>
                     )}
@@ -142,22 +211,24 @@ const ChatMessage = memo(({ msg, index, isUser, toggleTechnicalDetails, expanded
                         </ReactMarkdown>
                     </div>
 
+                    <QueryResultTable table={msg.result_table} />
+
                     {/* Transparency indicators */}
                     {msgMeta?.sql_fallback && (
-                        <div className="flex items-center gap-1.5 text-[10px] text-amber-400/70 mt-1 mb-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400/60 inline-block shrink-0" />
+                        <div className="flex items-center gap-1.5 text-[10px] text-yellow-700 mt-1 mb-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-yellow-600 inline-block shrink-0" />
                             Estimate — exact query couldn't execute, response is based on data structure
                         </div>
                     )}
                     {msgMeta?.chart_error && (
-                        <div className="flex items-center gap-1.5 text-[10px] text-red-400/70 mt-1 mb-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-400/60 inline-block shrink-0" />
+                        <div className="flex items-center gap-1.5 text-[10px] text-red-700 mt-1 mb-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-600 inline-block shrink-0" />
                             Chart couldn't be rendered
                         </div>
                     )}
                     {msgMeta?.column_corrections && Object.keys(msgMeta.column_corrections).length > 0 && (
-                        <div className="flex items-center gap-1.5 text-[10px] text-blue-400/70 mt-1 mb-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-blue-400/60 inline-block shrink-0" />
+                        <div className="flex items-center gap-1.5 text-[10px] text-blue-700 mt-1 mb-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-600 inline-block shrink-0" />
                             Chart column names were adjusted to match your data
                         </div>
                     )}
@@ -194,9 +265,9 @@ const ChatMessage = memo(({ msg, index, isUser, toggleTechnicalDetails, expanded
                     </div>
 
                     {/* Follow-up suggestion chips */}
-                    {followUpOverride?.length > 0 && onSuggestionClick && (
+                    {visibleFollowUps.length > 0 && onSuggestionClick && (
                         <div className="mt-2 flex flex-col gap-1">
-                            {followUpOverride.map((s, i) => (
+                            {visibleFollowUps.map((s, i) => (
                                 <button
                                     key={i}
                                     onClick={() => onSuggestionClick(s)}
@@ -300,24 +371,27 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
     // WebSocket — all callbacks use refs to keep identity stable
     const { isConnected, connect, disconnect, sendMessage: wsSendMessage, sendCancel } = useWebSocket({
         onToken: useCallback((token) => appendStreamingToken(token), [appendStreamingToken]),
-        onChart: useCallback((config) => setStreamingChartConfig(config), []),
+        onResponseComplete: useCallback((fullResponse) => {
+            // Streaming response complete — content is accumulated via onToken
+        }, []),
+        onChart: useCallback((config) => setStreamingChartConfig(config), [setStreamingChartConfig]),
         onChartError: useCallback(() => {
             streamingMetaRef.current.chart_error = true;
         }, []),
         onThinkingStep: useCallback((label) => {
             setThinkingSteps(prev => [...prev, label]);
-        }, []),
-        onDone: useCallback(({ conversationId, chartConfig, follow_up_suggestions, rate_limit_remaining, sql_fallback, column_corrections }) => {
+        }, [setThinkingSteps]),
+        onDone: useCallback(({ conversationId, chartConfig, sql, resultTable, insights = [], data_summary = '', follow_up_suggestions, show_follow_up_suggestions = false, rate_limit_remaining, sql_fallback, column_corrections }) => {
             if (conversationId) setCurrentConversation(conversationId);
             const content = useChatStore.getState().streamingContent;
-            finishStreaming(content, chartConfig || streamingChartConfigRef.current);
+            finishStreaming(content, chartConfig || streamingChartConfigRef.current, sql, insights, data_summary, resultTable, follow_up_suggestions || [], show_follow_up_suggestions);
             setStreamingChartConfig(null);
             currentClientMessageIdRef.current = null;
             setThinkingSteps([]);
             if (rate_limit_remaining !== null && rate_limit_remaining !== undefined) {
                 setRateLimitRemaining(rate_limit_remaining);
             }
-            if (follow_up_suggestions?.length > 0 && lastStreamingMsgIdRef.current) {
+            if (show_follow_up_suggestions && follow_up_suggestions?.length > 0 && lastStreamingMsgIdRef.current) {
                 setFollowUpMap(prev => ({ ...prev, [lastStreamingMsgIdRef.current]: follow_up_suggestions }));
             }
             if (lastStreamingMsgIdRef.current) {
@@ -331,7 +405,7 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
                 }
             }
             streamingMetaRef.current = { sql_fallback: false, column_corrections: {}, chart_error: false };
-        }, [finishStreaming, setCurrentConversation]),
+        }, [finishStreaming, setCurrentConversation, setStreamingChartConfig, setThinkingSteps, setRateLimitRemaining, setFollowUpMap, setMsgMetaMap]),
         onError: useCallback((err) => {
             cancelStreaming();
             currentClientMessageIdRef.current = null;
@@ -349,7 +423,7 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
             } else {
                 toast.error(err?.detail || 'Connection error');
             }
-        }, [cancelStreaming]),
+        }, [cancelStreaming, setThinkingSteps, setRateLimitCountdown]),
         onCancelAck: useCallback(() => {
             currentClientMessageIdRef.current = null;
         }, []),
@@ -364,7 +438,7 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
             // Disconnect when panel closes or unmounts
             if (!isOpen) disconnect();
         };
-    }, [isOpen, selectedDataset?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [isOpen, selectedDataset?.id, isConnected, connect, disconnect]);
 
     // Auto-scroll
     useEffect(() => {
@@ -524,7 +598,7 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
                     <span className="text-[18px] font-bold text-header tracking-tight">AI Assistant</span>
                     {/* Connection status dot */}
                     {isConnected ? (
-                        <span title="Connected" className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+                        <span title="Connected" className="w-1.5 h-1.5 rounded-full bg-green-600 inline-block" />
                     ) : (
                         <span title="Disconnected" className="flex items-center gap-1 text-[10px] text-muted">
                             <WifiOff size={11} />
@@ -683,19 +757,19 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
             {(rateLimitCountdown !== null || (rateLimitRemaining !== null && rateLimitRemaining <= 10)) && (
                 <div className="px-3 pb-1">
                     {rateLimitCountdown !== null ? (
-                        <div className="flex items-center gap-1.5 text-[10px] text-amber-400">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse inline-block" />
+                        <div className="flex items-center gap-1.5 text-[10px] text-yellow-700">
+                            <span className="w-1.5 h-1.5 rounded-full bg-yellow-600 animate-pulse inline-block" />
                             Rate limit — resets in <strong>{rateLimitCountdown}s</strong>
                         </div>
                     ) : (
                         <div className="flex items-center gap-2">
                             <div className="flex-1 h-0.5 rounded-full bg-border overflow-hidden">
                                 <div
-                                    className={cn("h-0.5 rounded-full transition-all", rateLimitRemaining <= 3 ? "bg-red-500" : "bg-amber-400")}
+                                    className={cn("h-0.5 rounded-full transition-all", rateLimitRemaining <= 3 ? "bg-red-600" : "bg-yellow-600")}
                                     style={{ width: `${(rateLimitRemaining / RATE_LIMIT_TOTAL) * 100}%` }}
                                 />
                             </div>
-                            <span className={cn("text-[10px] tabular-nums", rateLimitRemaining <= 3 ? "text-red-400" : "text-amber-400/80")}>
+                            <span className={cn("text-[10px] tabular-nums", rateLimitRemaining <= 3 ? "text-red-700" : "text-yellow-700")}>
                                 {rateLimitRemaining}/{RATE_LIMIT_TOTAL}
                             </span>
                         </div>

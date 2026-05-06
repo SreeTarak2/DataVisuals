@@ -1,875 +1,839 @@
-# backend/services/ai/intelligent_kpi_generator.py
-
 """
-Intelligent KPI Generator - v3 (Honest Edition)
-================================================
-Generates contextual, domain-aware KPIs using LLM + real data.
+IntelligentKPIGenerator — Production v4 (Data Scientist Edition)
+=================================================================
+Thinks like a data scientist:
+  1. Profile every column statistically
+  2. Classify column roles (MEASURE / RATE / COUNT / DIMENSION / TIME / IDENTITY)
+  3. Gate candidates: decision-relevance + direction-clarity + non-redundancy
+  4. Select hero + 1-3 primaries
+  5. Compute all values, comparisons, sparklines from real data
+  6. Call LLM once for insight sentences + action prompts
+  7. Return production-ready KPI card dicts
 
-Key changes from v2:
-- Enriched LLM prompt with domain, statistical findings, data profile
-- NO fabricated comparison/target values — uses real data or omits
-- Domain-aware fallback when LLM fails
+LLM is used ONLY for narrative (insight_sentence, action_prompt, archetype).
+Selection, aggregation, and comparison are 100% deterministic Python.
 """
+
+from __future__ import annotations
 
 import logging
 import math
-from typing import Dict, List, Any, Optional
-import polars as pl
-import json
+import re
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
-from services.llm_router import llm_router
-from core.prompts import (
-    PromptFactory,
-    PromptType,
-    extract_and_validate,
-    KPIGeneratorResponseV2,
-)
+import polars as pl
 
 logger = logging.getLogger(__name__)
 
 
+# ── Column Classification ─────────────────────────────────────────────────────
+
+class ColumnRole(str, Enum):
+    MEASURE   = "measure"    # numeric, summable  — revenue, cost, salary
+    RATE      = "rate"       # numeric ratio/pct  — conversion_rate, margin
+    COUNT     = "count"      # integer counts     — order_count, num_users
+    DIMENSION = "dimension"  # categorical        — region, product, status
+    TIME      = "time"       # datetime           — date, created_at
+    IDENTITY  = "identity"   # IDs, skip          — customer_id, uuid
+
+
+# Column name patterns for classification
+_ID_RE   = re.compile(r'\b(id|uuid|guid|key|hash|token|code|zip|postal|phone|ip|sku|barcode)\b', re.I)
+_TIME_RE = re.compile(r'\b(date|time|year|month|day|created|updated|timestamp|period|week|quarter)\b', re.I)
+_RATE_RE = re.compile(r'\b(rate|ratio|percent|pct|margin|efficiency|factor|score|index|grade|accuracy|precision|recall|auc|ctr)\b', re.I)
+_COUNT_RE = re.compile(r'\b(count|num|number|qty|quantity|units|items|orders|transactions|sessions|visits|clicks|impressions|requests)\b', re.I)
+
+# Business category → polarity mapping
+_CATEGORY_PATTERNS: List[Tuple[str, str, str]] = [
+    # (category, pattern, polarity)
+    ("revenue",     r'\b(revenue|sales|gmv|income|earnings|gross|mrr|arr|net_sales|turnover|proceeds|receipts)\b', "higher_is_better"),
+    ("cost",        r'\b(cost|expense|opex|capex|cogs|spend|expenditure|loss|burn|overhead|tax|fee|charge|penalty|discount)\b', "lower_is_better"),
+    ("volume",      r'\b(orders|transactions|purchases|bookings|units|items|shipments|deliveries|installs)\b', "higher_is_better"),
+    ("users",       r'\b(users|customers|subscribers|members|accounts|clients|visitors|leads|prospects|buyers)\b', "higher_is_better"),
+    ("rate_metric", r'\b(rate|ratio|percent|pct|margin|conversion|retention|satisfaction|engagement|utilization)\b', "higher_is_better"),
+    ("churn_risk",  r'\b(churn|attrition|cancellation|dropout|refund|return|complaint|defect|error|failure|bug|issue)\b', "lower_is_better"),
+    ("price",       r'\b(price|amount|value|aov|arpu|arpc|ltv|cac|worth|bid|ask)\b', "higher_is_better"),
+    ("performance", r'\b(score|rating|nps|csat|satisfaction|quality|performance|rank|grade)\b', "higher_is_better"),
+    ("duration",    r'\b(duration|latency|age|tenure|days|hours|minutes|seconds|ms|response_time|wait_time|cycle_time)\b', "lower_is_better"),
+    ("quantity",    r'\b(count|num|qty|quantity|volume|capacity|inventory|stock|supply)\b', "higher_is_better"),
+]
+
+
+@dataclass
+class ColumnProfile:
+    name: str
+    role: ColumnRole
+    n_rows: int
+    n_nulls: int
+    n_unique: int
+
+    # Numeric stats (None for non-numeric)
+    col_sum:    Optional[float] = None
+    col_mean:   Optional[float] = None
+    col_median: Optional[float] = None
+    col_std:    Optional[float] = None
+    col_min:    Optional[float] = None
+    col_max:    Optional[float] = None
+    col_p25:    Optional[float] = None
+    col_p75:    Optional[float] = None
+    col_p90:    Optional[float] = None
+    cv:         Optional[float] = None      # coefficient of variation
+    skewness:   Optional[float] = None
+    is_bounded_01: bool = False
+    is_integer_valued: bool = False
+
+    # Derived classification
+    aggregation:       str = "sum"
+    polarity:          str = "higher_is_better"  # or "lower_is_better"
+    business_category: str = "unknown"
+    importance:        str = "medium"            # "hero", "high", "medium"
+
+    @property
+    def null_pct(self) -> float:
+        return (self.n_nulls / self.n_rows * 100) if self.n_rows > 0 else 0
+
+    @property
+    def primary_value(self) -> Optional[float]:
+        """The computed KPI value based on aggregation."""
+        if self.aggregation == "sum":    return self.col_sum
+        if self.aggregation == "mean":   return self.col_mean
+        if self.aggregation == "median": return self.col_median
+        if self.aggregation == "max":    return self.col_max
+        if self.aggregation == "min":    return self.col_min
+        return self.col_mean
+
+
+# ── Column Profiler ───────────────────────────────────────────────────────────
+
+def _profile_numeric(col: pl.Series) -> Dict[str, Any]:
+    clean = col.drop_nulls().cast(pl.Float64)
+    if len(clean) == 0:
+        return {}
+    vals = clean.to_list()
+    n = len(vals)
+    mean = float(clean.mean())
+    std  = float(clean.std()) if n > 1 else 0.0
+    mn   = float(clean.min())
+    mx   = float(clean.max())
+    # Polars quantile returns scalar
+    p25  = float(clean.quantile(0.25))
+    p75  = float(clean.quantile(0.75))
+    p90  = float(clean.quantile(0.90))
+    med  = float(clean.median())
+    cv   = abs(std / mean) if mean != 0 else 0.0
+
+    # Skewness (Pearson's moment coefficient)
+    if std > 0 and n >= 3:
+        skew = sum((v - mean) ** 3 for v in vals) / (n * std ** 3)
+    else:
+        skew = 0.0
+
+    return {
+        "col_sum":    round(float(clean.sum()), 4),
+        "col_mean":   round(mean, 4),
+        "col_median": round(med, 4),
+        "col_std":    round(std, 4),
+        "col_min":    round(mn, 4),
+        "col_max":    round(mx, 4),
+        "col_p25":    round(p25, 4),
+        "col_p75":    round(p75, 4),
+        "col_p90":    round(p90, 4),
+        "cv":         round(cv, 4),
+        "skewness":   round(skew, 4),
+        "is_bounded_01":      mn >= 0 and mx <= 1,
+        "is_integer_valued":  all(v == int(v) for v in vals[:200]),
+    }
+
+
+def _classify_role(name: str, dtype_str: str, n_unique: int, n_rows: int,
+                   numeric_stats: Dict[str, Any]) -> ColumnRole:
+    is_numeric = any(t in dtype_str for t in ("Int", "Float", "UInt"))
+    is_datetime = any(t in dtype_str for t in ("Date", "Datetime", "Duration"))
+    # Normalise column name so _word_ boundaries work with \b patterns
+    norm = name.lower().replace("_", " ").replace("-", " ")
+
+    # TIME: datetime dtypes OR time-like name
+    if is_datetime or _TIME_RE.search(norm):
+        return ColumnRole.TIME
+
+    # IDENTITY: ID-named column with high cardinality
+    if _ID_RE.search(norm):
+        if not is_numeric or (n_unique / max(n_rows, 1)) > 0.5:
+            return ColumnRole.IDENTITY
+
+    # Non-numeric
+    if not is_numeric:
+        if n_unique / max(n_rows, 1) > 0.5:
+            return ColumnRole.IDENTITY
+        return ColumnRole.DIMENSION
+
+    # Numeric → further classify
+    is_b01 = numeric_stats.get("is_bounded_01", False)
+    col_min = numeric_stats.get("col_min", 0)
+    col_max = numeric_stats.get("col_max", 0)
+
+    # RATE: bounded 0–1, or percentage-like name
+    if is_b01 or _RATE_RE.search(norm):
+        if col_max <= 100 and col_min >= 0 and _RATE_RE.search(norm):
+            return ColumnRole.RATE
+        if is_b01:
+            return ColumnRole.RATE
+
+    # COUNT: integer-valued count-like column
+    if _COUNT_RE.search(norm) and numeric_stats.get("is_integer_valued", False):
+        return ColumnRole.COUNT
+
+    # Low cardinality numeric → treat as ordinal dimension
+    # Requires: ≥50 rows AND n_unique ≤ 10 AND < 5% of rows are unique
+    # (guards against small samples where continuous vars look low-cardinality)
+    if n_rows >= 50 and n_unique <= 10 and (n_unique / n_rows) < 0.05:
+        return ColumnRole.DIMENSION
+
+    return ColumnRole.MEASURE
+
+
+def _get_business_category(name: str) -> Tuple[str, str]:
+    """Returns (category, polarity).
+    Column names use _ as separator so we replace _ with space before
+    applying \b word-boundary patterns.
+    """
+    # "conversion_rate" → "conversion rate" so \brate\b works
+    searchable = name.lower().replace("_", " ").replace("-", " ")
+    for cat, pattern, polarity in _CATEGORY_PATTERNS:
+        if re.search(pattern, searchable, re.I):
+            return cat, polarity
+    return "unknown", "higher_is_better"
+
+
+def _select_aggregation(role: ColumnRole, name: str, skewness: float, cv: float) -> str:
+    if role == ColumnRole.RATE:
+        return "median" if abs(skewness) > 1.5 else "mean"
+    if role == ColumnRole.COUNT:
+        return "sum"
+    # MEASURE
+    total_patterns = re.compile(r'\b(revenue|sales|cost|expense|amount|value|profit|income|gmv|total)\b', re.I)
+    if total_patterns.search(name):
+        return "sum"
+    price_patterns = re.compile(r'\b(price|aov|arpu|arpc|ltv|cac|average|avg|salary|wage)\b', re.I)
+    if price_patterns.search(name):
+        return "median" if abs(skewness) > 1.5 else "mean"
+    # High CV → individual values vary a lot → sum is meaningful
+    return "sum" if cv > 0.8 else "mean"
+
+
+def _profile_column(df: pl.DataFrame, col_name: str) -> Optional[ColumnProfile]:
+    try:
+        col = df[col_name]
+        dtype_str = str(col.dtype)
+        n_rows = len(df)
+        n_nulls = col.null_count()
+        n_unique = col.n_unique()
+
+        is_numeric = col.dtype in pl.NUMERIC_DTYPES
+        numeric_stats = _profile_numeric(col) if is_numeric else {}
+        role = _classify_role(col_name, dtype_str, n_unique, n_rows, numeric_stats)
+
+        skewness = numeric_stats.get("skewness", 0.0) or 0.0
+        cv = numeric_stats.get("cv", 0.0) or 0.0
+        aggregation = _select_aggregation(role, col_name, skewness, cv) if is_numeric else "count_unique"
+
+        category, polarity = _get_business_category(col_name)
+
+        return ColumnProfile(
+            name=col_name,
+            role=role,
+            n_rows=n_rows,
+            n_nulls=n_nulls,
+            n_unique=n_unique,
+            aggregation=aggregation,
+            polarity=polarity,
+            business_category=category,
+            **numeric_stats,
+        )
+    except Exception as e:
+        logger.debug(f"[KPI] Column profiling failed for '{col_name}': {e}")
+        return None
+
+
+# ── KPI Candidate Selection ───────────────────────────────────────────────────
+
+def _passes_gate(profile: ColumnProfile, selected_categories: set) -> Tuple[bool, str]:
+    """Three-gate KPI selection — same as the Fortune 500 prompt logic."""
+    # Gate 1: Must be a meaningful numeric role
+    if profile.role not in (ColumnRole.MEASURE, ColumnRole.RATE, ColumnRole.COUNT):
+        return False, f"role={profile.role.value}"
+
+    # Gate 2: Not too many nulls
+    if profile.null_pct > 40:
+        return False, f"nulls={profile.null_pct:.0f}%"
+
+    # Gate 3: Value must be non-trivial
+    val = profile.primary_value
+    if val is None or (isinstance(val, float) and (math.isnan(val) or math.isinf(val))):
+        return False, "NaN/Inf value"
+    if abs(val) < 1e-9 and profile.aggregation == "sum":
+        return False, "zero sum"
+
+    # Gate 4: Must have a known business category (direction clarity)
+    if profile.business_category == "unknown":
+        return False, "unclear business direction"
+
+    # Gate 5: Non-redundancy — one KPI per business category
+    if profile.business_category in selected_categories:
+        return False, f"redundant with {profile.business_category}"
+
+    return True, profile.business_category
+
+
+def _select_hero(candidates: List[ColumnProfile]) -> Optional[ColumnProfile]:
+    """Hero = the single number a CEO asks for first."""
+    # Revenue column wins
+    for c in candidates:
+        if c.business_category == "revenue":
+            return c
+    # Highest absolute sum among MEASURE columns
+    measures = [c for c in candidates if c.role == ColumnRole.MEASURE and c.col_sum]
+    if measures:
+        return max(measures, key=lambda c: abs(c.col_sum or 0))
+    # Fallback
+    return candidates[0] if candidates else None
+
+
+def _select_candidates(profiles: List[ColumnProfile], max_kpis: int) -> List[ColumnProfile]:
+    """Apply the gate, pick hero + 1-3 primaries."""
+    selected_categories: set = set()
+    passed: List[ColumnProfile] = []
+
+    # Sort: revenue first, then by absolute value descending
+    def sort_key(p: ColumnProfile) -> Tuple[int, float]:
+        priority = {"revenue": 0, "volume": 1, "users": 2, "price": 3,
+                    "rate_metric": 4, "performance": 5, "cost": 6,
+                    "churn_risk": 7, "duration": 8, "quantity": 9}
+        prio = priority.get(p.business_category, 10)
+        val = abs(p.primary_value or 0)
+        return (prio, -val)
+
+    sorted_profiles = sorted(profiles, key=sort_key)
+
+    for profile in sorted_profiles:
+        if len(passed) >= max_kpis:
+            break
+        ok, reason = _passes_gate(profile, selected_categories)
+        if ok:
+            selected_categories.add(reason)
+            passed.append(profile)
+        else:
+            logger.debug(f"[KPI] Gate rejected '{profile.name}': {reason}")
+
+    # Assign importance
+    hero = _select_hero(passed)
+    for i, p in enumerate(passed):
+        p.importance = "hero" if p is hero else ("high" if i <= 2 else "medium")
+
+    # Hero always first
+    if hero and passed[0] is not hero:
+        passed.remove(hero)
+        passed.insert(0, hero)
+
+    return passed
+
+
+# ── Value & Comparison ────────────────────────────────────────────────────────
+
+def _compute_kpi_value(df: pl.DataFrame, profile: ColumnProfile) -> Any:
+    try:
+        col = df[profile.name].drop_nulls()
+        if len(col) == 0:
+            return 0
+        agg = profile.aggregation
+        if agg == "sum":    return round(float(col.sum()), 2)
+        if agg == "mean":   return round(float(col.mean()), 2)
+        if agg == "median": return round(float(col.median()), 2)
+        if agg == "max":    return round(float(col.max()), 2)
+        if agg == "min":    return round(float(col.min()), 2)
+        return round(float(col.sum()), 2)
+    except Exception:
+        return profile.primary_value or 0
+
+
+def _find_time_column(df: pl.DataFrame) -> Optional[str]:
+    for col in df.columns:
+        if df[col].dtype in (pl.Date, pl.Datetime):
+            return col
+    # Fallback: name-based
+    for col in df.columns:
+        if _TIME_RE.search(col) and df[col].dtype in pl.NUMERIC_DTYPES:
+            return col
+    return None
+
+
+def _compute_comparison(
+    df: pl.DataFrame, profile: ColumnProfile, time_col: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """
+    Returns comparison dict or None.
+    Strategy: time-sorted first-half vs second-half (preferred),
+              or top quartile vs bottom quartile (fallback).
+    """
+    try:
+        col = profile.name
+        if col not in df.columns:
+            return None
+        clean = df.drop_nulls(subset=[col])
+        if len(clean) < 10:
+            return None
+
+        # Time-sorted split
+        if time_col and time_col in df.columns:
+            try:
+                sorted_df = clean.sort(time_col)
+                label = "vs first half (time-sorted)"
+                is_temporal = True
+            except Exception:
+                sorted_df = clean
+                label = "vs first half (row order)"
+                is_temporal = False
+        else:
+            sorted_df = clean
+            label = "vs first half (row order)"
+            is_temporal = False
+
+        mid = len(sorted_df) // 2
+        first_half  = sorted_df[:mid]
+        second_half = sorted_df[mid:]
+
+        def agg_half(half: pl.DataFrame) -> Optional[float]:
+            c = half[col].drop_nulls()
+            if len(c) == 0:
+                return None
+            agg = profile.aggregation
+            if agg == "sum":    return float(c.sum())
+            if agg == "mean":   return float(c.mean())
+            if agg == "median": return float(c.median())
+            return float(c.sum())
+
+        v1 = agg_half(first_half)
+        v2 = agg_half(second_half)
+
+        if v1 is None or v2 is None or abs(v1) < 1e-9:
+            return None
+
+        delta_pct = round(((v2 - v1) / abs(v1)) * 100, 1)
+        direction = "up" if delta_pct > 0 else ("down" if delta_pct < 0 else "neutral")
+        is_positive = profile.polarity == "higher_is_better"
+        is_good = (direction == "up" and is_positive) or (direction == "down" and not is_positive)
+
+        return {
+            "comparison_value": round(v1, 2),
+            "comparison_label": label,
+            "delta_percent":    delta_pct,
+            "delta_direction":  direction,
+            "is_delta_positive": is_positive,
+            "is_good":           is_good,
+            "is_temporal":       is_temporal,
+        }
+    except Exception as e:
+        logger.debug(f"[KPI] Comparison failed for '{profile.name}': {e}")
+        return None
+
+
+def _compute_sparkline(
+    df: pl.DataFrame, profile: ColumnProfile, time_col: Optional[str], max_points: int = 12
+) -> Dict[str, Any]:
+    """Time-binned sparkline (preferred) or row-sampled fallback."""
+    col = profile.name
+    try:
+        if time_col and time_col in df.columns and df[time_col].dtype in (pl.Date, pl.Datetime):
+            try:
+                binned = (
+                    df.sort(time_col)
+                    .with_columns(pl.col(time_col).cast(pl.Date).alias("_d"))
+                    .group_by_dynamic("_d", every="1mo")
+                    .agg(pl.col(col).mean().alias("_v"))
+                    .sort("_d")
+                    .tail(max_points)
+                )
+                vals = binned["_v"].drop_nulls().to_list()
+                if len(vals) >= 3:
+                    return {"data": [round(v, 2) for v in vals], "type": "time_series"}
+            except Exception:
+                pass
+
+        # Row-sampled fallback
+        raw = df[col].drop_nulls().cast(pl.Float64).to_list()
+        numeric = [v for v in raw if not (math.isnan(v) or math.isinf(v))]
+        if len(numeric) < 3:
+            return {"data": [], "type": "distribution"}
+        step = max(1, len(numeric) // max_points)
+        sampled = numeric[::step][:max_points]
+        # 3-point moving average for smoother sparklines
+        if len(sampled) >= 5:
+            sampled = [
+                sum(sampled[max(0, i-1):i+2]) / len(sampled[max(0, i-1):i+2])
+                for i in range(len(sampled))
+            ]
+        return {"data": [round(v, 2) for v in sampled], "type": "distribution"}
+    except Exception:
+        return {"data": [], "type": "distribution"}
+
+
+def _compute_accent_color(importance: str, delta_direction: Optional[str], polarity: str) -> str:
+    if importance == "hero":
+        return "teal"
+    if not delta_direction or delta_direction == "neutral":
+        return "neutral"
+    is_positive = polarity == "higher_is_better"
+    if is_positive:
+        return "green" if delta_direction == "up" else "red"
+    else:
+        return "green" if delta_direction == "down" else "red"
+
+
+def _infer_format(profile: ColumnProfile, value: Any) -> str:
+    name = profile.name.lower()
+    if any(t in name for t in ("revenue", "sales", "cost", "amount", "price", "value",
+                                "profit", "income", "expense", "budget", "salary", "fee", "gmv")):
+        return "currency"
+    if profile.role == ColumnRole.RATE or profile.is_bounded_01:
+        return "percentage"
+    if any(t in name for t in ("rate", "ratio", "percent", "pct", "margin")):
+        return "percentage"
+    if any(t in name for t in ("duration", "latency", "days", "hours", "ms", "seconds")):
+        return "decimal"
+    if profile.is_integer_valued or profile.role == ColumnRole.COUNT:
+        return "integer"
+    if isinstance(value, float) and 0 <= value <= 1:
+        return "percentage"
+    return "decimal"
+
+
+def _infer_icon(profile: ColumnProfile) -> str:
+    cat = profile.business_category
+    icon_map = {
+        "revenue":     "DollarSign",
+        "cost":        "Activity",
+        "volume":      "ShoppingCart",
+        "users":       "Users",
+        "rate_metric": "Percent",
+        "churn_risk":  "Activity",
+        "price":       "DollarSign",
+        "performance": "Target",
+        "duration":    "Clock",
+        "quantity":    "Package",
+    }
+    return icon_map.get(cat, "BarChart3")
+
+
+def _build_subtitle(profile: ColumnProfile, n_rows: int, time_col: Optional[str],
+                    domain: Optional[str]) -> str:
+    agg_word = {
+        "sum": "Sum", "mean": "Average", "median": "Median",
+        "max": "Peak", "min": "Floor",
+    }.get(profile.aggregation, profile.aggregation.title())
+    domain_part = f" · {domain.replace('_', ' ').title()}" if domain and domain != "general" else ""
+    return f"{agg_word} across {n_rows:,} records{domain_part}"
+
+
+# ── LLM Enrichment ────────────────────────────────────────────────────────────
+
+async def _enrich_with_llm(
+    candidates: List[ColumnProfile],
+    domain: Optional[str],
+    metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Single LLM call for all selected KPIs.
+    Returns: {col_name: {insight_sentence, action_prompt}, archetype, dashboard_story}
+    """
+    from services.llm.router import llm_router
+
+    domain_intel = metadata.get("domain_intelligence", {})
+    raw_stat_findings = metadata.get("statistical_findings", {})
+    stat_findings = raw_stat_findings if isinstance(raw_stat_findings, dict) else {}
+
+    kpi_lines = []
+    for i, p in enumerate(candidates):
+        val = p.primary_value or 0
+        kpi_lines.append(
+            f"  {i+1}. {p.name} | role={p.role.value} | agg={p.aggregation} "
+            f"| value={val:,.2f} | polarity={p.polarity} | category={p.business_category}"
+        )
+
+    top_corr = (stat_findings.get("correlations") or [])[:3]
+    corr_lines = [
+        f"  {c.get('column_a','?')} ↔ {c.get('column_b','?')}: r={c.get('correlation', 0):.2f}"
+        for c in top_corr
+    ]
+
+    prompt = f"""You are a senior data analyst writing KPI card narratives for an executive dashboard.
+
+DATASET DOMAIN: {domain or 'general'}
+KEY METRICS SELECTED:
+{chr(10).join(kpi_lines)}
+
+TOP CORRELATIONS:
+{chr(10).join(corr_lines) or '  None'}
+
+DOMAIN CONTEXT:
+  key_metrics: {domain_intel.get('key_metrics', [])[:5]}
+  dimensions:  {domain_intel.get('dimensions', [])[:5]}
+
+For EACH metric, write:
+  1. insight_sentence: ONE sentence (max 30 words), plain English, with at least one number.
+     Must explain WHY or WHAT the metric means for this specific domain.
+     Never start with "This KPI" or "This card". State the signal directly.
+  2. action_prompt: ONE specific follow-up question ending with "?".
+     Must reference a specific column or pattern visible in the data.
+
+Also write:
+  3. archetype: The dataset domain in 2-3 words (e.g. "automotive_fleet", "ecommerce", "hr_analytics")
+  4. dashboard_story: 2-sentence CEO-level summary of what this dataset reveals.
+
+Respond with ONLY valid JSON (no markdown):
+{{
+  "archetype": "...",
+  "dashboard_story": "...",
+  "kpi_narratives": {{
+    "column_name_1": {{"insight_sentence": "...", "action_prompt": "...?"}},
+    "column_name_2": {{"insight_sentence": "...", "action_prompt": "...?"}}
+  }}
+}}"""
+
+    try:
+        result = await llm_router.call(
+            prompt=prompt,
+            model_role="insight_generation",
+            expect_json=True,
+            temperature=0.3,
+            max_tokens=1024,
+        )
+        if isinstance(result, dict):
+            return result
+    except Exception as e:
+        logger.warning(f"[KPI] LLM enrichment failed: {e}")
+
+    return {"archetype": domain or "general", "dashboard_story": "", "kpi_narratives": {}}
+
+
+# ── Main Generator ────────────────────────────────────────────────────────────
+
 class IntelligentKPIGenerator:
     """
-    Generates intelligent, context-aware KPIs using LLM with rich domain context.
-    All comparison/context data is derived from real data — nothing fabricated.
+    Production KPI generator. Thinks like a data scientist.
+    Output format maps 1:1 to EnterpriseKpiCard props.
     """
-
-    def __init__(self):
-        pass
 
     async def generate_intelligent_kpis(
         self,
         df: pl.DataFrame,
         domain: Optional[str] = None,
-        max_kpis: int = 8,
+        max_kpis: int = 4,
         dataset_metadata: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Generate dynamic KPIs using LLM with enriched context.
-
-        Args:
-            df: Polars DataFrame
-            domain: Detected domain (e.g., "ecommerce", "healthcare")
-            max_kpis: Maximum number of KPIs to generate
-            dataset_metadata: Full metadata dict from MongoDB (contains domain_intelligence,
-                            data_profile, deep_analysis, statistical_findings, etc.)
-
-        Returns:
-            List of KPI configurations with real data
-        """
         metadata = dataset_metadata or {}
+        domain = domain or metadata.get("domain_intelligence", {}).get("domain", "general")
 
-        try:
-            # Build enriched column metadata for the LLM
-            column_metadata = []
-            for col in df.columns:
-                dtype = str(df[col].dtype)
-                sample_value = df[col][0] if len(df) > 0 else ""
-                is_numeric = df[col].dtype in pl.NUMERIC_DTYPES
-                valid_aggs = (
-                    ["sum", "mean", "min", "max", "median"]
-                    if is_numeric
-                    else ["count_unique", "first"]
-                )
-                col_info = {
-                    "name": col,
-                    "type": dtype,
-                    "is_numeric": is_numeric,
-                    "valid_aggs": valid_aggs,
-                    "sample_value": sample_value,
-                }
-                column_metadata.append(col_info)
+        # ── 1. Profile all columns ───────────────────────────────────────────
+        profiles: List[ColumnProfile] = []
+        for col in df.columns:
+            p = _profile_column(df, col)
+            if p is not None:
+                profiles.append(p)
 
-            dataset_overview = {
-                "total_rows": len(df),
-                "total_columns": len(df.columns),
-            }
-
-            # Build enriched prompt metadata
-            prompt_metadata = {
-                "column_metadata": column_metadata,
-                "dataset_overview": dataset_overview,
-            }
-
-            # Inject domain intelligence if available
-            domain_intel = metadata.get("domain_intelligence", {})
-            if domain_intel:
-                prompt_metadata["domain_context"] = {
-                    "domain": domain_intel.get("domain", domain or "general"),
-                    "confidence": domain_intel.get("confidence", 0),
-                    "key_metrics": domain_intel.get("key_metrics", []),
-                    "dimensions": domain_intel.get("dimensions", []),
-                    "measures": domain_intel.get("measures", []),
-                    "time_columns": domain_intel.get("time_columns", []),
-                }
-            elif domain:
-                prompt_metadata["domain_context"] = {"domain": domain}
-
-            # Inject data profile highlights if available
-            data_profile = metadata.get("data_profile", {})
-            if data_profile:
-                prompt_metadata["data_profile"] = {
-                    "id_columns": data_profile.get("id_columns", []),
-                    "low_cardinality_dims": data_profile.get(
-                        "low_cardinality_dims", []
-                    ),
-                    "high_cardinality_dims": data_profile.get(
-                        "high_cardinality_dims", []
-                    ),
-                }
-
-            # Inject deep analysis highlights if available
-            deep_analysis = metadata.get("deep_analysis", {})
-            enhanced = deep_analysis.get("enhanced_analysis", {})
-            if enhanced:
-                # Top 3 correlations for context
-                top_corr = enhanced.get("correlations", [])[:3]
-                if top_corr:
-                    prompt_metadata["top_correlations"] = [
-                        {
-                            "columns": [c.get("column1", ""), c.get("column2", "")],
-                            "r": round(c.get("correlation", 0), 3),
-                            "strength": c.get("strength", ""),
-                        }
-                        for c in top_corr
-                    ]
-
-                # Distribution anomalies
-                skewed = [
-                    d.get("column", "")
-                    for d in enhanced.get("distributions", [])
-                    if d.get("skewness") is not None and abs(d["skewness"]) > 1.5
-                ]
-                if skewed:
-                    prompt_metadata["skewed_columns"] = skewed[:5]
-
-            # Build prompt via factory
-            factory = PromptFactory(prompt_metadata)
-            prompt = factory.get_prompt(PromptType.KPI_GENERATOR)
-
-            # Call LLM
-            response = await llm_router.call(
-                prompt=prompt,
-                model_role="kpi_suggestion",
-                expect_json=True,
-                temperature=0.0,
-            )
-
-            # Validate and extract
-            result = extract_and_validate(response, KPIGeneratorResponseV2)
-            # CRITICAL: Convert Pydantic objects to dicts immediately to avoid '.get()' attribute errors later
-            kpis = [k.model_dump() for k in result.kpis[:max_kpis]]
-
-            # Validate columns exist before any Polars access
-            kpis = self._validate_kpi_columns(df, kpis)
-
-            # Compute actual values and real enrichment data
-            for kpi in kpis:
-                kpi["value"] = self._calculate_kpi_value(
-                    df,
-                    kpi["column"],
-                    kpi["aggregation"],
-                    secondary=kpi.get("secondary_column"),
-                )
-                self._enrich_with_real_data(kpi, df, metadata)
-
-            logger.info(
-                f"Generated {len(kpis)} KPIs for archetype '{result.archetype}' "
-                f"(confidence: {result.confidence})"
-            )
-            return kpis
-
-        except Exception as e:
-            logger.error(
-                f"Dynamic KPI generation failed: {e} — falling back to domain-aware generic"
-            )
-            return self._generate_domain_aware_kpis(df, max_kpis, metadata)
-
-    # =========================================================================
-    # REAL DATA ENRICHMENT (replaces fake random-based methods)
-    # =========================================================================
-
-    def _validate_kpi_columns(
-        self, df: pl.DataFrame, kpis: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        Validate that LLM-suggested columns exist in the DataFrame.
-        Skips KPIs with hallucinated columns, clears invalid secondary columns.
-        Also filters out meaningless KPIs: count_unique on low-cardinality columns
-        (e.g. "Unique Gender: 3") are data-quality stats, not business metrics.
-        """
-        valid_columns = set(df.columns)
-        valid_kpis = []
-
-        for kpi in kpis:
-            col = kpi.get("column", "")
-            if col not in valid_columns:
-                logger.warning(
-                    f"LLM hallucinated column: '{col}' — skipping KPI '{kpi.get('title', '?')}'. "
-                    f"Available: {sorted(valid_columns)[:10]}..."
-                )
-                continue
-
-            # Drop count_unique KPIs on non-numeric columns with very few unique values.
-            # "Unique Gender: 3" tells the user nothing actionable.
-            agg = kpi.get("aggregation", "")
-            if agg in ("count_unique", "nunique") and col in df.columns:
-                if df[col].dtype not in pl.NUMERIC_DTYPES:
-                    n_unique = df[col].n_unique()
-                    if n_unique <= 20:
-                        logger.info(
-                            f"Dropping low-cardinality count_unique KPI: '{kpi.get('title', '?')}' "
-                            f"(column='{col}', n_unique={n_unique})"
-                        )
-                        continue
-
-            sec = kpi.get("secondary_column")
-            if sec and sec not in valid_columns:
-                logger.warning(
-                    f"Secondary column '{sec}' not found for KPI '{kpi.get('title', '?')}' — clearing"
-                )
-                kpi["secondary_column"] = None
-            valid_kpis.append(kpi)
-
-        if len(valid_kpis) < len(kpis):
-            logger.info(
-                f"Column validation: {len(valid_kpis)}/{len(kpis)} KPIs passed validation"
-            )
-        return valid_kpis
-
-    def _enrich_with_real_data(
-        self, kpi: Dict[str, Any], df: pl.DataFrame, metadata: Dict[str, Any]
-    ) -> None:
-        """
-        Enrich a KPI with REAL data — no fabricated values.
-
-        - Format: inferred from column name/value
-        - Comparison: real first-half vs second-half of dataset (if meaningful)
-        - Target: replaced with percentile context (p75/p90)
-        - Sparkline: sampled from actual column values
-        - Context: derived from real comparison or statistical position
-        """
-        value = kpi.get("value", 0)
-        column = kpi.get("column", "")
-        aggregation = kpi.get("aggregation", "sum")
-
-        # Infer display format
-        kpi["format"] = self._infer_format(column, value)
-
-        # Real comparison: split dataset into halves and compare
-        comparison = self._calculate_real_comparison(df, column, aggregation)
-        if comparison is not None:
-            kpi["comparison_value"] = comparison["previous"]
-            kpi["comparison_label"] = comparison["label"]
-            kpi["delta_percent"] = comparison["delta_percent"]
-            kpi["delta_direction"] = comparison["delta_direction"]
-            kpi["context"] = comparison["context"]
-            # Calculate semantic accent color
-            importance = kpi.get("importance", "medium")
-            delta_direction = comparison.get("delta_direction")
-            is_positive = comparison.get("is_positive", True)
-            kpi["is_delta_positive"] = is_positive
-            kpi["accent_color"] = self._calculate_semantic_color(
-                importance, delta_direction, is_positive
-            )
-        else:
-            kpi["comparison_value"] = None
-            kpi["comparison_label"] = ""
-            kpi["delta_percent"] = None
-            kpi["delta_direction"] = None
-            kpi["context"] = self._calculate_percentile_context(
-                df, column, value, aggregation
-            )
-            kpi["accent_color"] = self._calculate_semantic_color(
-                kpi.get("importance", "medium"), None, True
-            )
-
-        # Percentile position instead of fabricated target
-        kpi["target_value"] = None
-        kpi["target_label"] = None
-
-        # Real sparkline from actual data (prefers time-series binning)
-        kpi["sparkline_data"] = self._generate_sparkline_data(df, column, aggregation)
-
-    def _calculate_real_comparison(
-        self, df: pl.DataFrame, column: str, aggregation: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Compare first half vs second half of dataset.
-        Sorts by datetime column if available for meaningful temporal comparison.
-        Returns None if comparison isn't meaningful.
-        """
-        try:
-            if column not in df.columns:
-                return None
-
-            col_data = df[column].drop_nulls()
-            if len(col_data) < 10:
-                return None
-
-            # Sort by datetime column if one exists (critical for temporal accuracy)
-            date_col = None
-            for col_name in df.columns:
-                if df[col_name].dtype in (pl.Date, pl.Datetime):
-                    date_col = col_name
-                    break
-
-            working_df = df.sort(date_col) if date_col else df
-
-            # Split into two halves
-            mid = len(working_df) // 2
-            first_half = working_df[:mid]
-            second_half = working_df[mid:]
-
-            # Compute aggregation for each half
-            val_first = self._compute_agg(first_half, column, aggregation)
-            val_second = self._compute_agg(second_half, column, aggregation)
-
-            if val_first is None or val_second is None or val_first == 0:
-                return None
-
-            delta_pct = round(((val_second - val_first) / abs(val_first)) * 100, 2)
-            direction = "↑" if delta_pct >= 0 else "↓"
-            is_meaningful = date_col is not None
-            label = (
-                "vs first half (time-sorted)"
-                if is_meaningful
-                else "vs first half (row order)"
-            )
-            # Determine polarity: cost-like columns have down=good
-            col_lower = column.lower()
-            is_cost_like = any(
-                term in col_lower
-                for term in [
-                    "cost",
-                    "expense",
-                    "loss",
-                    "tax",
-                    "discount",
-                    "defect",
-                    "error",
-                    "fail",
-                ]
-            )
-            is_positive = not is_cost_like  # down is good for costs
-
-            return {
-                "previous": round(val_first, 2),
-                "label": label,
-                "delta_percent": delta_pct,
-                "delta_direction": "up"
-                if delta_pct > 0
-                else "down"
-                if delta_pct < 0
-                else "neutral",
-                "is_meaningful": is_meaningful,
-                "is_positive": is_positive,
-                "context": f"{direction}{abs(delta_pct):.1f}% {label}",
-            }
-        except Exception as e:
-            logger.debug(f"Real comparison failed for {column}: {e}")
-            return None
-
-    def _calculate_percentile_context(
-        self, df: pl.DataFrame, column: str, value: Any, aggregation: str
-    ) -> str:
-        """
-        Generate context based on percentile position instead of fabricated targets.
-        """
-        try:
-            if column not in df.columns or not isinstance(value, (int, float)):
-                return ""
-
-            col_data = df[column].drop_nulls().cast(pl.Float64)
-            if len(col_data) < 5:
-                return ""
-
-            median = float(col_data.median())
-            p25 = float(col_data.quantile(0.25))
-            p75 = float(col_data.quantile(0.75))
-
-            if aggregation in ("mean", "avg"):
-                if value > p75:
-                    return f"Above 75th percentile (median: {median:,.2f})"
-                elif value < p25:
-                    return f"Below 25th percentile (median: {median:,.2f})"
-                else:
-                    return f"Near median ({median:,.2f})"
-            elif aggregation == "sum":
-                null_pct = (df[column].null_count() / len(df)) * 100
-                if null_pct > 10:
-                    return f"{null_pct:.0f}% values missing"
-                return f"Across {len(col_data):,} records"
-            elif aggregation in ("count", "count_unique", "nunique"):
-                return f"Out of {len(df):,} total records"
-            else:
-                return ""
-        except Exception:
-            return ""
-
-    def _compute_agg(
-        self, df: pl.DataFrame, column: str, aggregation: str
-    ) -> Optional[float]:
-        """Compute a single aggregation safely."""
-        try:
-            if column not in df.columns:
-                return None
-            col = df[column].drop_nulls()
-            if len(col) == 0:
-                return None
-
-            # Guard: non-numeric columns can only use count-based aggregations
-            if col.dtype not in pl.NUMERIC_DTYPES:
-                if aggregation in ("count", "count_unique", "nunique"):
-                    pass  # these are safe for non-numeric
-                else:
-                    return float(col.count())  # safe fallback
-
-            if aggregation == "sum":
-                return float(col.sum())
-            elif aggregation in ("mean", "avg"):
-                return float(col.mean())
-            elif aggregation == "max":
-                return float(col.max())
-            elif aggregation == "min":
-                return float(col.min())
-            elif aggregation == "count":
-                return float(col.count())
-            elif aggregation in ("count_unique", "nunique"):
-                return float(col.n_unique())
-            else:
-                return float(col.sum())
-        except Exception:
-            return None
-
-    # =========================================================================
-    # SPARKLINE (kept — was already using real data)
-    # =========================================================================
-
-    def _generate_sparkline_data(
-        self,
-        df: pl.DataFrame,
-        column: str,
-        aggregation: str,
-        max_points: int = 12,
-    ) -> Any:
-        """
-        Generate sparkline trend data.
-        Prefers time-series binning when a datetime column exists.
-        Falls back to row sampling otherwise.
-        Returns dict with 'data' and 'type' for frontend to label correctly.
-        """
-        try:
-            if column not in df.columns:
-                return []
-
-            # Try time-series binning first (more meaningful sparklines)
-            date_col = None
-            for col_name in df.columns:
-                if df[col_name].dtype in (pl.Date, pl.Datetime):
-                    date_col = col_name
-                    break
-
-            if date_col:
-                try:
-                    binned = (
-                        df.sort(date_col)
-                        .with_columns(
-                            pl.col(date_col).cast(pl.Date).alias("_spark_date")
-                        )
-                        .group_by_dynamic("_spark_date", every="1mo")
-                        .agg(pl.col(column).mean().alias("_spark_val"))
-                        .sort("_spark_date")
-                        .tail(max_points)
-                    )
-                    values = binned["_spark_val"].drop_nulls().to_list()
-                    if len(values) >= 3:
-                        return {
-                            "data": [round(v, 2) for v in values],
-                            "type": "time_series",
-                        }
-                except Exception:
-                    pass  # fall through to row sampling
-
-            # Fallback: row sampling (existing logic)
-            values = df[column].to_list()
-            numeric_values = [
-                v
-                for v in values
-                if isinstance(v, (int, float))
-                and v is not None
-                and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
-            ]
-
-            if len(numeric_values) < 3:
-                return []
-
-            step = max(1, len(numeric_values) // max_points)
-            sampled = [numeric_values[i] for i in range(0, len(numeric_values), step)][
-                :max_points
-            ]
-
-            # Enterprise smoothing: 3-point moving average to reduce noise
-            if len(sampled) >= 5:
-                smoothed = []
-                for i in range(len(sampled)):
-                    start_idx = max(0, i - 1)
-                    end_idx = min(len(sampled), i + 2)
-                    window = sampled[start_idx:end_idx]
-                    smoothed.append(sum(window) / len(window))
-                sampled = smoothed
-
-            return {
-                "data": [round(v, 2) if isinstance(v, float) else v for v in sampled],
-                "type": "distribution",
-            }
-
-        except Exception as e:
-            logger.debug(f"Error generating sparkline for {column}: {e}")
+        if not profiles:
+            logger.warning("[KPI] No column profiles built — empty dataset?")
             return []
 
-    # =========================================================================
-    # FORMAT INFERENCE (kept — was already working correctly)
-    # =========================================================================
+        # ── 2. Select candidates via the gate ────────────────────────────────
+        candidates = _select_candidates(profiles, max_kpis)
 
-    def _calculate_semantic_color(
-        self,
-        importance: str,
-        delta_direction: Optional[str],
-        is_positive: bool,
-    ) -> str:
-        """
-        Calculate semantic accent color based on enterprise color decision tree.
+        if not candidates:
+            logger.warning("[KPI] No candidates passed the KPI gate")
+            return self._domain_aware_fallback(df, profiles, domain, max_kpis, metadata)
 
-        Logic:
-        - hero = "teal" always
-        - neutral delta = "neutral"
-        - up + positive = "green" (revenue up = good)
-        - down + positive = "red" (revenue down = bad)
-        - up + negative = "red" (cost up = bad)
-        - down + negative = "green" (cost down = good)
-        """
-        if importance == "hero":
-            return "teal"
+        # ── 3. Find time column for comparisons + sparklines ─────────────────
+        time_col = _find_time_column(df)
 
-        if delta_direction is None or delta_direction == "neutral":
-            return "neutral"
+        # ── 4. LLM enrichment (single call for all KPIs) ─────────────────────
+        llm_data = await _enrich_with_llm(candidates, domain, metadata)
+        narratives   = llm_data.get("kpi_narratives", {})
+        archetype    = llm_data.get("archetype", domain or "general")
+        dash_story   = llm_data.get("dashboard_story", "")
 
-        if is_positive:
-            # Higher = better (revenue, efficiency, volume)
-            return "green" if delta_direction == "up" else "red"
-        else:
-            # Lower = better (cost, defects, tax)
-            return "green" if delta_direction == "down" else "red"
-
-    def _infer_format(self, column: str, value: Any) -> str:
-        """Infer the appropriate display format for a KPI."""
-        import re
-
-        col_lower = (column or "").lower()
-
-        if any(
-            term in col_lower
-            for term in [
-                "price",
-                "revenue",
-                "sales",
-                "cost",
-                "amount",
-                "total",
-                "profit",
-                "income",
-                "expense",
-                "budget",
-                "salary",
-                "fee",
-            ]
-        ):
-            return "currency"
-
-        # Fix: Use regex word boundaries to prevent matching "duration" as "ratio"
-        if re.search(
-            r"\b(rate|ratio|percent|pct|growth|change|margin|efficiency)\b", col_lower
-        ):
-            return "percentage"
-
-        if any(
-            term in col_lower
-            for term in [
-                "duration",
-                "ms",
-                "seconds",
-                "sec",
-                "time_spent",
-            ]
-        ):
-            # Use 'number' or 'integer' for raw ms, frontend formatting handles human-readability
-            return "integer"
-
-        if any(
-            term in col_lower
-            for term in [
-                "count",
-                "quantity",
-                "qty",
-                "units",
-                "number",
-                "num",
-            ]
-        ):
-            return "integer"
-
-        if isinstance(value, float) and 0 <= value <= 1:
-            return "percentage"
-
-        if isinstance(value, int):
-            return "integer"
-
-        return "number"
-
-    # =========================================================================
-    # KPI VALUE CALCULATION (kept — was already using real data)
-    # =========================================================================
-
-    def _calculate_kpi_value(
-        self,
-        df: pl.DataFrame,
-        column: str,
-        aggregation: str,
-        secondary: Optional[str] = None,
-    ) -> Any:
-        """Calculate KPI value from real data."""
-        try:
-            is_numeric = df[column].dtype in pl.NUMERIC_DTYPES
-
-            # Guard: redirect non-numeric columns to count-based aggregations
-            if not is_numeric and aggregation in (
-                "sum",
-                "mean",
-                "avg",
-                "max",
-                "min",
-                "std",
-                "range",
-                "pct_change",
-            ):
-                logger.warning(
-                    f"Aggregation '{aggregation}' invalid for non-numeric column '{column}' "
-                    f"(dtype={df[column].dtype}) — falling back to count_unique"
-                )
-                aggregation = "count_unique"
-
-            if aggregation == "sum":
-                return int(df[column].sum())
-            elif aggregation == "mean":
-                return round(float(df[column].mean()), 2)
-            elif aggregation == "max":
-                return float(df[column].max())
-            elif aggregation == "min":
-                return float(df[column].min())
-            elif aggregation == "count":
-                return int(df[column].count())
-            elif aggregation == "count_unique":
-                return int(df[column].n_unique())
-            elif aggregation == "last":
-                return df[column].tail(1)[0]
-            elif aggregation == "range":
-                # Return structured data — frontend formats as "min – max"
-                return {
-                    "min": round(float(df[column].min()), 2),
-                    "max": round(float(df[column].max()), 2),
-                }
-            elif aggregation == "pct_change":
-                if not secondary:
-                    logger.warning(
-                        f"pct_change requires secondary_column, none provided for '{column}' — returning None"
-                    )
-                    return None
-                sorted_df = df.sort(secondary)
-                prices = sorted_df[column].to_list()
-                changes = [
-                    (prices[i] - prices[i - 1]) / prices[i - 1] * 100
-                    for i in range(1, len(prices))
-                    if prices[i - 1] != 0
-                ]
-                return round(sum(changes) / len(changes), 2) if changes else 0
-            elif aggregation == "std":
-                return round(float(df[column].std()), 2)
-            elif aggregation in ("ratio", "percentage") and secondary:
-                # Enterprise Fix: Correct ratio logic (Sum/Sum for numeric, Sum/Count for categorical)
-                num = df[column].sum()
-                if df[secondary].dtype in pl.NUMERIC_DTYPES:
-                    denom = df[secondary].sum()
-                else:
-                    denom = df[secondary].count()
-
-                if denom and denom != 0:
-                    val = num / denom
-                    # If it's very small, don't multiply by 100 arbitrarily unless specified
-                    if aggregation == "percentage":
-                        return round(val * 100, 2)
-                    return round(val, 4)
-                return 0
-            else:
-                return df[column].sum()
-        except Exception as e:
-            logger.error(f"Error calculating KPI for {column} with {aggregation}: {e}")
-            return 0
-
-    # =========================================================================
-    # DOMAIN-AWARE FALLBACK (replaces blind generic fallback)
-    # =========================================================================
-
-    def _generate_domain_aware_kpis(
-        self,
-        df: pl.DataFrame,
-        max_kpis: int,
-        metadata: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        """
-        Domain-aware fallback when LLM fails.
-        Uses domain detection results to pick meaningful KPIs.
-        """
-        kpis = []
-        domain_intel = metadata.get("domain_intelligence", {})
-        data_profile = metadata.get("data_profile", {})
-
-        # Columns to skip (IDs, high-cardinality dims)
-        skip_cols = set(data_profile.get("id_columns", []))
-        skip_cols.update(data_profile.get("high_cardinality_dims", []))
-
-        # Prefer domain-identified measures and key metrics
-        preferred_cols = []
-        for col in domain_intel.get("key_metrics", []):
-            if col in df.columns and col not in skip_cols:
-                preferred_cols.append(col)
-        for col in domain_intel.get("measures", []):
-            if col in df.columns and col not in skip_cols and col not in preferred_cols:
-                preferred_cols.append(col)
-
-        # Fall back to numeric columns if no domain info
-        numeric_cols = [
-            col
-            for col in df.select(pl.col(pl.NUMERIC_DTYPES)).columns
-            if col not in skip_cols
-        ]
-        if not preferred_cols:
-            preferred_cols = numeric_cols
-
-        # Generate KPIs from preferred columns
-        for col in preferred_cols[:max_kpis]:
+        # ── 5. Build final KPI card dicts ────────────────────────────────────
+        kpis: List[Dict[str, Any]] = []
+        for profile in candidates:
             try:
-                # Pick the most meaningful aggregation for this column
-                aggregation = self._pick_best_aggregation(df, col)
-                value = self._calculate_kpi_value(df, col, aggregation)
+                value      = _compute_kpi_value(df, profile)
+                comparison = _compute_comparison(df, profile, time_col)
+                sparkline  = _compute_sparkline(df, profile, time_col)
+                fmt        = _infer_format(profile, value)
+                icon       = _infer_icon(profile)
+                subtitle   = _build_subtitle(profile, len(df), time_col, domain)
+
+                narrative   = narratives.get(profile.name, {})
+                insight     = narrative.get("insight_sentence", "")
+                action      = narrative.get("action_prompt", "")
+
+                delta_dir   = comparison["delta_direction"] if comparison else None
+                accent      = _compute_accent_color(profile.importance, delta_dir, profile.polarity)
+
+                # Benchmark: p75 as aspirational reference
+                bench_val   = profile.col_p75
+                bench_label = "Top 25%" if bench_val else None
 
                 kpi = {
-                    "title": self._humanize_column_name(col, aggregation),
-                    "value": value,
-                    "column": col,
-                    "aggregation": aggregation,
-                    "importance": "high"
-                    if col in domain_intel.get("key_metrics", [])
-                    else "medium",
+                    # Identity
+                    "type":            "kpi",
+                    "column":          profile.name,
+                    "aggregation":     profile.aggregation,
+                    "importance":      profile.importance,
+                    "business_category": profile.business_category,
+
+                    # Display
+                    "title":           _humanize_title(profile),
+                    "subtitle":        subtitle,
+                    "value":           value,
+                    "format":          fmt,
+                    "icon":            icon,
+                    "record_count":    len(df) - profile.n_nulls,
+
+                    # Comparison
+                    "comparison_value": comparison["comparison_value"] if comparison else None,
+                    "comparison_label": comparison["comparison_label"] if comparison else None,
+                    "delta_percent":    comparison["delta_percent"]    if comparison else None,
+                    "delta_direction":  comparison["delta_direction"]  if comparison else None,
+                    "is_delta_positive": comparison["is_delta_positive"] if comparison else (profile.polarity == "higher_is_better"),
+
+                    # Accent / color
+                    "accent_color":    accent,
+
+                    # Sparkline
+                    "sparkline_data":  sparkline,
+
+                    # Benchmark
+                    "benchmark_value": round(bench_val, 2) if bench_val else None,
+                    "benchmark_label": bench_label,
+                    "benchmark_text":  f"{bench_label}: {_fmt_val(bench_val, fmt)}" if bench_val and bench_label else None,
+
+                    # Narrative (LLM)
+                    "ai_suggestion":   insight,
+                    "action_prompt":   action,
+                    "dashboard_story": dash_story if profile.importance == "hero" else "",
+                    "archetype":       archetype,
+
+                    # Extra stats for advanced cards
+                    "col_p75":         profile.col_p75,
+                    "col_median":      profile.col_median,
+                    "polarity":        profile.polarity,
                 }
-                self._enrich_with_real_data(kpi, df, metadata)
                 kpis.append(kpi)
+            except Exception as e:
+                logger.error(f"[KPI] Failed to build card for '{profile.name}': {e}")
+
+        logger.info(f"[KPI] Generated {len(kpis)} cards for archetype='{archetype}'")
+        return kpis
+
+    # ── Fallback ─────────────────────────────────────────────────────────────
+
+    def _domain_aware_fallback(
+        self, df: pl.DataFrame, profiles: List[ColumnProfile],
+        domain: str, max_kpis: int, metadata: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Last-resort: pick top numeric columns by absolute value."""
+        logger.info("[KPI] Using domain-aware fallback")
+        numeric = [
+            p for p in profiles
+            if p.role in (ColumnRole.MEASURE, ColumnRole.COUNT, ColumnRole.RATE)
+            and p.null_pct < 50
+            and p.primary_value is not None
+        ]
+        if not numeric:
+            return []
+
+        # Sort by absolute value descending
+        numeric.sort(key=lambda p: abs(p.primary_value or 0), reverse=True)
+        top = numeric[:max_kpis]
+        top[0].importance = "hero"
+        for p in top[1:]:
+            p.importance = "high"
+
+        time_col = _find_time_column(df)
+        kpis = []
+        for p in top:
+            try:
+                value      = _compute_kpi_value(df, p)
+                comparison = _compute_comparison(df, p, time_col)
+                sparkline  = _compute_sparkline(df, p, time_col)
+                fmt        = _infer_format(p, value)
+                delta_dir  = comparison["delta_direction"] if comparison else None
+                accent     = _compute_accent_color(p.importance, delta_dir, p.polarity)
+
+                kpis.append({
+                    "type":            "kpi",
+                    "column":          p.name,
+                    "aggregation":     p.aggregation,
+                    "importance":      p.importance,
+                    "title":           _humanize_title(p),
+                    "subtitle":        _build_subtitle(p, len(df), time_col, domain),
+                    "value":           value,
+                    "format":          fmt,
+                    "icon":            _infer_icon(p),
+                    "record_count":    len(df) - p.n_nulls,
+                    "comparison_value": comparison["comparison_value"] if comparison else None,
+                    "comparison_label": comparison["comparison_label"] if comparison else None,
+                    "delta_percent":   comparison["delta_percent"] if comparison else None,
+                    "delta_direction": comparison["delta_direction"] if comparison else None,
+                    "is_delta_positive": p.polarity == "higher_is_better",
+                    "accent_color":    accent,
+                    "sparkline_data":  sparkline,
+                    "ai_suggestion":   "",
+                    "action_prompt":   "",
+                })
             except Exception:
                 continue
-
-        return kpis[:max_kpis]
-
-    def _pick_best_aggregation(self, df: pl.DataFrame, column: str) -> str:
-        """Pick the most meaningful aggregation for a column based on its data."""
-        col_lower = column.lower()
-
-        # Revenue/sales/cost → sum
-        if any(
-            term in col_lower
-            for term in [
-                "revenue",
-                "sales",
-                "cost",
-                "total",
-                "amount",
-                "income",
-                "profit",
-                "expense",
-                "budget",
-                "fee",
-                "salary",
-            ]
-        ):
-            return "sum"
-
-        # Rate/ratio/percentage → mean
-        if any(
-            term in col_lower
-            for term in [
-                "rate",
-                "ratio",
-                "percent",
-                "pct",
-                "average",
-                "avg",
-                "score",
-                "rating",
-                "index",
-                "margin",
-            ]
-        ):
-            return "mean"
-
-        # Count-like → count_unique
-        if any(
-            term in col_lower
-            for term in [
-                "id",
-                "name",
-                "category",
-                "type",
-                "status",
-            ]
-        ):
-            return "count_unique"
-
-        # Default: check value range — if all similar values, use mean; if varied, use sum
-        try:
-            col_data = df[column].drop_nulls()
-            if len(col_data) > 0:
-                cv = (
-                    float(col_data.std()) / float(col_data.mean())
-                    if float(col_data.mean()) != 0
-                    else 0
-                )
-                if cv < 0.3:
-                    return "mean"  # Low variance → average is meaningful
-                return "sum"
-        except Exception:
-            pass
-
-        return "sum"
-
-    def _humanize_column_name(self, column: str, aggregation: str) -> str:
-        """Convert column_name to a human-readable KPI title."""
-        name = column.replace("_", " ").replace("-", " ").strip().title()
-
-        agg_prefix = {
-            "sum": "Total",
-            "mean": "Average",
-            "avg": "Average",
-            "max": "Highest",
-            "min": "Lowest",
-            "count": "Count of",
-            "count_unique": "",
-            "std": "Std Dev of",
-        }
-
-        prefix = agg_prefix.get(aggregation, "")
-        if prefix:
-            return f"{prefix} {name}"
-        return name
+        return kpis
 
 
-# Singleton instance
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+_AGG_PREFIX = {
+    "sum":    "Total",
+    "mean":   "Average",
+    "median": "Median",
+    "max":    "Peak",
+    "min":    "Lowest",
+    "count":  "Count of",
+}
+
+
+def _humanize_title(profile: ColumnProfile) -> str:
+    name = profile.name.replace("_", " ").replace("-", " ").strip().title()
+    prefix = _AGG_PREFIX.get(profile.aggregation, "")
+    if prefix:
+        # Avoid double prefix ("Total Total Revenue")
+        if name.lower().startswith(prefix.lower()):
+            return name
+        return f"{prefix} {name}"
+    return name
+
+
+def _fmt_val(val: Optional[float], fmt: str) -> str:
+    if val is None:
+        return "N/A"
+    if fmt == "currency":
+        if abs(val) >= 1e9: return f"${val/1e9:.1f}B"
+        if abs(val) >= 1e6: return f"${val/1e6:.1f}M"
+        if abs(val) >= 1e3: return f"${val/1e3:.1f}K"
+        return f"${val:,.0f}"
+    if fmt == "percentage":
+        return f"{val:.1f}%"
+    if abs(val) >= 1e6: return f"{val/1e6:.1f}M"
+    if abs(val) >= 1e3: return f"{val/1e3:.1f}K"
+    return f"{val:,.1f}"
+
+
+# Singleton
 intelligent_kpi_generator = IntelligentKPIGenerator()

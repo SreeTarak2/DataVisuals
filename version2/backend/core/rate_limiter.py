@@ -95,8 +95,22 @@ class RateLimits:
     # Analysis
     ANALYSIS_RUN = "20/minute"
     
+    # Database connections
+    DB_TEST      = "10/minute"   # test without saving — relaxed
+    DB_CONNECT   = "5/hour"      # saving a connection is rare
+    DB_LIST      = "60/minute"   # read operations
+    DB_EXTRACT   = "5/hour"      # extraction triggers a full Celery pipeline
+
     # Default for misc endpoints
     DEFAULT = "100/minute"
+
+    # Legacy aliases kept for backward compatibility with older route modules
+    CHAT_LIST = CHAT_MESSAGE
+    DATASET_LIST = DATASET_READ
+    DATASET_GET = DATASET_READ
+    DATASET_DELETE = DATASET_READ
+    ANALYSIS_CREATE = ANALYSIS_RUN
+    DASHBOARD_CREATE = AI_DASHBOARD
 
 
 # ============================================================

@@ -17,11 +17,13 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import useDatasetStore from '../../../store/datasetStore';
 import { toast } from 'react-hot-toast';
+import ConnectDatabaseModal from '../databases/ConnectDatabaseModal';
 
 const UploadModal = ({ isOpen, onClose, onProcessingStart }) => {
   const [uploading, setUploading] = useState(false);
   const [uploadType, setUploadType] = useState('file');
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [isDbModalOpen, setIsDbModalOpen] = useState(false);
   const { uploadDataset, setProcessingDataset } = useDatasetStore();
 
   const onDrop = useCallback(async (acceptedFiles) => {
@@ -95,10 +97,11 @@ const UploadModal = ({ isOpen, onClose, onProcessingStart }) => {
   };
 
   const handleSQLDatabase = () => {
-    toast.error('SQL Database integration coming soon!');
+    onClose();
+    setIsDbModalOpen(true);
   };
 
-  return createPortal(
+  const uploadPortal = createPortal(
     <AnimatePresence>
       {isOpen && (
         <div className="fixed inset-0 z-[60] overflow-y-auto">
@@ -209,26 +212,21 @@ const UploadModal = ({ isOpen, onClose, onProcessingStart }) => {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={handleSQLDatabase}
-                    disabled
-                    className="p-4 rounded-xl border-2 cursor-not-allowed opacity-60"
-                    style={{ 
-                      borderColor: 'var(--border)',
-                      backgroundColor: 'var(--bg-elevated)',
+                    className="p-4 rounded-xl border-2 transition-all duration-200"
+                    style={{
+                      borderColor: uploadType === 'database' ? 'var(--accent-primary)' : 'var(--border)',
+                      backgroundColor: uploadType === 'database' ? 'var(--accent-primary-light)' : 'transparent',
                     }}
                   >
                     <div className="text-center">
-                      <div 
+                      <div
                         className="p-3 rounded-lg mx-auto mb-3"
-                        style={{ backgroundColor: 'var(--bg-surface)' }}
+                        style={{ backgroundColor: 'var(--bg-elevated)' }}
                       >
-                        <Server className="h-6 w-6" style={{ color: 'var(--text-muted)' }} />
+                        <Server className="h-6 w-6" style={{ color: 'var(--accent-primary)' }} />
                       </div>
-                      <h4 className="font-medium mb-1" style={{ color: 'var(--text-muted)' }}>SQL Database</h4>
-                      <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Coming Soon</p>
-                      <div className="mt-2 flex items-center justify-center gap-1">
-                        <AlertCircle className="h-3 w-3" style={{ color: 'var(--text-muted)' }} />
-                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Disabled</span>
-                      </div>
+                      <h4 className="font-medium mb-1" style={{ color: 'var(--text-header)' }}>Database</h4>
+                      <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>PostgreSQL, MySQL, MongoDB</p>
                     </div>
                   </motion.button>
                 </div>
@@ -430,6 +428,17 @@ const UploadModal = ({ isOpen, onClose, onProcessingStart }) => {
       )}
     </AnimatePresence>,
     document.body
+  );
+
+  return (
+    <>
+      {uploadPortal}
+      <ConnectDatabaseModal
+        isOpen={isDbModalOpen}
+        onClose={() => setIsDbModalOpen(false)}
+        onProcessingStart={onProcessingStart}
+      />
+    </>
   );
 };
 

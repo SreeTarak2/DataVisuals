@@ -17,6 +17,8 @@ from services.datasets.file_storage_service import file_storage_service
 from services.datasets.faiss_vector_service import faiss_vector_service
 from services.cache import cache_service
 # Note: process_dataset_task imported lazily to avoid circular imports
+from services.datasets import dataset_loader
+from services.datasets import data_profiler
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +197,7 @@ class EnhancedDatasetService:
             await self.db.uploads.insert_one(dataset_doc)
 
             # Lazy import to avoid circular dependency
-            from tasks import process_dataset_task
+            from workers.pipeline.dataset import process_dataset_task
 
             task = process_dataset_task.delay(
                 dataset_id, file_metadata["file_path"], user_id
@@ -665,15 +667,68 @@ class EnhancedDatasetService:
         """
         Alias for load_dataset_data for cleaner API.
         Loads dataset as a Polars DataFrame.
-        
+
         Args:
             dataset_id: Dataset ID
             user_id: User ID for ownership verification
-            
+
         Returns:
             pl.DataFrame: The loaded dataset
         """
         return await self.load_dataset_data(dataset_id, user_id)
+
+    async def ensure_dataframe_for_agent(
+        self, dataset_id: str, user_id: str, sample: bool = False, max_rows: int = 10000
+    ):
+        """Helper for agents: return a Polars DataFrame.
+
+        Attempts to load a cached/sample DataFrame suitable for quick analysis.
+        Agents should call this instead of implementing loading logic themselves.
+        """
+        try:
+            if sample:
+                # Use dataset_loader's sampling strategy when a sample is preferred
+                ds = await self.get_dataset(dataset_id, user_id)
+                file_path = ds.get("file_path")
+                if not file_path:
+                    raise Exception("Dataset file_path missing")
+                return await dataset_loader.load_dataset_sample(file_path, max_rows)
+
+            # Default: return the full cached/parquet-backed DataFrame
+            return await self.load_dataset_as_polars(dataset_id, user_id)
+        except Exception as e:
+            logger.warning(f"ensure_dataframe_for_agent failed for {dataset_id}: {e}")
+            return None
+
+    async def build_compact_schema_context(
+        self, dataset_id: str, user_id: str, sample_rows: int = 3
+    ) -> str:
+        """Build a compact schema + sample context string for planner prompts.
+
+        Uses metadata and a small sample (if available) to produce a short
+        string suitable for inclusion in LLM prompts.
+        """
+        try:
+            metadata = await self.get_dataset_analytics(dataset_id, user_id)
+            if metadata is None:
+                # Fallback to raw metadata
+                ds = await self.get_dataset(dataset_id, user_id)
+                file_path = ds.get("file_path")
+                metadata = await dataset_loader.get_dataset_metadata(file_path)
+
+            # Try to obtain a tiny sample for context
+            ds = await self.get_dataset(dataset_id, user_id)
+            file_path = ds.get("file_path")
+            sample_df = None
+            try:
+                sample_df = await dataset_loader.load_dataset_sample(file_path, max_rows=sample_rows)
+            except Exception:
+                sample_df = None
+
+            return dataset_loader.create_context_string(metadata or {}, sample_df)
+        except Exception as e:
+            logger.warning(f"build_compact_schema_context failed for {dataset_id}: {e}")
+            return "Schema not available"
 
 
 enhanced_dataset_service = EnhancedDatasetService()

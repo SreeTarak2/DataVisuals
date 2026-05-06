@@ -1,0 +1,28 @@
+{
+  "template_id": "entity_concentration_v1",
+  "primitive": "entity_concentration",
+  "category": "risk",
+  "title_template": "Top {top_n} {entity_col_label} Concentration",
+  "headline_template": "{concentration_pct} of {measure_col_label} from top {top_n} {entity_col_label_plural}",
+  "delta_narrative_template": "This is {delta_direction} from {comparison_pct} in the prior period",
+  "key_insight_phrases": {
+    "high_concentration": "High concentration of {measure_col_label} in a small number of {entity_col_label_plural} increases business risk",
+    "moderate_concentration": "{measure_col_label} is reasonably concentrated among key {entity_col_label_plural}",
+    "low_concentration": "{measure_col_label} is well-distributed across {entity_col_label_plural}"
+  },
+  "direction_mapping": {
+    "up": "up",
+    "down": "down",
+    "stable": "stable"
+  },
+  "concentration_thresholds": {
+    "high": 0.5,
+    "moderate": 0.3,
+    "low": 0.0
+  },
+  "caveats": {
+    "low_coverage_adequate": "Data coverage is below optimal ({coverage_pct}) — estimates may be incomplete",
+    "denominator_unstable": "The denominator showed variability (CoV={cov}) — use caution with rate-based comparisons",
+    "low_row_count": "Limited data volume ({row_count} rows) — results may be unreliable"
+  }
+}

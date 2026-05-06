@@ -17,7 +17,8 @@ from db.schemas import DrillDownRequest
 from db.database import get_database
 from services.auth_service import get_current_user
 from services.datasets.enhanced_dataset_service import enhanced_dataset_service
-from workers.tasks import celery_app, process_dataset_task
+from workers import celery_app
+from workers.pipeline.dataset import process_dataset_task
 from core.rate_limiter import limiter, RateLimits
 from core.config import settings
 
@@ -43,20 +44,21 @@ async def upload_dataset(
 
 
 @router.get("")
+@router.get("/")
 @limiter.limit(RateLimits.DATASET_LIST)
 async def list_datasets(
     request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    search: str = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
-    return await enhanced_dataset_service.list_datasets(
+    skip = (page - 1) * limit
+    datasets = await enhanced_dataset_service.get_user_datasets(
         user_id=current_user["id"],
-        page=page,
+        skip=skip,
         limit=limit,
-        search=search,
     )
+    return {"datasets": datasets}
 
 
 @router.get("/{dataset_id}")
@@ -141,6 +143,64 @@ async def get_dataset_columns(
         )
 
 
+@router.get("/{dataset_id}/data")
+@limiter.limit(RateLimits.DATASET_GET)
+async def get_dataset_data(
+    request: Request,
+    dataset_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=5000),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return paginated dataset rows for dashboard and preview consumers."""
+    result = await enhanced_dataset_service.get_dataset_data(
+        dataset_id=dataset_id,
+        user_id=current_user["id"],
+        page=page,
+        page_size=page_size,
+    )
+    return {
+        "data": result.get("data", []),
+        "total_count": result.get("total_rows", 0),
+        "total_rows": result.get("total_rows", 0),
+        "current_page": result.get("current_page", page),
+        "page_size": result.get("page_size", page_size),
+        "has_more": result.get("has_more", False),
+    }
+
+
+@router.get("/{dataset_id}/preview")
+@limiter.limit(RateLimits.DATASET_GET)
+async def get_dataset_preview(
+    request: Request,
+    dataset_id: str,
+    limit: int = Query(200, ge=1, le=2000),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return a small row sample and inferred columns for fast table preview."""
+    result = await enhanced_dataset_service.get_dataset_data(
+        dataset_id=dataset_id,
+        user_id=current_user["id"],
+        page=1,
+        page_size=limit,
+    )
+
+    rows = result.get("data", [])
+    columns = list(rows[0].keys()) if rows else []
+
+    if not columns:
+        dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+        column_meta = dataset.get("metadata", {}).get("column_metadata", [])
+        columns = [c.get("name") for c in column_meta if c.get("name")]
+
+    return {
+        "rows": rows,
+        "columns": columns,
+        "total_rows": result.get("total_rows", len(rows)),
+        "limit": limit,
+    }
+
+
 @router.post("/{dataset_id}/reprocess")
 @limiter.limit(RateLimits.DATASET_REPROCESS)
 async def reprocess_dataset(
@@ -192,6 +252,104 @@ async def reprocess_dataset(
         raise HTTPException(
             status_code=500, detail="Failed to start dataset reprocessing."
         )
+
+
+@router.get("/{dataset_id}/kpis")
+@limiter.limit(RateLimits.DATASET_GET)
+async def get_dataset_kpis(
+    request: Request,
+    dataset_id: str,
+    refresh: bool = Query(False, description="Force regeneration even if cached"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Return intelligent, data-science-grade KPI cards for a dataset.
+
+    Priority:
+      1. Cache hit  — pre-computed during upload, served instantly
+      2. On-demand  — generate now from dataset metadata + Polars DataFrame
+    """
+    from services.cache.dashboard_cache_service import dashboard_cache_service
+
+    user_id = current_user["id"]
+
+    # ── 1. Cache check ────────────────────────────────────────────────────────
+    if not refresh:
+        try:
+            cached = await dashboard_cache_service.get_cached_kpis(dataset_id, user_id)
+            if cached:
+                kpis = cached if isinstance(cached, list) else cached.get("kpis", [])
+                if kpis:
+                    return {"kpis": kpis, "source": "cache", "dataset_id": dataset_id}
+        except Exception as e:
+            logger.warning(f"[KPI] Cache read failed for {dataset_id}: {e}")
+
+    # ── 2. Fetch dataset metadata ─────────────────────────────────────────────
+    dataset = await enhanced_dataset_service.get_dataset(dataset_id, user_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    if not dataset.get("is_processed"):
+        raise HTTPException(status_code=202, detail="Dataset still processing — try again shortly")
+
+    meta = dataset.get("metadata", {})
+
+    # ── 3. Load DataFrame from file ───────────────────────────────────────────
+    try:
+        import polars as pl
+        file_path = dataset.get("file_path", "")
+        if not file_path:
+            raise HTTPException(status_code=422, detail="Dataset file path not found")
+
+        ext = file_path.rsplit(".", 1)[-1].lower()
+        if ext == "csv":
+            df = pl.read_csv(file_path, infer_schema_length=5000, ignore_errors=True)
+        elif ext in ("xlsx", "xls"):
+            df = pl.read_excel(file_path)
+        elif ext == "parquet":
+            df = pl.read_parquet(file_path)
+        elif ext == "json":
+            df = pl.read_json(file_path)
+        else:
+            raise HTTPException(status_code=422, detail=f"Unsupported file format: {ext}")
+
+        if df.is_empty():
+            raise HTTPException(status_code=422, detail="Dataset is empty")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[KPI] Failed to load DataFrame for {dataset_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load dataset for KPI computation")
+
+    # ── 4. Generate KPIs ──────────────────────────────────────────────────────
+    try:
+        from services.ai.intelligent_kpi_generator import intelligent_kpi_generator
+
+        domain = (
+            meta.get("domain_intelligence", {}).get("domain")
+            or dataset.get("domain", "general")
+        )
+
+        kpis = await intelligent_kpi_generator.generate_intelligent_kpis(
+            df=df,
+            domain=domain,
+            max_kpis=4,
+            dataset_metadata=meta,
+        )
+
+        # Persist to cache so subsequent requests are instant
+        if kpis:
+            try:
+                await dashboard_cache_service.cache_kpis(dataset_id, user_id, kpis)
+            except Exception as cache_err:
+                logger.warning(f"[KPI] Cache write failed: {cache_err}")
+
+        return {"kpis": kpis, "source": "generated", "dataset_id": dataset_id}
+
+    except Exception as e:
+        logger.error(f"[KPI] Generation failed for {dataset_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="KPI generation failed")
 
 
 @router.get("/task/{task_id}/status")

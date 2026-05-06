@@ -9,6 +9,12 @@ from fastapi import HTTPException
 
 from core.config import settings
 from core.prompt_templates import CONVERSATIONAL_SYSTEM_PROMPT, COMPLEXITY_HINTS
+from core.token_budget import count_tokens, MODEL_CONTEXT_WINDOWS, COMPLETION_RESERVES
+from services.prompts.token_budget import (
+    safe_inject_context,
+    check_prompt_fits_model,
+    PromptBudget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +25,15 @@ INTERACTIVE_ROLES = frozenset(
         "conversational",
         "chat_engine",
         "chat_streaming",
+        "simple_query",
+        "complex_analysis",
+        "kpi_suggestion",
+        "insight_generation",
+        "narrative_insights",
         "narrative_story",
         "sql_generator",
+        "chart_recommendation",
+        "dashboard_design",
     }
 )
 
@@ -113,6 +126,7 @@ class LLMRouter:
         include_reasoning: bool = False,
         reasoning_effort: Optional[str] = None,
         archetype: str = "analyst",
+        is_interactive: Optional[bool] = None,
     ) -> Any:
         """
         Main entry point for LLM calls with intelligent model routing.
@@ -161,6 +175,7 @@ class LLMRouter:
                     include_reasoning=include_reasoning,
                     reasoning_effort=reasoning_effort,
                     archetype=archetype,
+                    is_interactive=is_interactive,
                 )
             except Exception as e:
                 error_str = str(e)
@@ -199,6 +214,8 @@ class LLMRouter:
                 # Try role-based fallback chain for transient errors.
                 fallback_models = self._get_fallback_models(model_role, specific_model)
                 for fallback_model_key in fallback_models:
+                    if not self._prompt_fits_model(prompt, fallback_model_key, model_role):
+                        continue
                     fallback_config = self.openrouter_models[fallback_model_key]
                     logger.warning(
                         f"Trying fallback model: {fallback_config['name']}..."
@@ -218,6 +235,7 @@ class LLMRouter:
                             include_reasoning=include_reasoning,
                             reasoning_effort=reasoning_effort,
                             archetype=archetype,
+                            is_interactive=is_interactive,
                         )
                     except Exception as fallback_error:
                         logger.error(
@@ -288,6 +306,44 @@ class LLMRouter:
             if model_key in self.openrouter_models and model_key != current_model_key
         ]
 
+    def resolve_conversational_role(self, query_complexity: str) -> str:
+        """Map query complexity to the conversational model role."""
+        return {
+            "simple": "simple_query",
+            "moderate": "conversational",
+            "complex": "complex_analysis",
+        }.get(query_complexity, "conversational")
+
+    def _prompt_fits_model(self, prompt: str, model_key: str, model_role: str) -> bool:
+        """
+        Check if a prompt fits within a model's context window with completion reserve.
+        
+        This is the guard in: measure → guard → route.
+        Models that can't fit the prompt are skipped to avoid silent truncation.
+        """
+        model_config = self.openrouter_models.get(model_key, {})
+        model_limit = int(
+            model_config.get("context_window")
+            or MODEL_CONTEXT_WINDOWS.get(model_key, 32_000)
+        )
+        reserve = COMPLETION_RESERVES.get(model_role, 1_000)
+        prompt_tokens = count_tokens(prompt)
+        remaining = model_limit - prompt_tokens
+        fits = prompt_tokens + reserve <= model_limit
+
+        if fits:
+            logger.debug(
+                f"[router] Model '{model_key}' fits role '{model_role}': "
+                f"{prompt_tokens} + {reserve} reserve = {prompt_tokens + reserve} / {model_limit}"
+            )
+        else:
+            logger.warning(
+                f"[router] Skipping '{model_key}' for '{model_role}': "
+                f"prompt {prompt_tokens}T + reserve {reserve}T = {prompt_tokens + reserve}T "
+                f"exceeds window {model_limit}T. Remaining: {remaining}T"
+            )
+        return fits
+
     # -----------------------------------------------------------
     # CONCURRENCY GATE
     # -----------------------------------------------------------
@@ -336,6 +392,7 @@ class LLMRouter:
         include_reasoning: bool = False,
         reasoning_effort: Optional[str] = None,
         archetype: str = "analyst",
+        is_interactive: Optional[bool] = None,
     ) -> Any:
         """
         Call OpenRouter API with intelligent model selection.
@@ -432,8 +489,12 @@ class LLMRouter:
 
         # Determine priority lane: conversational/chat calls are always interactive.
         # Background dashboard generation tasks use the background lane.
-        is_interactive = is_conversational or model_role in INTERACTIVE_ROLES
-        lane_label = "interactive" if is_interactive else "background"
+        interactive_call = (
+            is_interactive
+            if is_interactive is not None
+            else (is_conversational or model_role in INTERACTIVE_ROLES)
+        )
+        lane_label = "interactive" if interactive_call else "background"
         logger.debug(f"LLM call routed to [{lane_label}] lane: {model_role}")
 
         # Retry logic with exponential backoff for rate limiting
@@ -441,7 +502,7 @@ class LLMRouter:
 
         for attempt in range(max_retries):
             # Acquire a concurrency slot before each HTTP request
-            await self._acquire_slot(model_name, model_role, is_interactive)
+            await self._acquire_slot(model_name, model_role, interactive_call)
             try:
                 resp = await self.http.post(
                     settings.OPENROUTER_BASE_URL, headers=headers, json=payload
@@ -462,7 +523,7 @@ class LLMRouter:
                         continue
                 raise  # Re-raise if not rate limit or last attempt
             finally:
-                self._release_slot(is_interactive)
+                self._release_slot(interactive_call)
         else:
             # If we exhausted all retries
             if last_error:
@@ -546,6 +607,7 @@ class LLMRouter:
         is_conversational: bool = True,
         query_complexity: str = "moderate",
         archetype: str = "analyst",
+        is_interactive: Optional[bool] = None,
     ):
         """
         Stream tokens from OpenRouter API as an async generator.
@@ -598,12 +660,16 @@ class LLMRouter:
             f"Starting streaming call to OpenRouter with {model_name} (role: {model_role})"
         )
 
-        is_interactive = is_conversational or model_role in INTERACTIVE_ROLES
+        interactive_call = (
+            is_interactive
+            if is_interactive is not None
+            else (is_conversational or model_role in INTERACTIVE_ROLES)
+        )
 
         full_response = ""
 
         # Acquire concurrency slot for the entire stream duration
-        await self._acquire_slot(model_name, model_role, is_interactive)
+        await self._acquire_slot(model_name, model_role, interactive_call)
         try:
             async with self.http.stream(
                 "POST",
@@ -660,7 +726,7 @@ class LLMRouter:
             logger.error(f"Streaming error: {e}", exc_info=True)
             yield {"type": "error", "content": str(e)}
         finally:
-            self._release_slot(is_interactive)
+            self._release_slot(interactive_call)
 
     def _build_system_prompt(
         self,

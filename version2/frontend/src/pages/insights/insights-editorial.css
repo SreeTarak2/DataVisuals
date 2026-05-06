@@ -185,23 +185,6 @@
   padding: 1.5rem;
 }
 
-/* ── Recharts Tooltip Dark Override ── */
-.insights-editorial-page .recharts-default-tooltip {
-  background: var(--surface-2) !important;
-  border: 1px solid var(--border-vis) !important;
-  border-radius: 12px !important;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
-}
-
-.insights-editorial-page .recharts-tooltip-label {
-  color: var(--ink) !important;
-  font-weight: 600 !important;
-}
-
-.insights-editorial-page .recharts-tooltip-item {
-  color: var(--ink-soft) !important;
-}
-
 /* ── Scrollbar ── */
 .insights-editorial-page::-webkit-scrollbar,
 .insights-editorial-page *::-webkit-scrollbar {
