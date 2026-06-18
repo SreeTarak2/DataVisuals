@@ -42,7 +42,6 @@ instance/
 .migrations/
 
 # IDE configs
-.vscode/
 .idea/
 *.swp
 *~
@@ -83,9 +82,9 @@ jest-results.json
 *.DS_Store
 Thumbs.db
 
-.opencode
-.claude
-.vscode
+.opencode/
+.claude/
+.vscode/
 .ruff_cache
 
 # -------------------
@@ -95,4 +94,9 @@ version2/backend/benchmark/datasets/
 version2/backend/benchmark/results/
 version2/backend/benchmark/relationships/traps/
 version2/backend/benchmark/relationships/results.json
+
+# -------------------
+# Agent skills
+# -------------------
+skills/
 
