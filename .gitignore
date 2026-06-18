@@ -88,3 +88,6 @@ Thumbs.db
 .vscode
 .ruff_cache
 
+# Benchmarks
+benchmarks/
+
