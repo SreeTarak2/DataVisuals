@@ -88,6 +88,11 @@ Thumbs.db
 .vscode
 .ruff_cache
 
-# Benchmarks
-benchmarks/
+# -------------------
+# Benchmark data (generated / large test datasets)
+# -------------------
+version2/backend/benchmark/datasets/
+version2/backend/benchmark/results/
+version2/backend/benchmark/relationships/traps/
+version2/backend/benchmark/relationships/results.json
 
