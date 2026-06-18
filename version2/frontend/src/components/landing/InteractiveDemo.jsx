@@ -31,7 +31,7 @@ const InteractiveDemo = () => {
                         transition={{ duration: 0.5, delay: 0.1 }}
                         className="text-lg md:text-xl text-neutral-400 max-w-2xl mx-auto"
                     >
-                        Experience the power of AI-driven analytics firsthand. Click around to see how DataSage instantly visualizes data.
+                        Experience the power of AI-driven analytics firsthand. Click around to see how Signal instantly visualizes data.
                     </motion.p>
                 </div>
 

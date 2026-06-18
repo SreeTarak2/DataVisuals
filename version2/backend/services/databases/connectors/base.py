@@ -18,14 +18,16 @@ class SecurityValidator:
     """Security validation utilities for database operations"""
 
     # SQL injection patterns to detect
+    # NOTE: These patterns match against the *entire* query string to reduce
+    # false positives on legitimate column/table names.
     SQL_INJECTION_PATTERNS = [
-        r'(\b(union|select|insert|update|delete|drop|truncate|alter|create|exec|execute)\b.*\b(from|into|table|database)\b)',
-        r'(--|\#|\/\*)',  # SQL comments
-        r'(\b(or|and)\b\s+\d+\s*=\s*\d+)',  # OR 1=1 style attacks
-        r'(\b(or|and)\b\s+\'[^\']*\'\s*=\s*\'[^\']*\')',  # OR 'a'='a' style attacks
-        r'(;.*\b(drop|truncate|delete|update)\b)',  # Multiple statements
-        r'(\bwaitfor\b|\bsleep\b|\bbenchmark\b)',  # Time-based attacks
-        r'(\bload_file\b|\binto\s+outfile\b|\binto\s+dumpfile\b)',  # File operations
+        r"(?:^|\s)(?:union|insert|update|delete|drop\s+table|truncate|alter|create|exec|execute)\s+(?:all\s+|distinct\s+)?(?:select|into|table|database|procedure|function)\b",
+        r"(--|\#|/\*)",  # SQL comments (commenting out rest of query)
+        r"(?:^|\s)(?:or|and)\s+\d+\s*=\s*\d+(?:\s*--|\s*#|\s*/\*|\s*$)",  # OR 1=1 style attacks
+        r"(?:^|\s)(?:or|and)\s+'[^']*'\s*=\s*'[^']*'(?:\s*--|\s*#|\s*/\*|\s*$)",  # OR 'a'='a'
+        r";\s*(?:drop|truncate|delete|update|insert|create|alter)\s",  # Multiple statements
+        r"(?:^|[^a-zA-Z])waitfor\s+(?:delay|time)\b|(?:^|[^a-zA-Z])sleep\s*\(|benchmark\s*\()",  # Time-based attacks
+        r"(?:load_file|into\s+(?:out|dump)file)\b",  # File operations
     ]
 
     # Maximum lengths for identifiers
@@ -43,7 +45,7 @@ class SecurityValidator:
         max_len = {
             "table": cls.MAX_TABLE_NAME_LENGTH,
             "column": cls.MAX_COLUMN_NAME_LENGTH,
-            "database": cls.MAX_DATABASE_NAME_LENGTH
+            "database": cls.MAX_DATABASE_NAME_LENGTH,
         }.get(identifier_type, cls.MAX_TABLE_NAME_LENGTH)
 
         if len(name) > max_len:
@@ -51,12 +53,12 @@ class SecurityValidator:
             return False
 
         # Only allow alphanumeric, underscore, and dot (for qualified names)
-        if not re.match(r'^[a-zA-Z0-9_.]+$', name):
+        if not re.match(r"^[a-zA-Z0-9_.]+$", name):
             logger.warning(f"Identifier '{name}' contains invalid characters")
             return False
 
         # Prevent directory traversal
-        if '..' in name or '/' in name or '\\' in name:
+        if ".." in name or "/" in name or "\\" in name:
             logger.warning(f"Identifier '{name}' contains path traversal characters")
             return False
 
@@ -78,7 +80,9 @@ class SecurityValidator:
         return False
 
     @classmethod
-    def sanitize_limit(cls, limit: Optional[int], default: int = 1000, max_limit: int = 10000) -> int:
+    def sanitize_limit(
+        cls, limit: Optional[int], default: int = 1000, max_limit: int = 1000000
+    ) -> int:
         """Sanitize LIMIT parameter to prevent DoS"""
         if limit is None:
             return default
@@ -88,7 +92,7 @@ class SecurityValidator:
             if limit < 0:
                 return default
             if limit > max_limit:
-                logger.warning(f"Limit {limit} exceeds maximum, capping at {max_limit}")
+                logger.warning(f"Limit {limit} exceeds configured maximum, capping at {max_limit}")
                 return max_limit
             return limit
         except (ValueError, TypeError):
@@ -99,7 +103,7 @@ class SecurityValidator:
     def validate_query_type(cls, query: str, allowed_types: List[str] = None) -> bool:
         """Validate that query is of an allowed type (SELECT only by default)"""
         if allowed_types is None:
-            allowed_types = ['SELECT']
+            allowed_types = ["SELECT"]
 
         try:
             if not query:
@@ -130,7 +134,7 @@ class SecurityValidator:
         errors: List[str] = []
 
         db_type = str(config.get("db_type", "")).lower().strip()
-        if db_type not in {"postgresql", "mysql", "mongodb"}:
+        if db_type not in {"postgresql", "mysql", "mongodb", "supabase"}:
             errors.append(f"Unsupported db_type: {db_type or 'missing'}")
 
         host = config.get("host")
@@ -167,15 +171,21 @@ class AuditLogger:
         self.logger = logging.getLogger(logger_name)
         self.logger.setLevel(logging.INFO)
 
-    def log_operation(self, operation: str, details: Dict[str, Any], success: bool,
-                     duration_ms: float = 0.0, error: Optional[str] = None):
+    def log_operation(
+        self,
+        operation: str,
+        details: Dict[str, Any],
+        success: bool,
+        duration_ms: float = 0.0,
+        error: Optional[str] = None,
+    ):
         """Log a database operation for audit purposes"""
         log_entry = {
             "timestamp": datetime.utcnow().isoformat(),
             "operation": operation,
             "success": success,
             "duration_ms": duration_ms,
-            "details": {k: v for k, v in details.items() if k != 'password'},  # Redact passwords
+            "details": {k: v for k, v in details.items() if k != "password"},  # Redact passwords
         }
 
         if error:
@@ -198,32 +208,33 @@ class DatabaseConnector(ABC):
             config: Database connection configuration
                    (host, port, database, username, password, etc.)
         """
-        self.config = self._validate_config(config)
-        self.connection = None
         self.security_validator = SecurityValidator()
         self.audit_logger = AuditLogger()
-        self._connection_timeout = config.get('timeout', 30)
-        self._max_retries = config.get('max_retries', 3)
-        self._pool_size = config.get('pool_size', 5)
+        self.config = self._validate_config(config)
+        self.connection = None
+        self._connection_timeout = config.get("timeout", 30)
+        self._max_retries = config.get("max_retries", 3)
+        self._pool_size = config.get("pool_size", 5)
+        self._retry_delay_seconds = config.get("retry_delay", 2.0)
         self._connected_at: Optional[datetime] = None
 
     def _validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and sanitize configuration"""
-        required_fields = ['host', 'database']
+        required_fields = ["host", "database"]
 
         for field in required_fields:
             if field not in config:
                 raise ValueError(f"Missing required configuration field: {field}")
 
         # Validate host (prevent SSRF)
-        host = config.get('host', '')
+        host = config.get("host", "")
         if not self.security_validator.validate_identifier(host, "database"):
             raise ValueError(f"Invalid host format: {host}")
 
-        # Prevent localhost/internal network connections unless explicitly allowed
-        if config.get('allow_internal', False) is not True:
-            if host in ['localhost', '127.0.0.1', '::1']:
-                logger.warning("Connection to localhost requested. Ensure this is intentional.")
+        # Log a warning for localhost connections (the API always passes
+        # allow_internal=True since the backend runs locally alongside databases)
+        if host in ["localhost", "127.0.0.1", "::1"]:
+            logger.info("Connection to localhost detected. This is expected for local development.")
 
         return config
 
@@ -265,6 +276,27 @@ class DatabaseConnector(ABC):
 
         Returns:
             List of table/collection names
+        """
+        pass
+
+    @abstractmethod
+    async def get_foreign_keys(self) -> List[Dict[str, Any]]:
+        """
+        Query the database for declared foreign key constraints.
+
+        For PostgreSQL and MySQL, this queries information_schema for
+        officially declared FOREIGN KEY constraints.
+        For MongoDB, this returns an empty list (no native FK constraints).
+
+        Returns a list of dicts with:
+            constraint_name:  Name of the FK constraint
+            table_name:       Source table containing the FK
+            column_name:      FK column in the source table
+            referenced_table: Target table being referenced
+            referenced_column:PK column in the target table
+
+        Returns:
+            List of foreign key constraint dicts
         """
         pass
 
@@ -335,8 +367,14 @@ class DatabaseConnector(ABC):
         """Log start of operation and return start time"""
         return time.time()
 
-    def _log_operation_end(self, operation: str, params: Dict[str, Any],
-                          start_time: float, success: bool, error: Optional[str] = None):
+    def _log_operation_end(
+        self,
+        operation: str,
+        params: Dict[str, Any],
+        start_time: float,
+        success: bool,
+        error: Optional[str] = None,
+    ):
         """Log end of operation with duration"""
         duration_ms = (time.time() - start_time) * 1000
         self.audit_logger.log_operation(
@@ -344,5 +382,5 @@ class DatabaseConnector(ABC):
             details=params,
             success=success,
             duration_ms=duration_ms,
-            error=error
+            error=error,
         )

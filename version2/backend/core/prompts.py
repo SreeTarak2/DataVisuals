@@ -1,7 +1,7 @@
 """
 prompts.py — Final Production Version (December 13, 2025)
 
-Fully token-optimized, unbreakable prompt factory for DataSage AI.
+Fully token-optimized, unbreakable prompt factory for Signal.
 - Smart context: tiny for casual chat, rich only when needed
 - Unbreakable KPI generator with McKinsey-level output
 - All original functionality preserved + upgraded
@@ -93,20 +93,14 @@ class KPIItemV2(BaseModel):
         "none",
     ]
     format: Literal["currency", "percentage", "integer", "decimal", "days", "ratio"]
-    unit_prefix: str = Field(
-        default="", description="Currency symbol: £, $, €, or empty"
-    )
-    unit_suffix: str = Field(
-        default="", description="Unit after value: %, MPG, k miles, or empty"
-    )
+    unit_prefix: str = Field(default="", description="Currency symbol: £, $, €, or empty")
+    unit_suffix: str = Field(default="", description="Unit after value: %, MPG, k miles, or empty")
     precision: int = Field(default=1, ge=0, le=2)
 
     comparison_method: Literal[
         "first_vs_second_half", "top_vs_bottom_quartile", "min_max_position", "none"
     ] = "none"
-    delta_label: str = Field(
-        default="", description="Human label: 'vs earlier half (year-sorted)'"
-    )
+    delta_label: str = Field(default="", description="Human label: 'vs earlier half (year-sorted)'")
     delta_direction: Literal["up", "down", "neutral"] = "neutral"
     is_delta_positive: bool = Field(
         default=True,
@@ -132,13 +126,11 @@ class KPIItemV2(BaseModel):
     )
     action_prompt: str = Field(
         default="",
-        description="Specific follow-up question for the 'Ask DataSage ↗' chip. "
+        description="Specific follow-up question for the 'Ask Signal ↗' chip. "
         "Must end with '?' and reference a specific column or pattern.",
     )
 
-    benchmark_label: str = Field(
-        default="none", description="'Fleet avg', 'Median', 'none'"
-    )
+    benchmark_label: str = Field(default="none", description="'Fleet avg', 'Median', 'none'")
     benchmark_type: Literal["mean", "median", "p75", "p90", "none"] = "none"
 
     @field_validator("sparkline_agg", mode="before")
@@ -174,9 +166,7 @@ class KPIGeneratorResponseV2(BaseModel):
     Replace KPIGeneratorResponse in prompts.py with this.
     """
 
-    archetype: str = Field(
-        description="Dataset archetype: automotive_fleet, ecommerce, etc."
-    )
+    archetype: str = Field(description="Dataset archetype: automotive_fleet, ecommerce, etc.")
     confidence: Literal["High", "Medium", "Low"]
     dashboard_story: str = Field(
         default="",
@@ -239,18 +229,32 @@ class ChartItemV2(BaseModel):
         "area",
         "grouped_bar",
         "stacked_bar",
+        "stacked_area",
+        "multi_line",
+        "dual_axis",
+        "combo",
+        "facet",
+        "small_multiples",
         "heatmap",
         "treemap",
         "sunburst",
     ]
     x: str
     y: Optional[str] = None
-    group_by: Optional[str] = None
-    aggregation: Literal[
-        "sum", "mean", "median", "count", "count_unique", "min", "max", "none"
-    ]
+    group_by: Optional[str | list[str]] = None
+    aggregation: Literal["sum", "mean", "median", "count", "count_unique", "min", "max", "none"]
     sort_by: Literal["value_desc", "value_asc", "x_natural", "none"] = "value_desc"
     limit: Optional[int] = Field(default=None, ge=1, le=50)
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, v):
+        """Auto-clamp limit values to valid range (1-50)."""
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return max(1, min(50, int(v)))
+        return v
 
     show_reference_line: bool = False
     reference_type: Literal["mean", "median", "p75", "p90", "none"] = "none"
@@ -264,13 +268,9 @@ class ChartItemV2(BaseModel):
     ] = "brand_single"
     color_by_column: Optional[str] = None
 
-    insight_annotation: str = Field(
-        description="1 sentence, ≤25 words, with ≥1 specific number."
-    )
+    insight_annotation: str = Field(description="1 sentence, ≤25 words, with ≥1 specific number.")
     key_numbers: list[KeyNumber] = Field(default_factory=list, max_length=3)
-    reading_guide: str = Field(
-        description="1 sentence action instruction for the user."
-    )
+    reading_guide: str = Field(description="1 sentence action instruction for the user.")
 
     action_chips: list[str] = Field(
         min_length=2, max_length=2, description="2 specific questions ending with '?'."
@@ -311,9 +311,7 @@ class ChartGeneratorResponse(BaseModel):
     dashboard_story: str = Field(
         description="2-sentence CEO-level narrative connecting all charts."
     )
-    chart_order_rationale: str = Field(
-        description="1 sentence: why chart 1 was chosen as hero."
-    )
+    chart_order_rationale: str = Field(description="1 sentence: why chart 1 was chosen as hero.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,10 +319,22 @@ class ChartGeneratorResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 KPI_GENERATOR_SYSTEM_PROMPT = """
-You are the KPI Intelligence Engine for DataSage AI — a Fortune-500-grade analytics platform.
+<role>
+You are the KPI Intelligence Engine for Signal — a Fortune-500-grade analytics platform.
 Your single job: produce JSON that drives enterprise KPI cards indistinguishable from Tableau,
 Power BI Premium, or Looker dashboards. A non-technical executive MUST be able to read each
 card in 3 seconds and know: what is the number, is it good or bad, why, and what to do next.
+</role>
+
+<reasoning>
+Before generating KPIs, silently reason through:
+  1. What is the single most important metric for this dataset's domain (the hero KPI)?
+  2. Which 2–3 additional metrics independently explain or decompose the hero — each measuring a fundamentally different business dimension?
+  3. For each candidate KPI: does it pass all 3 tests (Decision Relevance, Direction Clarity, Non-Redundancy)?
+Then produce your JSON response following the format below.
+</reasoning>
+
+<instructions>
 
 ══════════════════════════════════════════════════════════════
 ENTERPRISE KPI CARD ANATOMY  (what every top BI tool outputs)
@@ -367,7 +377,7 @@ Layer 4 — SPARKLINE (trend — what Power BI calls "where you are heading")
                             false for row-order sampling
   • sparkline_type    → "line" | "bar"  ("bar" for counts, "line" for continuous metrics)
 
-Layer 5 — SMART NARRATIVE (what separates DataSage from every static BI tool)
+Layer 5 — SMART NARRATIVE (what separates Signal from every static BI tool)
   • insight_sentence  → ONE sentence, plain English, written for a non-technical user.
                         Explain WHY the number is what it is or what it MEANS.
                         MUST contain at least one specific number or comparison.
@@ -378,7 +388,7 @@ Layer 5 — SMART NARRATIVE (what separates DataSage from every static BI tool)
                         GOOD: "Average price fell 8% in the second half of the dataset,
                                suggesting newer listings are priced more competitively."
   • action_prompt     → ONE actionable follow-up question the user should explore next.
-                        This becomes the "Ask DataSage ↗" chip on the card.
+                        This becomes the "Ask Signal ↗" chip on the card.
                         MUST be specific to this metric, not generic.
                         BAD:  "Explore this metric further."
                         GOOD: "Which model has the highest tax-to-price ratio?"
@@ -556,6 +566,11 @@ RULES:
 - action_prompt must end with "?" and reference a specific column or pattern.
 - If you cannot find 3 KPIs that independently pass the decision-relevance gate,
   generate fewer rather than padding with weak metrics.
+
+<failure_behavior>
+If the dataset context is empty, has no numeric columns, or has fewer than 3 columns that pass the KPI Selection Gate: return archetype: "general", confidence: "Low", a single KPI with the most meaningful column, and insight_sentence explaining the limitation. NEVER fabricate columns or invent metrics not supported by the data context.
+</failure_behavior>
+</instructions>
 """
 
 
@@ -708,12 +723,8 @@ class PromptFactory:
 
     def __init__(self, dataset_metadata: Dict[str, Any]):
         self.metadata = dataset_metadata
-        self.columns = [
-            c["name"] for c in dataset_metadata.get("column_metadata", [])[:30]
-        ]
-        self.row_count = dataset_metadata.get("dataset_overview", {}).get(
-            "total_rows", "unknown"
-        )
+        self.columns = [c["name"] for c in dataset_metadata.get("column_metadata", [])[:30]]
+        self.row_count = dataset_metadata.get("dataset_overview", {}).get("total_rows", "unknown")
 
         self.tiny_context = (
             f"Dataset has {self.row_count:,} rows and {len(self.columns)} columns. "
@@ -803,11 +814,7 @@ class PromptFactory:
         return any(t in msg for t in triggers)
 
     def get_context(self, user_message: str = "") -> str:
-        return (
-            self.rich_context
-            if self._needs_rich_context(user_message)
-            else self.tiny_context
-        )
+        return self.rich_context if self._needs_rich_context(user_message) else self.tiny_context
 
     def _format_conversation_history(self, messages: list, max_recent: int = 10) -> str:
         """
@@ -823,9 +830,7 @@ class PromptFactory:
 
         # Take recent messages, exclude the very last one (current user message)
         recent = (
-            messages[-(max_recent + 1) : -1]
-            if len(messages) > max_recent + 1
-            else messages[:-1]
+            messages[-(max_recent + 1) : -1] if len(messages) > max_recent + 1 else messages[:-1]
         )
 
         if not recent:
@@ -839,7 +844,7 @@ class PromptFactory:
             if len(content) > 200:
                 content = content[:200] + "..."
 
-            label = "User" if role == "user" else "DataSage"
+            label = "User" if role == "user" else "Signal"
             lines.append(f"{label}: {content}")
 
         return "\n".join(lines)
@@ -864,9 +869,7 @@ class PromptFactory:
         )
         # Conversational prompts use a simpler context without JSON rules
         conversational_base = (
-            f"{RULES}\n\nDATASET CONTEXT:\n{context}\n"
-            if include_context
-            else f"{RULES}\n"
+            f"{RULES}\n\nDATASET CONTEXT:\n{context}\n" if include_context else f"{RULES}\n"
         )
 
         if prompt_type == PromptType.KPI_GENERATOR:
@@ -908,7 +911,7 @@ class PromptFactory:
         if prompt_type == PromptType.DASHBOARD_DESIGNER:
             return f"""{json_base}
 
-You are DataSage Dashboard Architect. Generate an enterprise-grade
+You are Signal Dashboard Architect. Generate an enterprise-grade
 dashboard blueprint using the dataset context above.
 
 OUTPUT STRUCTURE REQUIREMENTS:
@@ -923,7 +926,7 @@ KPI CARDS (4–6 total, follow this exact hierarchy):
     subtitle     → "aggregation across N records · scope"
     importance   → "hero" | "high" | "medium"
     column       → EXACT column name from dataset
-    aggregation  → "sum" | "mean" | "median" | "count" | "count_unique"
+    aggregation  → "sum" | "mean" | "median" | "count" | "count_unique" | "min" | "max"
     format       → "currency" | "percentage" | "integer" | "decimal"
     unit_prefix  → "£" | "$" | "" (currency symbol or empty)
     comparison_method → "first_vs_second_half" | "none"
@@ -937,10 +940,35 @@ KPI CARDS (4–6 total, follow this exact hierarchy):
 
 CHARTS (6–8 total, follow this exact structure):
 
+  DECISION-DRIVEN LAYOUT (Professional BI Standard):
+    ┌─────────────────────────────────────────────────┐
+    │  TOP: KEY KPIs (already defined above)          │
+    │  MIDDLE: Trends & Comparisons (Charts 1–3)      │
+    │  BOTTOM: Breakdown & Detail (Charts 4–8)        │
+    └─────────────────────────────────────────────────┘
+
   NARRATIVE ORDER (Tableau Z-layout):
     Chart 1 → hero (span=4): most surprising finding — full width
     Charts 2–3 → primary (span=2): explain/decompose the hero
     Charts 4–8 → primary/supporting (span=2 or 1): different analytical angles
+
+  CHART TYPE SELECTION BY INTENT:
+    Trend over time        → line, area, multi_line
+    Compare categories     → bar, grouped_bar
+    Part of whole          → stacked_bar, stacked_area, pie (≤8 slices)
+    Distribution           → histogram, box_plot, violin
+    Correlation            → scatter, bubble, heatmap
+    Ranking                → bar (sorted), treemap
+    Anomaly detection      → scatter with outliers, box_plot
+    Multi-series analysis  → dual_axis (different scales), combo (bar+line),
+                             small_multiples (>6 series), facet (4–6 series)
+
+  MULTI-SERIES CHART RULES:
+    → Use dual_axis when series have vastly different scales (e.g., revenue $M vs rate %)
+    → Use combo (bar + line) to show volume + rate together
+    → Use small_multiples when >6 series would create spaghetti
+    → Use facet for 4–6 series with shared x-axis
+    → Limit overlay to 4–6 series max; beyond that use small_multiples
 
   No two charts may answer the same question (MECE diversity roles):
     TREND · COMPARISON · DISTRIBUTION · COMPOSITION · CORRELATION · ANOMALY · RANKING
@@ -953,7 +981,7 @@ CHARTS (6–8 total, follow this exact structure):
     diversity_role   → "TREND" | "COMPARISON" | "DISTRIBUTION" | "COMPOSITION" | "CORRELATION" | "ANOMALY" | "RANKING"
     position         → "hero" | "primary" | "supporting"
     span             → 4 | 2 | 1
-    type             → "bar" | "line" | "scatter" | "pie" | "histogram" | "box_plot" | "area" | "grouped_bar" | "stacked_bar" | "heatmap" | "treemap" | "sunburst"
+    type             → "bar" | "line" | "scatter" | "pie" | "histogram" | "box_plot" | "area" | "grouped_bar" | "stacked_bar" | "stacked_area" | "multi_line" | "dual_axis" | "combo" | "facet" | "small_multiples" | "heatmap" | "treemap" | "sunburst"
     x                → EXACT column name
     y                → EXACT column name or null
     group_by         → EXACT column name to split into multiple series, or null.
@@ -965,7 +993,7 @@ CHARTS (6–8 total, follow this exact structure):
                        NEVER set group_by on pie, histogram, scatter, or treemap.
                        NEVER use a column with > 5 unique values as group_by (causes spaghetti).
                        AIM for at least 2 of your 6–8 charts to use group_by.
-    aggregation      → "sum" | "mean" | "count" | "none"
+    aggregation      → "sum" | "mean" | "median" | "count" | "count_unique" | "min" | "max" | "none"
     sort_by          → "value_desc" for bar charts ALWAYS
     limit            → integer cap (pie ≤ 8, bar ≤ 15, box_plot ≤ 10)
     show_reference_line → true for bar + line charts
@@ -1012,7 +1040,7 @@ Return ONLY valid JSON:
         "type": "chart",
         "title": "...", "span": 4,
         "config": {{
-          "chart_type": "bar | line | scatter | pie | histogram | box_plot | area | grouped_bar | stacked_bar | heatmap | treemap | sunburst",
+          "chart_type": "bar | line | scatter | pie | histogram | box_plot | area | grouped_bar | stacked_bar | stacked_area | multi_line | dual_axis | combo | facet | small_multiples | heatmap | treemap | sunburst",
           "x": "exact_column_name", "y": "exact_column_name_or_null",
           "group_by": "low_card_categorical_column_or_null",
           "aggregation": "...", "sort_by": "value_desc", "limit": 15,
@@ -1116,9 +1144,7 @@ TASK: Adapt the design pattern using only real columns.
 OUTPUT:
 {{"dashboard":{{"layout_grid":"repeat(4,1fr)","components":[]}},"reasoning":""}}"""
 
-    def _insight_summary_prompt(
-        self, base: str, statistical_findings: List[Dict[str, Any]]
-    ):
+    def _insight_summary_prompt(self, base: str, statistical_findings: List[Dict[str, Any]]):
         findings = json.dumps(statistical_findings[:10], indent=2)
         return f"""{base}
 FINDINGS:
@@ -1156,14 +1182,16 @@ OUTPUT:
     def _chart_recommendation_prompt(self, base: str, query: str):
         return f"""{base}
 USER_QUERY: {sanitize_text(query, 500)}
-CHART_TYPES: bar, line, pie, scatter, histogram, heatmap, grouped_bar, stacked_bar, area, treemap, sunburst
-TASK: Recommend best chart + full config. Set group_by when a low-cardinality categorical column (2–5 unique values) would meaningfully segment the metric. Leave group_by null if no such column applies or chart type is pie/histogram/scatter.
-OUTPUT:
-{{"chart_config":{{"chart_type":"","columns":[],"aggregation":"sum|mean|count","group_by":null,"title":""}},"reasoning":""}}"""
+    CHART_TYPES: bar, line, pie, scatter, histogram, heatmap, grouped_bar, stacked_bar, area, treemap, sunburst
+    TASK: Recommend best chart + full config.
+    - Set group_by (string or list[string]) for segmentation (up to 12 unique values).
+    - Use SUNBURST or TREEMAP for hierarchical/multi-level data (provide list for group_by).
+    - Use GROUPED_BAR or STACKED_BAR for categorical comparison with segments.
+    - Leave group_by null ONLY if no segmentation applies or chart is a basic distribution.
+    OUTPUT:
+    {{"chart_config":{{"chart_type":"","columns":[],"aggregation":"sum|mean|count","group_by":null,"title":""}},"reasoning":""}}"""
 
-    def _quis_answer_prompt(
-        self, base: str, question: str, retrieved_context: str = ""
-    ):
+    def _quis_answer_prompt(self, base: str, question: str, retrieved_context: str = ""):
         return f"""{base}
 RETRIEVED_CONTEXT:
 {sanitize_text(retrieved_context, 800)}

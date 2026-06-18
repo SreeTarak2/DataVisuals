@@ -6,6 +6,7 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
 import os
+import time
 from db.database import get_database
 from db.schemas import User, UserCreate, UserLogin, Token, TokenData, LoginResponse
 import logging
@@ -15,6 +16,43 @@ logger = logging.getLogger(__name__)
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+class DatabaseUnavailableError(Exception):
+    """Raised when the database is unreachable or times out."""
+    pass
+
+
+class UserCache:
+    """Simple in-memory cache for user objects with TTL.
+
+    When MongoDB is temporarily unreachable, cached user data
+    allows the auth layer to continue validating users without
+    forcing a logout on every request.
+    """
+
+    def __init__(self, ttl_seconds: int = 30):
+        self._cache: dict[str, dict] = {}
+        self._ttl = ttl_seconds
+
+    def get(self, user_id: str) -> Optional[dict]:
+        entry = self._cache.get(user_id)
+        if entry and time.time() - entry["ts"] < self._ttl:
+            return entry["user"]
+        return None
+
+    def get_stale(self, user_id: str) -> Optional[dict]:
+        """Return user even if TTL expired — used as fallback when DB is down."""
+        entry = self._cache.get(user_id)
+        if entry:
+            return entry["user"]
+        return None
+
+    def set(self, user_id: str, user: dict):
+        self._cache[user_id] = {"user": user, "ts": time.time()}
+
+    def invalidate(self, user_id: str):
+        self._cache.pop(user_id, None)
 
 # JWT settings - SECURITY CRITICAL
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -38,6 +76,7 @@ security = HTTPBearer()
 class AuthService:
     def __init__(self):
         self.db = None
+        self._user_cache = UserCache(ttl_seconds=30)
 
     async def get_user_from_token(self, token: str) -> Optional[dict]:
         """Decode JWT token and return user - for WebSocket auth"""
@@ -49,8 +88,12 @@ class AuthService:
         except JWTError:
             return None
 
-        user = await self.get_user_by_id(user_id)
-        return user
+        try:
+            user = await self.get_user_by_id(user_id)
+            return user
+        except DatabaseUnavailableError:
+            logger.warning(f"DB unavailable for WebSocket auth (user {user_id}) — rejecting connection")
+            return None
 
     def _get_db(self):
         """Get database connection"""
@@ -110,20 +153,43 @@ class AuthService:
             return None
 
     async def get_user_by_id(self, user_id: str) -> Optional[dict]:
-        """Get user by ID"""
+        """Get user by ID — uses in-memory cache for resilience.
+
+        Returns cached user data when MongoDB is temporarily unreachable,
+        ensuring auth validation doesn't fail on transient DB issues.
+        Raises DatabaseUnavailableError when DB is down and cache is empty.
+        """
+        # 1. Check fresh cache first
+        cached = self._user_cache.get(user_id)
+        if cached:
+            return cached
+
+        # 2. Query the database
+        db = self._get_db()
         try:
-            db = self._get_db()
-            try:
-                object_id = ObjectId(user_id)
-            except Exception:
-                object_id = user_id
+            object_id = ObjectId(user_id)
+        except Exception:
+            object_id = user_id
+
+        try:
             user = await db.users.find_one({"_id": object_id})
-            if user:
-                user["id"] = str(user.pop("_id"))
-            return user
         except Exception as e:
             logger.error(f"Error getting user by ID: {e}")
-            return None
+            # DB is unreachable — try stale cache as fallback
+            stale = self._user_cache.get_stale(user_id)
+            if stale:
+                logger.warning(f"Returning stale cached user {user_id} — DB unavailable")
+                return stale
+            # No cache entry at all — propagate as a DB error
+            raise DatabaseUnavailableError(f"Database unavailable: {e}")
+
+        if user:
+            user["id"] = str(user.pop("_id"))
+            self._user_cache.set(user_id, user)
+        else:
+            # User legitimately not found — invalidate any stale cache entry
+            self._user_cache.invalidate(user_id)
+        return user
 
     def decode_token(self, token: str) -> Optional[dict]:
         """Decode a JWT access token without triggering FastAPI dependencies."""
@@ -339,7 +405,11 @@ class AuthService:
     async def get_current_user(
         self, credentials: HTTPAuthorizationCredentials = Depends(security)
     ) -> dict:
-        """Get current authenticated user"""
+        """Get current authenticated user.
+
+        If the JWT is valid but the database is unreachable, returns 503 instead of
+        401 so the frontend can retry rather than force-logout the user.
+        """
         try:
             token = credentials.credentials
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -357,15 +427,23 @@ class AuthService:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        user = await self.get_user_by_id(user_id)
-        if user is None:
+        try:
+            user = await self.get_user_by_id(user_id)
+            if user is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User not found",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return user
+        except DatabaseUnavailableError:
+            # JWT is valid but DB is unreachable — don't log the user out
+            logger.warning(f"DB unavailable during auth for user {user_id} — returning 503")
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found",
-                headers={"WWW-Authenticate": "Bearer"},
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service is temporarily unavailable. Please try again.",
+                headers={"Retry-After": "5"},
             )
-
-        return user
 
     async def change_password(
         self, user_id: str, old_password: str, new_password: str
@@ -402,11 +480,19 @@ class AuthService:
                 },
             )
 
+            # Invalidate cache so next auth fetch picks up the change
+            self._user_cache.invalidate(user_id)
+
             logger.info(f"Password changed for user: {user_id}")
             return True
 
         except HTTPException:
             raise
+        except DatabaseUnavailableError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service temporarily unavailable. Please try again.",
+            )
         except Exception as e:
             logger.error(f"Error changing password: {e}")
             raise HTTPException(
@@ -442,9 +528,17 @@ class AuthService:
 
             await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
 
+            # Invalidate cache so next auth fetch picks up the change
+            self._user_cache.invalidate(user_id)
+
             return await self.get_user_by_id(user_id)
         except HTTPException:
             raise
+        except DatabaseUnavailableError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Profile service temporarily unavailable. Please try again.",
+            )
         except Exception as e:
             logger.error(f"Error updating user profile: {e}")
             raise HTTPException(

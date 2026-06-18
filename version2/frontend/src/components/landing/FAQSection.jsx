@@ -5,7 +5,7 @@ import { ChevronDown } from 'lucide-react';
 const faqs = [
     {
         question: "What types of files can I upload?",
-        answer: "Currently, DataSage supports CSV, and Excel (XLSX, XLS) files up to 50MB."
+        answer: "Currently, Signal supports CSV, and Excel (XLSX, XLS) files up to 50MB."
     },
     {
         question: "Is my data secure?",
@@ -13,7 +13,7 @@ const faqs = [
     },
     {
         question: "Do I need to know SQL or Python?",
-        answer: "Not at all. DataSage uses natural language processing. You just ask questions in plain English, and our AI generates the insights and charts."
+        answer: "Not at all. Signal uses natural language processing. You just ask questions in plain English, and our AI generates the insights and charts."
     }
 ];
 

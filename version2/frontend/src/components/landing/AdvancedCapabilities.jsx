@@ -27,7 +27,7 @@ const AdvancedCapabilities = () => {
                         transition={{ duration: 0.5, delay: 0.1 }}
                         className="text-lg md:text-xl text-neutral-400"
                     >
-                        Go beyond standard bar charts. DataSage's AI engines analyze the shape of your data to uncover insights you didn't know you should look for.
+                        Go beyond standard bar charts. Signal's AI engines analyze the shape of your data to uncover insights you didn't know you should look for.
                     </motion.p>
                 </div>
 
@@ -106,7 +106,7 @@ const AdvancedCapabilities = () => {
                         </div>
                         <h3 className="text-2xl md:text-3xl font-bold mb-4 text-white tracking-tight">Smart Chart Selection</h3>
                         <p className="text-neutral-400 text-lg leading-relaxed mb-6">
-                            Never stare at a "select chart type" dropdown again. DataSage evaluates your dataset's schema and relationships to instantly recommend the perfect visualization format—whether it's a funnel, sunburst, or scatter plot.
+                            Never stare at a "select chart type" dropdown again. Signal evaluates your dataset's schema and relationships to instantly recommend the perfect visualization format—whether it's a funnel, sunburst, or scatter plot.
                         </p>
                         <button className="text-white hover:text-blue-400 font-medium border-b border-blue-400/30 pb-0.5 transition-colors">
                             Explore visualization types &rarr;

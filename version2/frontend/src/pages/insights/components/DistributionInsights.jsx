@@ -26,8 +26,8 @@ const BellCurve = ({ skewness = 0, kurtosis = 3 }) => {
 
     const isRight = sk > 0.5;
     const isLeft  = sk < -0.5;
-    const strokeColor = isRight ? '#f59e0b' : isLeft ? '#60a5fa' : '#8b5cf6';
-    const fillColor   = isRight ? '#f59e0b15' : isLeft ? '#60a5fa15' : '#8b5cf615';
+    const strokeColor = isRight ? '#f59e0b' : isLeft ? '#60a5fa' : '#E85002';
+    const fillColor   = isRight ? '#f59e0b15' : isLeft ? '#60a5fa15' : '#E8500215';
 
     return (
         <svg width={W} height={H} className="shrink-0">
@@ -44,7 +44,7 @@ const SkewBar = ({ skewness = 0 }) => {
     const pct = ((clamped + 3) / 6) * 100; // 0–100%, 50% is center
     const isRight = clamped > 0.3;
     const isLeft  = clamped < -0.3;
-    const thumbColor = isRight ? 'bg-amber-400' : isLeft ? 'bg-blue-400' : 'bg-purple-400';
+    const thumbColor = isRight ? 'bg-amber-400' : isLeft ? 'bg-blue-400' : 'bg-orange-400';
 
     return (
         <div className="relative h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--surface-2)' }}>
@@ -66,8 +66,8 @@ const DistCard = ({ dist, index, onInvestigate }) => {
     const isRightSk = sk > 0.5;
     const isLeftSk  = sk < -0.5;
     const skLabel   = isRightSk ? 'Right-skewed' : isLeftSk ? 'Left-skewed' : 'Symmetric';
-    const skColor   = isRightSk ? 'text-amber-400' : isLeftSk ? 'text-blue-400' : 'text-purple-400';
-    const border    = isRightSk ? 'border-l-amber-500' : isLeftSk ? 'border-l-blue-500' : 'border-l-purple-500';
+    const skColor   = isRightSk ? 'text-amber-400' : isLeftSk ? 'text-blue-400' : 'text-orange-400';
+    const border    = isRightSk ? 'border-l-amber-500' : isLeftSk ? 'border-l-blue-500' : 'border-l-orange-500';
 
     const ktLabel = kt > 4.5 ? 'Leptokurtic' : kt < 2 ? 'Platykurtic' : 'Mesokurtic';
     const ktColor = kt > 4.5 ? 'text-red-400' : kt < 2 ? 'text-slate-200' : 'text-emerald-400';
@@ -146,8 +146,8 @@ const DistributionInsights = ({ distributions = [], onInvestigate }) => {
             <div className="px-5 pt-5 pb-4">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-purple-500/10 border border-purple-500/20 rounded-xl flex items-center justify-center">
-                            <BarChart2 className="w-4 h-4 text-purple-400" />
+                        <div className="w-8 h-8 bg-orange-500/10 border border-orange-500/20 rounded-xl flex items-center justify-center">
+                            <BarChart2 className="w-4 h-4 text-orange-400" />
                         </div>
                         <div>
                             <h3 className="text-sm font-semibold" style={{ color: 'var(--page-text)' }}>Distribution Analysis</h3>

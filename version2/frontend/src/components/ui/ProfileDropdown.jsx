@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Settings, CreditCard, FileText, LogOut, User } from "lucide-react";
+import { Settings, CreditCard, FileText, LogOut, User, ChevronsUpDown } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
     DropdownMenu,
@@ -56,13 +56,13 @@ export function ProfileDropdown({
     const menuItems = [
         {
             label: "Profile",
-            href: "/app/settings/",
+            href: "/app/settings?tab=general",
             icon: <User className="w-4 h-4" />,
         },
         {
             label: "Model",
             value: data.model,
-            href: "/app/settings/",
+            href: "/app/settings?tab=workspace",
             icon: <Gemini className="w-4 h-4" />,
         },
         // {
@@ -73,7 +73,7 @@ export function ProfileDropdown({
         // },
         {
             label: "Settings",
-            href: "/app/settings",
+            href: "/app/settings?tab=workspace",
             icon: <Settings className="w-4 h-4" />,
         },
         // {
@@ -92,69 +92,37 @@ export function ProfileDropdown({
                         <button
                             type="button"
                             className={cn(
-                                "flex items-center gap-3 rounded-2xl bg-surface border border-border hover:border-border-strong hover:bg-elevated transition-all duration-300 focus:outline-none cursor-pointer overflow-hidden",
-                                expanded ? "p-2 w-full" : "w-11 h-11 justify-center"
+                                "flex items-center gap-2.5 rounded-md hover:bg-[var(--bg-active)] transition-all duration-200 focus:outline-none cursor-pointer w-full text-left border border-transparent",
+                                expanded ? "p-1.5" : "p-1.5 justify-center"
                             )}
                         >
                             <div className="relative shrink-0">
                                 <div className={cn(
-                                    "rounded-full bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400 p-0.5 shadow-md transition-all duration-300",
-                                    expanded ? "w-10 h-10" : "w-9 h-9"
+                                    "rounded-md overflow-hidden bg-primary shrink-0",
+                                    expanded ? "w-8 h-8" : "w-8 h-8"
                                 )}>
-                                    <div className="w-full h-full rounded-full overflow-hidden bg-primary">
-                                        <img
-                                            src={data.avatar}
-                                            alt={data.name}
-                                            className="w-full h-full object-cover rounded-full"
-                                        />
-                                    </div>
+                                    <img
+                                        src={data.avatar}
+                                        alt={data.name}
+                                        className="w-full h-full object-cover"
+                                    />
                                 </div>
                             </div>
                             {expanded && (
-                                <div className="text-left flex-1 min-w-0 animate-in fade-in slide-in-from-left-2 duration-300">
-                                    <div className="text-[13px] font-bold text-header truncate tracking-tight leading-tight">
-                                        {data.name}
+                                <>
+                                    <div className="text-left flex-1 min-w-0">
+                                        <div className="text-[13px] font-medium text-[var(--text-primary)] truncate leading-tight">
+                                            {data.name}
+                                        </div>
+                                        <div className="text-[11px] text-[var(--text-secondary)] truncate leading-tight mt-0.5">
+                                            {data.email}
+                                        </div>
                                     </div>
-                                    <div className="text-[10px] text-muted truncate tracking-tight leading-tight">
-                                        {data.email}
-                                    </div>
-                                </div>
+                                    <ChevronsUpDown className="w-3.5 h-3.5 text-[var(--text-secondary)] shrink-0" />
+                                </>
                             )}
                         </button>
                     </DropdownMenuTrigger>
-
-                    {/* Bending line indicator on the right */}
-                    <div
-                        className={cn(
-                            "absolute top-1/2 -translate-y-1/2 transition-all duration-300 pointer-events-none",
-                            expanded ? "-right-3" : "-right-2",
-                            isOpen
-                                ? "opacity-100"
-                                : "opacity-60 group-hover:opacity-100"
-                        )}
-                    >
-                        <svg
-                            width="12"
-                            height="24"
-                            viewBox="0 0 12 24"
-                            fill="none"
-                            className={cn(
-                                "transition-all duration-300",
-                                isOpen
-                                    ? "text-accent-primary scale-110"
-                                    : "text-muted group-hover:text-header"
-                            )}
-                            aria-hidden="true"
-                        >
-                            <path
-                                d="M2 4C6 8 6 16 2 20"
-                                stroke="currentColor"
-                                strokeWidth="2.5"
-                                strokeLinecap="round"
-                                fill="none"
-                            />
-                        </svg>
-                    </div>
 
                     <DropdownMenuContent
                         side="right"
@@ -187,7 +155,7 @@ export function ProfileDropdown({
                                                     "text-[9px] font-bold rounded-md py-0.5 px-1.5 tracking-tight uppercase border shadow-sm",
                                                     item.label === "Model"
                                                         ? "text-blue-500 bg-blue-500/10 border-blue-500/20"
-                                                        : "text-purple-500 bg-purple-500/10 border-purple-500/20"
+                                                        : "text-orange-500 bg-orange-500/10 border-orange-500/20"
                                                 )}
                                             >
                                                 {item.value}
@@ -197,6 +165,28 @@ export function ProfileDropdown({
                                 </DropdownMenuItem>
                             ))}
                         </div>
+
+                        {onLogout && (
+                            <>
+                                <DropdownMenuSeparator className="my-2 bg-border/50" />
+                                <DropdownMenuItem asChild>
+                                    <button
+                                        type="button"
+                                        onClick={onLogout}
+                                        className="w-full flex items-center gap-3 p-2.5 hover:bg-red-500/10 rounded-xl transition-all duration-200 cursor-pointer group hover:shadow-sm border border-transparent hover:border-red-500/20 focus:outline-none"
+                                    >
+                                        <div className="flex items-center gap-3 flex-1">
+                                            <span className="text-muted group-hover:text-red-400 transition-colors">
+                                                <LogOut className="w-4 h-4" />
+                                            </span>
+                                            <span className="text-sm font-medium text-header tracking-tight leading-tight whitespace-nowrap group-hover:text-red-400 transition-colors">
+                                                Log Out
+                                            </span>
+                                        </div>
+                                    </button>
+                                </DropdownMenuItem>
+                            </>
+                        )}
                     </DropdownMenuContent>
                 </div>
             </DropdownMenu>

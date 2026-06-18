@@ -34,6 +34,8 @@ from services.query.sql_repair_agent import (
     extract_columns_from_df,
     build_column_whitelist_block,
 )
+# understand_query is the single routing authority — imported lazily to avoid circular imports
+from services.ai.query_rewrite import understand_query
 
 logger = logging.getLogger(__name__)
 
@@ -692,8 +694,8 @@ Output ONLY the corrected SQL — nothing else.
             if not is_valid:
                 return None, f"SQL validation failed: {error}"
 
-            # Create DuckDB connection (in-memory, isolated)
-            conn = duckdb.connect(":memory:")
+            # Create DuckDB connection (in-memory, isolated, read-only)
+            conn = duckdb.connect(":memory:", read_only=True)
 
             try:
                 # Register the Polars dataframe as a table.
@@ -873,7 +875,87 @@ Output ONLY the corrected SQL — nothing else.
             cached["cached"] = True
             return cached
 
-        # Step 1: Generate SQL
+        # ── Step 0: Unified intent routing via understand_query() ───────
+        # understand_query() is the single source of truth for routing.
+        # It has full column context (df.columns) and returns:
+        #   routing        : "sql" | "metadata" | "conversational"
+        #   enriched_query : better-specified version of the original query
+        #   archetype      : explorer | analyst | expert
+        understanding = await understand_query(
+            user_query=query,
+            dataset_context="",  # no summary available at this call site
+            available_columns=list(df.columns),
+        )
+        query_routing = understanding.routing
+        logger.info(
+            f"[Executor] routing={query_routing}, archetype={understanding.archetype}, "
+            f"query='{query[:60]}'"
+        )
+
+        if query_routing == "conversational":
+            # Off-topic or chitchat — reject without touching the SQL pipeline
+            guardrail_msg = (
+                "I'm a data analytics assistant. I can help you explore your dataset "
+                "with questions like:\n"
+                '- "What is the total revenue by category?"\n'
+                '- "Show me the top 10 customers by profit"\n'
+                '- "What are the columns in my data?"'
+            )
+            return {
+                "success": False,
+                "response": guardrail_msg,
+                "sql": None,
+                "data": None,
+                "row_count": 0,
+                "error": "off_topic",
+                "execution_time_ms": (datetime.now() - start_time).total_seconds() * 1000,
+                "render_intent": {
+                    "show_chart": False,
+                    "show_table": False,
+                    "show_sql": False,
+                    "response_mode": "conversational",
+                },
+            }
+
+        if query_routing == "metadata":
+            # Answer from schema directly — zero LLM calls, zero SQL execution
+            columns = df.columns
+            n_rows, n_cols = df.shape
+            dtypes = {col: str(df[col].dtype) for col in columns}
+
+            col_list = "\n".join(f"- **{c}** ({dtypes[c]})" for c in columns)
+            response = (
+                f"Your dataset has **{n_rows:,} rows** and **{n_cols} columns**:\n\n"
+                f"{col_list}\n\n"
+                "You can ask me to analyze, filter, or visualize any of these fields."
+            )
+            logger.info(
+                f"[IntentClassifier] Metadata fast-path: answered schema question "
+                f"({n_cols} cols) without SQL in <1ms"
+            )
+            meta_result = {
+                "success": True,
+                "response": response,
+                "sql": None,
+                "data": [{"column_name": c, "data_type": dtypes[c]} for c in columns],
+                "row_count": n_cols,
+                "columns": ["column_name", "data_type"],
+                "error": None,
+                "cached": False,
+                "execution_time_ms": (datetime.now() - start_time).total_seconds() * 1000,
+                "render_intent": {
+                    "show_chart": False,
+                    "show_table": True,
+                    "show_sql": False,
+                    "response_mode": "analytical",
+                },
+            }
+            # Cache it so repeated schema questions are instant
+            self._query_cache[cache_key] = meta_result
+            return meta_result
+
+        # ── Step 1: Generate SQL (only reached for 'sql' intent) ────────
+
         logger.info(f"🔄 Generating SQL for query: {query[:50]}...")
         sql, sql_error = await self.generate_sql(query, df)
 
@@ -942,8 +1024,27 @@ Output ONLY the corrected SQL — nothing else.
             self._cache_keys_by_dataset[dataset_id] = set()
         self._cache_keys_by_dataset[dataset_id].add(cache_key)
 
+        # Step 4: Let the AI decide what to render (agentic intent)
+        try:
+            render_intent = await response_intent_decider.decide(
+                query=query,
+                sql_result=result,
+            )
+        except Exception as _ie:
+            logger.warning(f"ResponseIntentDecider failed, using defaults: {_ie}")
+            render_intent = {
+                "show_chart": True,
+                "show_table": True,
+                "show_sql": False,
+                "response_mode": "analytical",
+            }
+
+        result["render_intent"] = render_intent
+
         logger.info(
-            f"✅ Query executed successfully in {result['execution_time_ms']:.0f}ms, {len(result_df)} rows"
+            f"✅ Query executed successfully in {result['execution_time_ms']:.0f}ms, "
+            f"{len(result_df)} rows | intent: chart={render_intent.get('show_chart')} "
+            f"table={render_intent.get('show_table')} sql={render_intent.get('show_sql')}"
         )
 
         return result
@@ -959,6 +1060,103 @@ Output ONLY the corrected SQL — nothing else.
             self._query_cache.clear()
             self._cache_keys_by_dataset.clear()
         logger.info(f"🗑️ Query cache cleared")
+
+
+# ============================================================
+#           RESPONSE INTENT DECIDER  (agentic render control)
+# ============================================================
+class ResponseIntentDecider:
+    """
+    After SQL execution, uses the LLM to decide which UI blocks are
+    useful for the current query + result — chart, table, and/or SQL.
+
+    This is the *agentic* layer that replaces hardcoded always-show logic.
+    """
+
+    _DECISION_PROMPT = """\
+You are a UI orchestrator for a data analytics chatbot.
+
+User asked: {query}
+SQL returned {row_count} rows with columns: {columns}
+Narrative preview: {response_preview}
+
+Decide which UI blocks are genuinely useful. Return JSON only:
+{{"show_chart": <bool>, "show_table": <bool>, "show_sql": <bool>, "response_mode": "<mode>"}}
+
+Rules:
+- show_chart: true for comparisons, trends, distributions, rankings with >=2 data points
+- show_table: true when the user needs to inspect individual rows or values
+- show_sql: true only when the user explicitly asked "how", "what query", or "show SQL"
+- response_mode: one of "conversational" | "analytical" | "single_value" | "error"
+  - conversational: no SQL/table/chart at all (greetings, meta questions)
+  - single_value: one KPI number (e.g. "total revenue is £52K") → table=false, chart=false
+  - analytical: full analysis with data (most SQL queries)
+  - error: query failed or returned no data
+- For single-value results (1 row, 1 column), set show_table=false, show_chart=false
+- For conversational results (0 rows), set show_chart=false, show_table=false, show_sql=false
+
+Return ONLY the JSON object, no explanation."""
+
+    async def decide(self, query: str, sql_result: dict) -> dict:
+        """
+        Returns a dict: {show_chart, show_table, show_sql, response_mode}
+        Safe defaults are returned on any failure.
+        """
+        row_count = sql_result.get("row_count", 0)
+        columns = sql_result.get("columns") or []
+        response = sql_result.get("response") or ""
+
+        # Fast-path: obvious single-value answer → no blocks needed
+        data = sql_result.get("data") or []
+        if row_count == 1 and len(columns) == 1:
+            return {
+                "show_chart": False,
+                "show_table": False,
+                "show_sql": False,
+                "response_mode": "single_value",
+            }
+
+        # Fast-path: empty result → error mode
+        if row_count == 0:
+            return {
+                "show_chart": False,
+                "show_table": False,
+                "show_sql": False,
+                "response_mode": "error",
+            }
+
+        prompt = self._DECISION_PROMPT.format(
+            query=query[:300],
+            row_count=row_count,
+            columns=", ".join(str(c) for c in columns[:12]),
+            response_preview=response[:250],
+        )
+
+        try:
+            decision = await llm_router.call(
+                prompt=prompt,
+                model_role="intent_engine",
+                expect_json=True,
+                temperature=0.0,
+                max_tokens=100,
+            )
+            if not isinstance(decision, dict):
+                raise ValueError(f"Non-dict response: {decision}")
+
+            return {
+                "show_chart": bool(decision.get("show_chart", True)),
+                "show_table": bool(decision.get("show_table", True)),
+                "show_sql": bool(decision.get("show_sql", False)),
+                "response_mode": decision.get("response_mode", "analytical"),
+            }
+        except Exception as exc:
+            logger.warning(f"[ResponseIntentDecider] LLM call failed ({exc}); using safe defaults")
+            return {
+                "show_chart": True,
+                "show_table": row_count > 1,
+                "show_sql": False,
+                "response_mode": "analytical",
+            }
 
 
 # ============================================================
@@ -1092,6 +1290,7 @@ class QueryClassifier:
             return "complex"
 
 
-# Global instance
+# Global instances
 query_executor = QueryExecutor()
 query_classifier = QueryClassifier()
+response_intent_decider = ResponseIntentDecider()

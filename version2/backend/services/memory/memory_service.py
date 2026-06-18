@@ -12,13 +12,15 @@ Architecture (inspired by Mem0 paper — arxiv 2504.19413v1):
 
 Memory is scoped per (user_id, dataset_id) so insights persist across
 conversations about the same dataset.
+
+Retrieval now uses vector similarity (cosine) via the shared BeliefStore
+embedding model, with keyword-overlap fallback when embeddings are unavailable.
 """
 
 import asyncio
 import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
-from bson import ObjectId
 
 from db.database import get_database
 from services.llm_router import llm_router
@@ -49,20 +51,146 @@ class MemoryService:
         fact: str,              # The extracted memory text
         category: str,          # One of MEMORY_CATEGORIES
         source_query: str,      # The user query that produced this memory
+        embedding: [float],     # Pre-computed vector (computed at write time)
         created_at: datetime,
         updated_at: datetime,
         relevance_count: int,   # How many times this memory was retrieved
     }
+
+    Retrieval uses pre-computed embeddings (stored alongside each memory)
+    for O(1) encoding cost — only the query is embedded at retrieval time.
+    Keywords are used as a fallback for memories stored before embeddings
+    were added (zero backfill required).
     """
 
     def __init__(self):
         self._db = None
+        self._embedder = None
 
     @property
     def db(self):
         if self._db is None:
             self._db = get_database()
         return self._db
+
+    # -------------------------------------------------------------------
+    # EMBEDDING — Shared access to the BeliefStore embedding model
+    # -------------------------------------------------------------------
+
+    def _get_embedder(self):
+        """
+        Lazy-access the shared BeliefStore for its embedding capability.
+
+        Stores a reference to the BeliefStore singleton so that
+        ``_compute_vector_similarities`` can call:
+        1. ``store.embedding_model.encode()`` for fast batch encoding (preferred)
+        2. ``store._embed()`` for per-text embedding with mock fallback
+
+        Returns the BeliefStore instance, or None if unavailable.
+        """
+        if self._embedder is None:
+            try:
+                from agents.belief.belief_store import get_belief_store
+
+                store = get_belief_store()
+                if store.embedding_model:
+                    logger.debug(
+                        "[MemoryService] Using shared embedding model for vector retrieval"
+                    )
+                else:
+                    logger.debug(
+                        "[MemoryService] Embedding model not loaded — "
+                        "will use BeliefStore._embed() mock fallback"
+                    )
+                self._embedder = store
+            except Exception as e:
+                logger.warning(
+                    f"[MemoryService] Failed to access BeliefStore (non-critical): {e}"
+                )
+                self._embedder = None
+        return self._embedder
+
+    async def _compute_embedding(self, text: str) -> Optional[List[float]]:
+        """
+        Compute a single embedding vector for a text string.
+
+        Uses the shared BeliefStore model. The result is stored alongside
+        the memory in MongoDB so retrieval only needs to embed the query.
+
+        Args:
+            text: Text to embed
+
+        Returns:
+            List of floats (embedding vector), or None if unavailable.
+        """
+        store = self._get_embedder()
+        if store is None:
+            return None
+
+        try:
+            if store.embedding_model is not None:
+                embeddings = await asyncio.to_thread(
+                    store.embedding_model.encode,
+                    [text],
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                )
+                return embeddings[0].tolist()
+            else:
+                return await store._embed(text)
+        except Exception as e:
+            logger.warning(f"[MemoryService] Embedding computation failed: {e}")
+            return None
+
+    async def _compute_query_similarities(
+        self, query: str, memory_embeddings: List[tuple[str, List[float]]]
+    ) -> List[float]:
+        """
+        Compute cosine similarity between a query and stored memory embeddings.
+
+        Unlike ``_compute_vector_similarities`` (which embedded every fact at
+        query time), this method uses pre-computed embeddings stored in MongoDB
+        — only the query needs to be embedded, making retrieval O(1) for
+        encoding vs O(N).
+
+        Args:
+            query: The user's query text
+            memory_embeddings: List of (fact_id, embedding_vector) tuples
+
+        Returns:
+            List of similarity scores in [0, 1], one per memory.
+            Returns empty list if the query cannot be embedded.
+        """
+        store = self._get_embedder()
+        if store is None or not memory_embeddings:
+            return []
+
+        try:
+            # Embed the query only (1 call instead of N+1)
+            if store.embedding_model is not None:
+                query_vec = await asyncio.to_thread(
+                    store.embedding_model.encode,
+                    [query],
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                )
+                query_emb = query_vec[0]
+            else:
+                query_emb = await store._embed(query)
+
+            # Dot product against each stored embedding (fast, no model calls)
+            similarities = []
+            for _fact_id, fact_emb in memory_embeddings:
+                dot = sum(q * f for q, f in zip(query_emb, fact_emb))
+                similarities.append(max(0.0, float(dot)))
+
+            return similarities
+
+        except Exception as e:
+            logger.warning(
+                f"[MemoryService] Query similarity computation failed: {e}"
+            )
+            return []
 
     # -------------------------------------------------------------------
     # PHASE 1: EXTRACTION — Extract memories from a message pair
@@ -74,7 +202,7 @@ class MemoryService:
         ai_response: str,
         user_id: str,
         dataset_id: str,
-        conversation_summary: str = ""
+        conversation_summary: str = "",
     ) -> List[Dict[str, Any]]:
         """
         Extract salient memories from a (user_query, ai_response) pair
@@ -107,12 +235,14 @@ class MemoryService:
                 model_role="memory_extraction",
                 expect_json=True,
                 temperature=0.2,
-                max_tokens=500
+                max_tokens=500,
             )
 
             memories = extracted.get("memories", [])
             if not memories:
-                logger.debug("Memory extraction: no salient memories found in this exchange")
+                logger.debug(
+                    "Memory extraction: no salient memories found in this exchange"
+                )
                 return []
 
             # Step 2: For each extracted memory, decide ADD or UPDATE
@@ -125,23 +255,28 @@ class MemoryService:
                     continue
 
                 # Filter out response preambles and artifacts
-                # Response artifacts start with: "Here's", "I found", "Based on", "Looking at", etc.
                 import re
+
                 response_artifact_pattern = re.compile(
                     r"^(here'?s|i found|based on|looking at|the data|according to|"
                     r"this means|it appears|you can|i can|let me|a breakdown|"
                     r"the results?|this shows|this tells|this is|what i)",
-                    re.IGNORECASE
+                    re.IGNORECASE,
                 )
                 if response_artifact_pattern.match(fact):
-                    logger.debug(f"Skipping response preamble as memory: {fact[:50]}")
+                    logger.debug(
+                        f"Skipping response preamble as memory: {fact[:50]}"
+                    )
                     continue
 
-                # Validate that the fact contains specific data references (column names, numbers, etc.)
-                # A good fact should reference actual data values or column names
-                if not any(char.isdigit() for char in fact) and category == "data_insight":
-                    # Most data insights should have numbers — if this doesn't, it's likely a preamble
-                    logger.debug(f"Skipping non-specific memory (no numbers): {fact[:50]}")
+                # Validate that the fact contains specific data references
+                if (
+                    not any(char.isdigit() for char in fact)
+                    and category == "data_insight"
+                ):
+                    logger.debug(
+                        f"Skipping non-specific memory (no numbers): {fact[:50]}"
+                    )
                     continue
 
                 # Validate category
@@ -153,7 +288,7 @@ class MemoryService:
                     category=category,
                     source_query=user_query[:200],
                     user_id=user_id,
-                    dataset_id=dataset_id
+                    dataset_id=dataset_id,
                 )
                 if result:
                     stored.append(result)
@@ -179,7 +314,7 @@ class MemoryService:
         category: str,
         source_query: str,
         user_id: str,
-        dataset_id: str
+        dataset_id: str,
     ) -> Optional[Dict[str, Any]]:
         """
         Compare a new memory against existing ones and decide:
@@ -188,10 +323,9 @@ class MemoryService:
         - NOOP: Exact or near-exact duplicate → skip
 
         Uses text-based similarity (case-insensitive substring matching)
-        for simplicity. Can be upgraded to vector similarity later.
+        for simplicity.
         """
         try:
-            # Find existing memories for this user+dataset
             existing = await self.db.memories.find(
                 {"user_id": user_id, "dataset_id": dataset_id, "category": category}
             ).to_list(length=50)
@@ -207,21 +341,31 @@ class MemoryService:
                     return None
 
                 # UPDATE: Existing memory is a subset of new (richer version)
-                if existing_fact in fact_lower and len(fact) > len(existing_mem.get("fact", "")):
+                if (
+                    existing_fact in fact_lower
+                    and len(fact) > len(existing_mem.get("fact", ""))
+                ):
+                    # Re-compute embedding for the updated fact
+                    embedding = await self._compute_embedding(fact)
+                    update_doc = {
+                        "fact": fact,
+                        "source_query": source_query,
+                        "updated_at": datetime.utcnow(),
+                    }
+                    if embedding is not None:
+                        update_doc["embedding"] = embedding
+
                     await self.db.memories.update_one(
                         {"_id": existing_mem["_id"]},
-                        {
-                            "$set": {
-                                "fact": fact,
-                                "source_query": source_query,
-                                "updated_at": datetime.utcnow()
-                            }
-                        }
+                        {"$set": update_doc},
                     )
-                    logger.debug(f"Memory UPDATE: '{fact[:50]}' replaced older version")
+                    logger.debug(
+                        f"Memory UPDATE: '{fact[:50]}' replaced older version"
+                    )
                     return {"action": "updated", "fact": fact, "category": category}
 
-            # ADD: No similar memory found
+            # ADD: No similar memory found — pre-compute embedding
+            embedding = await self._compute_embedding(fact)
             memory_doc = {
                 "user_id": user_id,
                 "dataset_id": dataset_id,
@@ -230,8 +374,10 @@ class MemoryService:
                 "source_query": source_query,
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
-                "relevance_count": 0
+                "relevance_count": 0,
             }
+            if embedding is not None:
+                memory_doc["embedding"] = embedding
 
             result = await self.db.memories.insert_one(memory_doc)
             memory_doc["_id"] = result.inserted_id
@@ -243,7 +389,7 @@ class MemoryService:
             return None
 
     # -------------------------------------------------------------------
-    # RETRIEVAL — Get relevant memories for a query
+    # RETRIEVAL — Get relevant memories for a query (VECTOR + KEYWORD)
     # -------------------------------------------------------------------
 
     async def retrieve_relevant_memories(
@@ -251,13 +397,18 @@ class MemoryService:
         query: str,
         user_id: str,
         dataset_id: str,
-        top_k: int = 5
+        top_k: int = 5,
     ) -> List[str]:
         """
         Retrieve the most relevant memories for a given query.
 
-        Uses a simple keyword-overlap scoring approach.
-        Can be upgraded to vector similarity (FAISS) later.
+        Uses vector similarity (cosine) via the shared BeliefStore embedding
+        model for semantic matching — "sales trends" will match a memory
+        about "revenue grew 15%". Falls back to keyword-overlap scoring
+        when embeddings are unavailable (e.g., model not loaded).
+
+        Category boosts are applied on top of the similarity score to
+        prioritize data insights and analysis outcomes.
 
         Args:
             query: Current user query
@@ -277,41 +428,90 @@ class MemoryService:
             if not memories:
                 return []
 
-            # Score each memory by keyword overlap with the query
-            query_words = set(query.lower().split())
-            scored = []
-            for mem in memories:
+            facts = [mem.get("fact", "") for mem in memories]
+
+            # Step 1: Collect memories with pre-computed embeddings
+            embedded_memories: List[tuple[int, Dict, List[float]]] = []  # (index, doc, embedding)
+            unembedded: List[tuple[int, Dict]] = []  # (index, doc) — fallback to keyword
+            for i, mem in enumerate(memories):
+                emb = mem.get("embedding")
+                if emb and isinstance(emb, list) and len(emb) > 0:
+                    embedded_memories.append((i, mem, emb))
+                else:
+                    unembedded.append((i, mem))
+
+            # Step 2: Score embedded memories via pre-computed vectors (fast)
+            use_stored = bool(embedded_memories)
+            scored: List[tuple[float, Dict]] = []
+
+            if embedded_memories:
+                memory_embeddings = [
+                    (str(mem.get("_id", "")), emb)
+                    for _, mem, emb in embedded_memories
+                ]
+                vector_scores = await self._compute_query_similarities(
+                    query, memory_embeddings
+                )
+                if len(vector_scores) == len(embedded_memories):
+                    for (i, mem, _emb), score in zip(embedded_memories, vector_scores):
+                        category_boost = {
+                            "data_insight": 0.15,
+                            "analysis_outcome": 0.15,
+                            "chart_generated": 0.05,
+                            "column_relationship": 0.10,
+                            "user_preference": 0.05,
+                        }.get(mem.get("category", ""), 0.0)
+                        scored.append((score + category_boost, mem))
+
+            # Step 3: Score unembedded memories via keyword fallback
+            for i, mem in unembedded:
                 fact = mem.get("fact", "")
+                query_words = set(query.lower().split())
                 fact_words = set(fact.lower().split())
+                union = query_words | fact_words
                 overlap = len(query_words & fact_words)
-                # Boost chart-related and insight memories
+                score = overlap / max(len(union), 1)
+
                 category_boost = {
-                    "data_insight": 2,
-                    "analysis_outcome": 2,
-                    "chart_generated": 1,
-                    "column_relationship": 1,
-                    "user_preference": 1
-                }.get(mem.get("category", ""), 0)
-                score = overlap + category_boost
-                scored.append((score, mem))
+                    "data_insight": 0.15,
+                    "analysis_outcome": 0.15,
+                    "chart_generated": 0.05,
+                    "column_relationship": 0.10,
+                    "user_preference": 0.05,
+                }.get(mem.get("category", ""), 0.0)
+                scored.append((score + category_boost, mem))
 
-            # Sort by score descending, take top_k
+            # Step 4: Sort by score descending, apply minimum threshold
+            min_score = 0.25 if use_stored else 0.0
             scored.sort(key=lambda x: x[0], reverse=True)
-            top_memories = [mem["fact"] for score, mem in scored[:top_k] if score > 0]
+            top_memories = [
+                mem["fact"] for score, mem in scored[:top_k] if score >= min_score
+            ]
 
-            # Update relevance counts for retrieved memories
+            # Step 3: Update relevance counts for retrieved memories
             if top_memories:
-                fact_ids = [mem["_id"] for score, mem in scored[:top_k] if score > 0]
+                retrieved_docs = [
+                    mem for score, mem in scored[:top_k] if score >= min_score
+                ]
+                fact_ids = [mem["_id"] for mem in retrieved_docs]
                 if fact_ids:
                     await self.db.memories.update_many(
                         {"_id": {"$in": fact_ids}},
-                        {"$inc": {"relevance_count": 1}}
+                        {"$inc": {"relevance_count": 1}},
                     )
 
-            logger.debug(
-                f"Memory retrieval: {len(top_memories)} relevant memories "
-                f"from {len(memories)} total for dataset {dataset_id}"
-            )
+            method = "vector" if use_vector else "keyword"
+            if scored and scored[0][0] > 0:
+                logger.debug(
+                    f"Memory retrieval ({method}): {len(top_memories)} relevant "
+                    f"from {len(memories)} total for dataset {dataset_id} "
+                    f"(top score: {scored[0][0]:.3f})"
+                )
+            else:
+                logger.debug(
+                    f"Memory retrieval ({method}): {len(top_memories)} relevant "
+                    f"from {len(memories)} total for dataset {dataset_id}"
+                )
             return top_memories
 
         except Exception as e:
@@ -322,19 +522,12 @@ class MemoryService:
     # UTILITY — Get memory stats for a user+dataset
     # -------------------------------------------------------------------
 
-    async def get_memory_stats(
-        self,
-        user_id: str,
-        dataset_id: str
-    ) -> Dict[str, Any]:
+    async def get_memory_stats(self, user_id: str, dataset_id: str) -> Dict[str, Any]:
         """Get statistics about stored memories."""
         try:
             pipeline = [
                 {"$match": {"user_id": user_id, "dataset_id": dataset_id}},
-                {"$group": {
-                    "_id": "$category",
-                    "count": {"$sum": 1}
-                }}
+                {"$group": {"_id": "$category", "count": {"$sum": 1}}},
             ]
             categories = {}
             async for doc in self.db.memories.aggregate(pipeline):
@@ -345,7 +538,7 @@ class MemoryService:
                 "total_memories": total,
                 "by_category": categories,
                 "user_id": user_id,
-                "dataset_id": dataset_id
+                "dataset_id": dataset_id,
             }
         except Exception as e:
             logger.warning(f"Memory stats failed: {e}")
@@ -356,10 +549,7 @@ class MemoryService:
     # -------------------------------------------------------------------
 
     async def prune_memories(
-        self,
-        user_id: str,
-        dataset_id: str,
-        max_memories: int = 100
+        self, user_id: str, dataset_id: str, max_memories: int = 100
     ) -> int:
         """
         Prune least-relevant memories when count exceeds threshold.
@@ -374,12 +564,17 @@ class MemoryService:
                 return 0
 
             # Find memories to prune: lowest relevance_count, oldest updated_at
-            to_prune = await self.db.memories.find(
-                {"user_id": user_id, "dataset_id": dataset_id}
-            ).sort([
-                ("relevance_count", 1),  # Least retrieved first
-                ("updated_at", 1)        # Oldest first
-            ]).limit(count - max_memories).to_list(length=count - max_memories)
+            to_prune = (
+                await self.db.memories.find(
+                    {"user_id": user_id, "dataset_id": dataset_id}
+                )
+                .sort([
+                    ("relevance_count", 1),  # Least retrieved first
+                    ("updated_at", 1),        # Oldest first
+                ])
+                .limit(count - max_memories)
+                .to_list(length=count - max_memories)
+            )
 
             if to_prune:
                 ids_to_delete = [m["_id"] for m in to_prune]

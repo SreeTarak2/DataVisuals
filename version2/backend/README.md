@@ -1,6 +1,6 @@
-# DataSage AI Backend v2.0
+# Signal AI Backend v2.0
 
-A FastAPI-based backend with MongoDB integration and JWT authentication for the DataSage AI platform.
+A FastAPI-based backend with MongoDB integration and JWT authentication for the Signal AI platform.
 
 ## 🚀 Features
 
@@ -173,7 +173,7 @@ backend/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MONGODB_URL` | `mongodb://localhost:27017` | MongoDB connection string |
-| `DATABASE_NAME` | `datasage_ai` | Database name |
+| `DATABASE_NAME` | `signal_ai` | Database name |
 | `SECRET_KEY` | `your-secret-key-change-in-production` | JWT secret key |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | Token expiration time |
 | `HOST` | `0.0.0.0` | Server host |
@@ -270,7 +270,7 @@ For issues and questions:
 
 ---
 
-**DataSage AI Backend v2.0** - Built with FastAPI, MongoDB, and ❤️
+**Signal AI Backend v2.0** - Built with FastAPI, MongoDB, and ❤️
 
 
 

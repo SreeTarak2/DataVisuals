@@ -1,0 +1,57 @@
+{
+  "timestamp": "20260616_032710",
+  "total_datasets": 72,
+  "failure_count": 4,
+  "failures": [
+    {
+      "dataset": "denorm_camel_case.csv",
+      "category": "participation_recall",
+      "expected_primary": "employee",
+      "predicted_primary": "employee",
+      "expected_participants": [
+        "department"
+      ],
+      "predicted_participants": [],
+      "reason": "Missing participants: {'department'}"
+    },
+    {
+      "dataset": "denorm_underscore_heavy.csv",
+      "category": "participation_recall",
+      "expected_primary": "shipment",
+      "predicted_primary": "shipment",
+      "expected_participants": [
+        "warehouse"
+      ],
+      "predicted_participants": [],
+      "reason": "Missing participants: {'warehouse'}"
+    },
+    {
+      "dataset": "multi_project_tasks.csv",
+      "category": "participation_recall",
+      "expected_primary": "task",
+      "predicted_primary": "task",
+      "expected_participants": [
+        "assignee",
+        "project",
+        "reviewer"
+      ],
+      "predicted_participants": [
+        "project"
+      ],
+      "reason": "Missing participants: {'assignee', 'reviewer'}"
+    },
+    {
+      "dataset": "noent_quiz_scores.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "student",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'student'"
+    }
+  ],
+  "failure_categories": {
+    "participation_recall": 3,
+    "abstention": 1
+  }
+}

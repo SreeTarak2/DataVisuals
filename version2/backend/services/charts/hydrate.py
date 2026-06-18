@@ -48,9 +48,7 @@ def _get_col_format(col_name: str) -> str:
     import re
 
     c = (col_name or "").lower()
-    if any(
-        kw in c for kw in ("price", "cost", "revenue", "amount", "salary", "profit")
-    ):
+    if any(kw in c for kw in ("price", "cost", "revenue", "amount", "salary", "profit")):
         return "currency"
     if re.search(r"\b(rate|ratio|percent|pct|efficiency|growth)\b", c):
         return "percentage"
@@ -111,9 +109,7 @@ def _auto_bin_numeric_col(df: pl.DataFrame, col: str, n_bins: int = 7) -> pl.Dat
     order_map = {label(edges[i]): i for i in range(len(edges) - 1)}
 
     df = df.with_columns(pl.Series(col, bin_labels, dtype=pl.Utf8))
-    logger.info(
-        f"Auto-binned '{col}': {len(edges) - 1} bins from {min_val:.1f} to {max_val:.1f}"
-    )
+    logger.info(f"Auto-binned '{col}': {len(edges) - 1} bins from {min_val:.1f} to {max_val:.1f}")
     return df, order_map
 
 
@@ -148,18 +144,14 @@ def validate_config(df: pl.DataFrame, config: ChartConfig) -> None:
 
     # Handle both string and enum types
     chart_type_str = (
-        config.chart_type.value
-        if hasattr(config.chart_type, "value")
-        else config.chart_type
+        config.chart_type.value if hasattr(config.chart_type, "value") else config.chart_type
     )
 
     # Strip columns that don't exist in the dataframe
     safe_cols = [c for c in config.columns if c in df.columns]
     if len(safe_cols) < len(config.columns):
         dropped = set(config.columns) - set(safe_cols)
-        logger.warning(
-            f"validate_config({chart_type_str}): dropped missing columns {dropped}"
-        )
+        logger.warning(f"validate_config({chart_type_str}): dropped missing columns {dropped}")
         config.columns = safe_cols
 
     # Only hard-fail if there are ZERO columns AND the chart type genuinely
@@ -171,9 +163,7 @@ def validate_config(df: pl.DataFrame, config: ChartConfig) -> None:
     # Soft warnings (informational only — handlers will degrade gracefully)
     chart_def = CHART_DEFINITIONS_BY_ID.get(chart_type_str, {})
     rules = chart_def.get("rules", {})
-    num_needed = sum(
-        1 for req in rules.get("data_types", []) if req["type"] == "numeric"
-    )
+    num_needed = sum(1 for req in rules.get("data_types", []) if req["type"] == "numeric")
     actual_num = sum(1 for c in config.columns if df[c].dtype in NUMERIC_DTYPES)
     if actual_num < num_needed:
         logger.info(
@@ -193,7 +183,16 @@ def _safe_aggregate(
         raise HydrationError(f"Missing agg cols: {group_col}, {value_col}")
 
     agg_upper = agg.value.upper() if hasattr(agg, "value") else str(agg).upper()
-    if agg_upper in {"SUM", "MEAN", "MAX", "MIN"}:
+    if agg_upper in {
+        "SUM",
+        "MEAN",
+        "MAX",
+        "MIN",
+        "MEDIAN",
+        "STD",
+        "PERCENTILE_25",
+        "PERCENTILE_75",
+    }:
         if df[value_col].dtype not in NUMERIC_DTYPES:
             # Attempt automatic cast — handles numeric values stored as strings
             original_dtype = df[value_col].dtype
@@ -234,6 +233,14 @@ def _safe_aggregate(
         expr = pl.sum(value_col)
     elif agg == AggregationType.MEAN:
         expr = pl.mean(value_col)
+    elif agg == AggregationType.MEDIAN:
+        expr = pl.median(value_col)
+    elif agg == AggregationType.STD:
+        expr = pl.std(value_col)
+    elif agg == AggregationType.PERCENTILE_25:
+        expr = pl.col(value_col).quantile(0.25)
+    elif agg == AggregationType.PERCENTILE_75:
+        expr = pl.col(value_col).quantile(0.75)
     elif agg == AggregationType.MAX:
         expr = pl.max(value_col)
     elif agg == AggregationType.MIN:
@@ -289,15 +296,32 @@ def hydrate_kpi(df: pl.DataFrame, config: KpiConfig) -> Dict[str, Any]:
                 "median",
                 "max",
                 "min",
+                "std",
+                "percentile_25",
+                "percentile_75",
             ):
                 agg_str = "n_unique" if agg_str in ("sum", "max") else "count"
 
-            if agg_str in ("sum", "mean", "max", "min"):
+            if agg_str in (
+                "sum",
+                "mean",
+                "max",
+                "min",
+                "median",
+                "std",
+                "percentile_25",
+                "percentile_75",
+            ):
                 if df[col].dtype not in NUMERIC_DTYPES:
                     agg_str = "count"
                     value = len(df)
                 else:
-                    value = df.select(getattr(pl, agg_str)(col)).item()
+                    if agg_str == "percentile_25":
+                        value = df.select(pl.col(col).quantile(0.25)).item()
+                    elif agg_str == "percentile_75":
+                        value = df.select(pl.col(col).quantile(0.75)).item()
+                    else:
+                        value = df.select(getattr(pl, agg_str)(col)).item()
             else:
                 value = df.select(getattr(pl, agg_str)(col)).item()
 
@@ -417,10 +441,7 @@ def hydrate_kpi(df: pl.DataFrame, config: KpiConfig) -> Dict[str, Any]:
                     # AI Suggestion based on chronological polarity
                     polarity = (
                         "expense"
-                        if any(
-                            k in col.lower()
-                            for k in ["cost", "discount", "loss", "tax"]
-                        )
+                        if any(k in col.lower() for k in ["cost", "discount", "loss", "tax"])
                         else "revenue"
                     )
                     if delta <= -15:
@@ -436,9 +457,7 @@ def hydrate_kpi(df: pl.DataFrame, config: KpiConfig) -> Dict[str, Any]:
                             else f"Warning: {col} is surging over time. Investigate root causes."
                         )
                     else:
-                        result["aiSuggestion"] = (
-                            f"{col} is stable compared to the earlier period."
-                        )
+                        result["aiSuggestion"] = f"{col} is stable compared to the earlier period."
 
             else:
                 # ─── NO TIME COLUMN FALLBACK ───
@@ -450,9 +469,7 @@ def hydrate_kpi(df: pl.DataFrame, config: KpiConfig) -> Dict[str, Any]:
                 # But we can still offer a non-temporal AI Context
                 polarity = (
                     "expense"
-                    if any(
-                        k in col.lower() for k in ["cost", "discount", "loss", "tax"]
-                    )
+                    if any(k in col.lower() for k in ["cost", "discount", "loss", "tax"])
                     else "revenue"
                 )
                 if result.get("isOutlier"):
@@ -506,9 +523,7 @@ def hydrate_table(df: pl.DataFrame, config: TableConfig) -> List[Dict]:
         logger.info(f"Table hydrated in {time.time() - start:.2f}s")
 
 
-def hydrate_chart(
-    df: pl.DataFrame, config: ChartConfig
-) -> Tuple[List[Dict[str, Any]], int]:
+def hydrate_chart(df: pl.DataFrame, config: ChartConfig) -> Tuple[List[Dict[str, Any]], int]:
     """
     Hydrate chart configuration into Plotly traces.
 
@@ -523,9 +538,7 @@ def hydrate_chart(
     try:
         validate_config(df, config)
     except HydrationError as e:
-        logger.warning(
-            f"Validation failed for {config.chart_type}: {e} — returning empty"
-        )
+        logger.warning(f"Validation failed for {config.chart_type}: {e} — returning empty")
         chart_type = (
             config.chart_type.value
             if hasattr(config.chart_type, "value")
@@ -542,9 +555,7 @@ def hydrate_chart(
 
     # Handle both string and enum types
     chart_type = (
-        config.chart_type.value
-        if hasattr(config.chart_type, "value")
-        else config.chart_type
+        config.chart_type.value if hasattr(config.chart_type, "value") else config.chart_type
     )
     handler = _get_handler(chart_type)
 
@@ -586,6 +597,8 @@ def _get_handler(chart_type: str):
         "violin_plot": _hydrate_violin,
         "sunburst": _hydrate_sunburst,
         "gauge": _hydrate_gauge,
+        "bullet": _hydrate_bullet,
+        "choropleth": _hydrate_choropleth,
     }
     if chart_type not in handlers:
         logger.warning(f"Unknown chart type: {chart_type}, using fallback")
@@ -606,14 +619,8 @@ def _resolve_group_by(config):
 
 def _build_grouped_bar_traces(df, x_col, y_col, group_col, config):
     """Build multi-trace grouped bar chart. One bar trace per group value."""
-    if (
-        x_col not in df.columns
-        or y_col not in df.columns
-        or group_col not in df.columns
-    ):
-        logger.warning(
-            f"grouped_bar: missing columns x={x_col} y={y_col} group={group_col}"
-        )
+    if x_col not in df.columns or y_col not in df.columns or group_col not in df.columns:
+        logger.warning(f"grouped_bar: missing columns x={x_col} y={y_col} group={group_col}")
         return []
 
     group_totals = (
@@ -670,14 +677,8 @@ def _build_grouped_bar_traces(df, x_col, y_col, group_col, config):
 
 def _build_multi_line_traces(df, x_col, y_col, group_col, config, max_points=1000):
     """Build multi-trace line chart. One line per group value."""
-    if (
-        x_col not in df.columns
-        or y_col not in df.columns
-        or group_col not in df.columns
-    ):
-        logger.warning(
-            f"multi_line: missing columns x={x_col} y={y_col} group={group_col}"
-        )
+    if x_col not in df.columns or y_col not in df.columns or group_col not in df.columns:
+        logger.warning(f"multi_line: missing columns x={x_col} y={y_col} group={group_col}")
         return []
 
     x_is_year = False
@@ -709,9 +710,7 @@ def _build_multi_line_traces(df, x_col, y_col, group_col, config, max_points=100
     for i, grp_val in enumerate(top_groups):
         grp_df = df.filter(pl.col(group_col) == grp_val)
         try:
-            agg_df = _safe_aggregate(
-                grp_df, x_col, y_col, config.aggregation, sort_mode="x_asc"
-            )
+            agg_df = _safe_aggregate(grp_df, x_col, y_col, config.aggregation, sort_mode="x_asc")
         except HydrationError:
             continue
         if agg_df.is_empty():
@@ -793,18 +792,14 @@ def _hydrate_bar(df, config):
             }
         )
         agg_df = pl.concat([top_df, other_row])
-        logger.info(
-            f"Bar chart capped: {total_categories} → {MAX_BAR_CATEGORIES} categories"
-        )
+        logger.info(f"Bar chart capped: {total_categories} → {MAX_BAR_CATEGORIES} categories")
 
     # Sort bins in natural order (not by value) when auto-binned
     if bin_order_map:
         agg_df = (
             agg_df.with_columns(
                 pl.col("x")
-                .map_elements(
-                    lambda v: bin_order_map.get(v, 999), return_dtype=pl.Int32
-                )
+                .map_elements(lambda v: bin_order_map.get(v, 999), return_dtype=pl.Int32)
                 .alias("_bin_order")
             )
             .sort("_bin_order")
@@ -862,9 +857,7 @@ def _hydrate_line(df, config):
         agg_df = (
             agg_df.with_columns(
                 pl.col("x")
-                .map_elements(
-                    lambda v: bin_order_map_line.get(v, 999), return_dtype=pl.Int32
-                )
+                .map_elements(lambda v: bin_order_map_line.get(v, 999), return_dtype=pl.Int32)
                 .alias("_bin_order")
             )
             .sort("_bin_order")
@@ -905,11 +898,7 @@ def _hydrate_line(df, config):
 
     # Add axis hints for the frontend
     trace["_axis_metadata"] = {
-        "x": {
-            "format": "date"
-            if (df[x].dtype in TEMPORAL_DTYPES or x_is_year)
-            else "number"
-        },
+        "x": {"format": "date" if (df[x].dtype in TEMPORAL_DTYPES or x_is_year) else "number"},
         "y": {"format": _get_col_format(y)},
     }
 
@@ -1088,9 +1077,7 @@ def _build_scatter_by_group(df, config, group_col):
     max_points = 500
     traces = []
     for i, grp_val in enumerate(top_groups):
-        grp_df = (
-            df.filter(pl.col(group_col) == grp_val).select([x_col, y_col]).drop_nulls()
-        )
+        grp_df = df.filter(pl.col(group_col) == grp_val).select([x_col, y_col]).drop_nulls()
         if len(grp_df) > max_points:
             grp_df = grp_df.sample(n=max_points, seed=42)
 
@@ -1127,9 +1114,7 @@ def _hydrate_scatter(df, config):
 
     if len(config.columns) >= 3:
         numeric_cols = [
-            c
-            for c in config.columns[1:]
-            if c in df.columns and df[c].dtype in NUMERIC_DTYPES
+            c for c in config.columns[1:] if c in df.columns and df[c].dtype in NUMERIC_DTYPES
         ]
         if len(numeric_cols) >= 2:
             return _build_scatter_multi_y(df, config, numeric_cols)
@@ -1140,9 +1125,7 @@ def _hydrate_scatter(df, config):
     total_rows = len(df)
     if total_rows > MAX_SCATTER_POINTS:
         df = df.sample(n=MAX_SCATTER_POINTS, seed=42)
-        logger.info(
-            f"Scatter chart sampled: {total_rows:,} → {MAX_SCATTER_POINTS} points"
-        )
+        logger.info(f"Scatter chart sampled: {total_rows:,} → {MAX_SCATTER_POINTS} points")
 
     if color:
         triples = [
@@ -1167,9 +1150,7 @@ def _hydrate_scatter(df, config):
             },
         }
     else:
-        pairs = [
-            (xv, yv) for xv, yv in zip(df[x], df[y]) if pd.notna(xv) and pd.notna(yv)
-        ]
+        pairs = [(xv, yv) for xv, yv in zip(df[x], df[y]) if pd.notna(xv) and pd.notna(yv)]
         if not pairs:
             return []
         xs, ys = zip(*pairs)
@@ -1179,15 +1160,13 @@ def _hydrate_scatter(df, config):
         rng = np.random.default_rng(42)
         x_unique = len(set(xs_list))
         if x_unique < len(xs_list) * 0.3 and all(
-            isinstance(v, (int, float)) and float(v) == int(float(v))
-            for v in xs_list[:100]
+            isinstance(v, (int, float)) and float(v) == int(float(v)) for v in xs_list[:100]
         ):
             jitter_scale = max(0.2, (max(xs_list) - min(xs_list)) / x_unique * 0.15)
             xs_list = [v + rng.uniform(-jitter_scale, jitter_scale) for v in xs_list]
         y_unique = len(set(ys_list))
         if y_unique < len(ys_list) * 0.3 and all(
-            isinstance(v, (int, float)) and float(v) == int(float(v))
-            for v in ys_list[:100]
+            isinstance(v, (int, float)) and float(v) == int(float(v)) for v in ys_list[:100]
         ):
             jitter_scale = max(0.2, (max(ys_list) - min(ys_list)) / y_unique * 0.15)
             ys_list = [v + rng.uniform(-jitter_scale, jitter_scale) for v in ys_list]
@@ -1229,28 +1208,20 @@ def _hydrate_heatmap(df, config):
     MAX_Y_CATEGORIES = 35
 
     try:
-        base = df.select([c for c in [x, y, z] if c in df.columns]).drop_nulls(
-            subset=[x, y]
-        )
+        base = df.select([c for c in [x, y, z] if c in df.columns]).drop_nulls(subset=[x, y])
         if base.is_empty():
             return []
 
         # Trim very high-cardinality dimensions to top categories by frequency.
-        x_counts = (
-            base.group_by(x).agg(pl.count().alias("cnt")).sort("cnt", descending=True)
-        )
-        y_counts = (
-            base.group_by(y).agg(pl.count().alias("cnt")).sort("cnt", descending=True)
-        )
+        x_counts = base.group_by(x).agg(pl.count().alias("cnt")).sort("cnt", descending=True)
+        y_counts = base.group_by(y).agg(pl.count().alias("cnt")).sort("cnt", descending=True)
         top_x = x_counts.head(MAX_X_CATEGORIES)[x].to_list()
         top_y = y_counts.head(MAX_Y_CATEGORIES)[y].to_list()
         base = base.filter(pl.col(x).is_in(top_x) & pl.col(y).is_in(top_y))
         if base.is_empty():
             return []
 
-        use_numeric_z = bool(
-            z and z in base.columns and base[z].dtype in NUMERIC_DTYPES
-        )
+        use_numeric_z = bool(z and z in base.columns and base[z].dtype in NUMERIC_DTYPES)
         if use_numeric_z:
             if config.aggregation == AggregationType.COUNT:
                 agg_expr = pl.count().alias("value")
@@ -1289,9 +1260,7 @@ def _hydrate_heatmap(df, config):
             }
         ]
     except Exception as e:
-        logger.warning(
-            f"Heatmap matrix generation failed; trying correlation fallback: {e}"
-        )
+        logger.warning(f"Heatmap matrix generation failed; trying correlation fallback: {e}")
         return _hydrate_correlation_heatmap(df)
 
 
@@ -1312,10 +1281,22 @@ def _hydrate_correlation_heatmap(df):
 
 
 def _hydrate_treemap(df, config):
-    if not config.columns:
-        return []
-    path = config.columns[:-1] if len(config.columns) > 1 else [config.columns[0]]
-    val_col = config.columns[-1]
+    group_by = getattr(config, "group_by", None)
+    if isinstance(group_by, list):
+        # Deduplicate: prevent "duplicate output name" when group_by contains
+        # a column already in config.columns[0] — seen with treemap where
+        # both config.columns[0] and group_by[0] are the same column.
+        path = [config.columns[0]] + [g for g in group_by if g != config.columns[0]]
+    elif isinstance(group_by, str):
+        path = [config.columns[0], group_by] if group_by != config.columns[0] else [config.columns[0]]
+    else:
+        path = config.columns[:-1] if len(config.columns) > 1 else [config.columns[0]]
+
+    val_col = config.columns[-1] if config.columns[-1] not in path else config.columns[0]
+    # Ensure val_col is numeric if possible, else use count
+    if val_col in path:
+        val_col = [c for c in df.columns if c not in path and df[c].dtype in NUMERIC_DTYPES]
+        val_col = val_col[0] if val_col else "__count__"
 
     if val_col not in df.columns or df[val_col].dtype not in NUMERIC_DTYPES:
         agg_df = df.group_by(path).agg(pl.count().alias("value"))
@@ -1344,6 +1325,31 @@ def _hydrate_treemap(df, config):
     ]
 
 
+def _auto_detect_group_column(df, x_col, y_col):
+    """Auto-detect a suitable categorical column for grouped/stacked charts when group_by is empty."""
+    categorical_cols = []
+    for col in df.columns:
+        if col in (x_col, y_col):
+            continue
+        dtype = df[col].dtype
+        if dtype in (pl.Utf8, pl.Categorical, pl.Enum):
+            cardinality = df[col].n_unique()
+            if 2 <= cardinality <= 15:
+                categorical_cols.append((col, cardinality))
+
+    if not categorical_cols:
+        return None
+
+    # Prefer column with moderate cardinality (5-10 unique values)
+    for col, card in categorical_cols:
+        if 5 <= card <= 10:
+            return col
+
+    # Fallback to lowest cardinality
+    categorical_cols.sort(key=lambda x: x[1])
+    return categorical_cols[0][0]
+
+
 def _hydrate_grouped_bar(df, config):
     if len(config.columns) < 2:
         return _hydrate_bar(df, config)
@@ -1353,11 +1359,7 @@ def _hydrate_grouped_bar(df, config):
 
     # Multi-metric mode: columns = [x, metric1, metric2, metric3, ...]
     # Used when LLM wants to compare multiple y-metrics side-by-side (e.g. Math+Reading+Writing)
-    y_cols = [
-        c
-        for c in config.columns[1:]
-        if c in df.columns and df[c].dtype in NUMERIC_DTYPES
-    ]
+    y_cols = [c for c in config.columns[1:] if c in df.columns and df[c].dtype in NUMERIC_DTYPES]
     if len(y_cols) >= 2 and (not group_col or group_col not in df.columns):
         traces = []
         for i, yc in enumerate(y_cols[:MAX_GROUP_SERIES]):
@@ -1385,12 +1387,17 @@ def _hydrate_grouped_bar(df, config):
             logger.info(f"Multi-y grouped_bar: {len(traces)} metrics on x={x_col}")
             return traces
 
+    # Auto-detect a suitable group_by column if not provided
     if not group_col or group_col not in df.columns:
-        logger.warning(
-            f"grouped_bar: no valid group_by (config.group_by={config.group_by}), "
-            "falling back to plain bar"
-        )
-        return _hydrate_bar(df, config)
+        group_col = _auto_detect_group_column(df, x_col, y_col)
+        if not group_col:
+            logger.warning(
+                f"grouped_bar: no valid group_by (config.group_by={config.group_by}), "
+                "falling back to plain bar"
+            )
+            return _hydrate_bar(df, config)
+        logger.info(f"grouped_bar: auto-detected group_by='{group_col}' (was empty in config)")
+
     return _build_grouped_bar_traces(df, x_col, y_col, group_col, config)
 
 
@@ -1461,9 +1468,7 @@ def _hydrate_multi_line(df, config):
         if y_col not in df.columns:
             continue
 
-        agg_df = _safe_aggregate(
-            df, x_col, y_col, config.aggregation, sort_mode="x_asc"
-        )
+        agg_df = _safe_aggregate(df, x_col, y_col, config.aggregation, sort_mode="x_asc")
         if agg_df.is_empty():
             continue
 
@@ -1527,9 +1532,7 @@ def _hydrate_stacked_area(df, config):
         if y_col not in df.columns:
             continue
 
-        agg_df = _safe_aggregate(
-            df, x_col, y_col, config.aggregation, sort_mode="x_asc"
-        )
+        agg_df = _safe_aggregate(df, x_col, y_col, config.aggregation, sort_mode="x_asc")
         if agg_df.is_empty():
             continue
 
@@ -1632,9 +1635,7 @@ def _hydrate_radar(df, config):
                     "r": vals,
                     "theta": axes,
                     "fill": "toself",
-                    "name": str(row[cat_col])
-                    if cat_col in df.columns
-                    else f"Series {len(traces)}",
+                    "name": str(row[cat_col]) if cat_col in df.columns else f"Series {len(traces)}",
                 }
             )
         return traces[:5]  # cap at 5 overlapping webs for readability
@@ -1789,11 +1790,20 @@ def _hydrate_violin(df, config):
 
 def _hydrate_sunburst(df, config):
     """Sunburst chart - hierarchical radial visualization."""
-    if not config.columns:
-        return []
+    group_by = getattr(config, "group_by", None)
+    if isinstance(group_by, list):
+        # Deduplicate: prevent "duplicate output name" when group_by contains
+        # a column already in config.columns[0]
+        path = [config.columns[0]] + [g for g in group_by if g != config.columns[0]]
+    elif isinstance(group_by, str):
+        path = [config.columns[0], group_by] if group_by != config.columns[0] else [config.columns[0]]
+    else:
+        path = config.columns[:-1] if len(config.columns) > 1 else [config.columns[0]]
 
-    path = config.columns[:-1] if len(config.columns) > 1 else [config.columns[0]]
-    val_col = config.columns[-1]
+    val_col = config.columns[-1] if config.columns[-1] not in path else config.columns[0]
+    if val_col in path:
+        val_col = [c for c in df.columns if c not in path and df[c].dtype in NUMERIC_DTYPES]
+        val_col = val_col[0] if val_col else "__count__"
 
     if val_col not in df.columns or df[val_col].dtype not in NUMERIC_DTYPES:
         agg_df = df.group_by(path).agg(pl.count().alias("value"))
@@ -1884,6 +1894,178 @@ def _hydrate_gauge(df, config):
     ]
 
 
+def _hydrate_bullet(df, config):
+    """Bullet chart - indicator performance visualization."""
+    if not config.columns:
+        return []
+
+    val_col = config.columns[0]
+    target_col = config.columns[1] if len(config.columns) > 1 else None
+
+    if val_col not in df.columns:
+        return []
+
+    # Calculate current value
+    if config.aggregation == AggregationType.COUNT:
+        value = len(df)
+    elif config.aggregation == AggregationType.SUM:
+        value = df[val_col].sum()
+    elif config.aggregation == AggregationType.MEAN:
+        value = df[val_col].mean()
+    else:
+        value = df[val_col].sum()
+
+    # Calculate target value
+    if target_col and target_col in df.columns:
+        target = df[target_col].mean()  # Use mean of target column
+    else:
+        # Heuristic target: if no target column, use 110% of mean or a safe multiplier
+        avg = df[val_col].mean() if df[val_col].dtype in NUMERIC_DTYPES else value
+        target = (avg * 1.1) if avg else (float(value) * 1.1)
+
+    max_val = max(float(value or 0), float(target or 0)) * 1.2
+
+    return [
+        {
+            "type": "indicator",
+            "mode": "number+gauge+delta",
+            "value": float(value) if value is not None else 0,
+            "delta": {"reference": float(target)},
+            "gauge": {
+                "shape": "bullet",
+                "axis": {"range": [None, max_val]},
+                "threshold": {
+                    "line": {"color": "red", "width": 2},
+                    "thickness": 0.75,
+                    "value": float(target),
+                },
+                "steps": [
+                    {"range": [0, max_val * 0.5], "color": "lightgray"},
+                    {"range": [max_val * 0.5, max_val * 0.8], "color": "gray"},
+                ],
+                "bar": {"color": "#6366f1"},
+            },
+            "title": {"text": config.title},
+        }
+    ]
+
+
+def _hydrate_choropleth(df, config):
+    """Choropleth map - geographic data visualization."""
+    if len(config.columns) < 2:
+        return []
+
+    loc_col, val_col = config.columns[0], config.columns[1]
+
+    if loc_col not in df.columns or val_col not in df.columns:
+        return []
+
+    agg_df = _safe_aggregate(df, loc_col, val_col, config.aggregation)
+    if agg_df.is_empty():
+        return []
+
+    # Detect location format (very basic)
+    first_val = str(agg_df["x"][0])
+    location_mode = "ISO-3" if len(first_val) == 3 else "country names"
+
+    return [
+        {
+            "type": "choropleth",
+            "locations": agg_df["x"].to_list(),
+            "z": agg_df["y"].to_list(),
+            "locationmode": location_mode,
+            "colorscale": "Viridis",
+            "autocolorscale": False,
+            "marker": {"line": {"color": "rgb(255,255,255)", "width": 1}},
+            "colorbar": {"title": val_col, "thickness": 10},
+        }
+    ]
+
+
+def hydrate_pivot_table(df, config):
+    """Pivot Table - multi-dimensional aggregated matrix."""
+    # config.columns[0] = row
+    # config.columns[1] = col
+    # config.columns[2] = value
+    cols = getattr(config, "columns", [])
+    if len(cols) < 3:
+        return {"error": "Pivot table requires row, column, and value fields."}
+
+    row, col, val = cols[0], cols[1], cols[2]
+
+    try:
+        # Convert to pandas for pivot_table (polars pivot is a bit different)
+        pdf = df.to_pandas()
+        agg_func = (
+            config.aggregation.value if hasattr(config.aggregation, "value") else config.aggregation
+        )
+        if agg_func == "nunique":
+            agg_func = "nunique"
+        elif agg_func == "count":
+            agg_func = "count"
+
+        pivot = pdf.pivot_table(index=row, columns=col, values=val, aggfunc=agg_func).fillna(0)
+
+        return {
+            "rows": pivot.index.tolist(),
+            "columns": pivot.columns.tolist(),
+            "data": pivot.values.tolist(),
+            "row_label": row,
+            "col_label": col,
+            "value_label": f"{agg_func} of {val}",
+        }
+    except Exception as e:
+        logger.error(f"Pivot table hydration failed: {e}")
+        return {"error": str(e)}
+
+
+def hydrate_anomaly_feed(df, config):
+    """Anomaly Feed - automatic outlier detection and reporting."""
+    anomalies = []
+
+    # Use specified columns if available, otherwise scan numeric columns
+    scan_cols = getattr(config, "columns", None)
+    if not scan_cols:
+        scan_cols = [c for c in df.columns if df[c].dtype in NUMERIC_DTYPES]
+
+    for col in scan_cols[:5]:  # Scan up to 5 cols
+        if col not in df.columns:
+            continue
+
+        series = df[col].drop_nulls()
+        if len(series) < 10:
+            continue
+
+        try:
+            mean = series.mean()
+            std = series.std()
+            if std == 0 or std is None:
+                continue
+
+            # Simple Z-score detection
+            outliers = (
+                df.filter((pl.col(col) - mean).abs() > (3 * std))
+                .sort((pl.col(col) - mean).abs(), descending=True)
+                .head(3)
+            )
+
+            for row in outliers.to_dicts():
+                val = row[col]
+                anomalies.append(
+                    {
+                        "column": col,
+                        "value": val,
+                        "description": f"Abnormally {'high' if val > mean else 'low'} value in {col}",
+                        "severity": "high" if abs(val - mean) > 4 * std else "medium",
+                        "timestamp": str(row.get("date", row.get("timestamp", row.get("id", "")))),
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"Anomaly detection failed for column {col}: {e}")
+
+    return sorted(anomalies, key=lambda x: 1 if x["severity"] == "high" else 0, reverse=True)[:10]
+
+
 def _hydrate_fallback(df, config):
     temp = ChartConfig(
         type=config.type,
@@ -1943,10 +2125,7 @@ def hydrate_chart_extras(
                     extras["reference_line_label"] = "90th Percentile"
 
     # Compute outlier indices
-    if (
-        chart_config.get("highlight_outliers", False)
-        and df[y_col].dtype in NUMERIC_DTYPES
-    ):
+    if chart_config.get("highlight_outliers", False) and df[y_col].dtype in NUMERIC_DTYPES:
         col_data = df[y_col].drop_nulls().cast(pl.Float64)
         if len(col_data) > 10:
             mean_val = float(col_data.mean())
@@ -1974,8 +2153,7 @@ def hydrate_chart_extras(
 
             for kn in key_numbers:
                 if kn.get("value") and (
-                    "avg" in kn.get("value", "").lower()
-                    or "mean" in kn.get("value", "").lower()
+                    "avg" in kn.get("value", "").lower() or "mean" in kn.get("value", "").lower()
                 ):
                     # This is a placeholder that needs actual value
                     kn["_computed"] = agg_value
@@ -1990,9 +2168,7 @@ def hydrate_chart_extras(
                 for grp in unique_groups:
                     grp_lower = str(grp).lower()
                     if grp_lower in label_lower:
-                        grp_data = df.filter(pl.col(group_by) == grp)[
-                            y_col
-                        ].drop_nulls()
+                        grp_data = df.filter(pl.col(group_by) == grp)[y_col].drop_nulls()
                         if len(grp_data) > 0 and grp_data.dtype in NUMERIC_DTYPES:
                             grp_data = grp_data.cast(pl.Float64)
                             grp_agg = _compute_agg_polars(grp_data, aggregation)
@@ -2011,6 +2187,12 @@ def _compute_agg_polars(col_data, aggregation: str) -> float:
             return float(col_data.mean())
         elif aggregation == "median":
             return float(col_data.median())
+        elif aggregation == "std":
+            return float(col_data.std())
+        elif aggregation == "percentile_25":
+            return float(col_data.quantile(0.25))
+        elif aggregation == "percentile_75":
+            return float(col_data.quantile(0.75))
         elif aggregation == "count":
             return float(col_data.count())
         elif aggregation == "min":

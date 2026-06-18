@@ -1,0 +1,59 @@
+{
+  "timestamp": "20260616_022530",
+  "metrics": {
+    "total_datasets": 3,
+    "primary_object_accuracy": 1.0,
+    "participant_precision": 1.0,
+    "participant_recall": 1.0,
+    "abstention_accuracy": 1.0,
+    "failure_count": 0
+  },
+  "results": [
+    {
+      "dataset": "ecommerce_orders.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "ecommerce_orders"
+    },
+    {
+      "dataset": "saas_revenue.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "saas_revenue"
+    },
+    {
+      "dataset": "vehicle_listings.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "vehicle_listings"
+    }
+  ],
+  "failures": []
+}

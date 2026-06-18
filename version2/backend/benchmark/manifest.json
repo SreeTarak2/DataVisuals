@@ -1,0 +1,574 @@
+{
+  "ecommerce_orders.csv": {
+    "description": "Monthly ecommerce metrics. No entity columns.",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "saas_revenue.csv": {
+    "description": "Monthly SaaS metrics. No entity columns.",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "vehicle_listings.csv": {
+    "description": "Vehicle attributes. No entity columns.",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "amazon.csv": {
+    "description": "Amazon product reviews. product_id, user_id, review_id.",
+    "expected_primary_object": "product",
+    "expected_participants": [
+      "review",
+      "user"
+    ]
+  },
+  "Bank_Churn_Classification_Dataset.csv": {
+    "description": "Customer churn data. CustomerID is the identifier.",
+    "expected_primary_object": "customer",
+    "expected_participants": []
+  },
+  "blinkit_dataset.csv": {
+    "description": "Blinkit product catalog. product_id is the identifier.",
+    "expected_primary_object": "product",
+    "expected_participants": []
+  },
+  "bmw.csv": {
+    "description": "BMW vehicle listings. No identifier column.",
+    "expected_primary_object": null,
+    "expected_participants": []
+  },
+  "cleaned_dataset.csv": {
+    "description": "Orders with product references. order_id primary, product_id participates.",
+    "expected_primary_object": "order",
+    "expected_participants": [
+      "product"
+    ]
+  },
+  "drugs_side_effects_drugs_com.csv": {
+    "description": "Drug side effects. drug_name but no drug_id.",
+    "expected_primary_object": null,
+    "expected_participants": []
+  },
+  "global_education_data.csv": {
+    "description": "Education statistics by country. No identifier column.",
+    "expected_primary_object": null,
+    "expected_participants": []
+  },
+  "GlobalWeatherRepository.csv": {
+    "description": "Global weather data. location_name only, no identifier.",
+    "expected_primary_object": null,
+    "expected_participants": []
+  },
+  "gold_prices_10y.csv": {
+    "description": "10-year gold price time series.",
+    "expected_primary_object": null,
+    "expected_participants": []
+  },
+  "hr_clean.csv": {
+    "description": "HR employee records. Employee_ID is the identifier.",
+    "expected_primary_object": "employee",
+    "expected_participants": []
+  },
+  "hr_raw.csv": {
+    "description": "HR raw employee records. Employee_ID is the identifier.",
+    "expected_primary_object": "employee",
+    "expected_participants": []
+  },
+  "mental_health_survey_dataset_300k.csv": {
+    "description": "Mental health survey. participant_id is the identifier.",
+    "expected_primary_object": "participant",
+    "expected_participants": []
+  },
+  "Serayu_Chicken_60k.csv": {
+    "description": "Indonesian chicken sales. Non-English column names.",
+    "expected_primary_object": null,
+    "expected_participants": []
+  },
+  "Sheet1 (Nike Dataset)_Sheet1 (1).csv": {
+    "description": "Nike sales by product/region. No identifier columns.",
+    "expected_primary_object": null,
+    "expected_participants": []
+  },
+  "SPY_close_price_5Y.csv": {
+    "description": "SPY close price time series.",
+    "expected_primary_object": null,
+    "expected_participants": []
+  },
+  "store_customers.csv": {
+    "description": "Customer segmentation. CustomerID is the identifier.",
+    "expected_primary_object": "customer",
+    "expected_participants": []
+  },
+  "student_academic_performance.csv": {
+    "description": "Student performance. Student ID is the identifier.",
+    "expected_primary_object": "student",
+    "expected_participants": []
+  },
+  "SuperStoreOrders - SuperStoreOrders.csv": {
+    "description": "Superstore orders. order_id primary, product_id participates.",
+    "expected_primary_object": "order",
+    "expected_participants": [
+      "product"
+    ]
+  },
+  "supply_chain_data.csv": {
+    "description": "Supply chain. SKU as code \u2014 no clear identifier.",
+    "expected_primary_object": null,
+    "expected_participants": []
+  },
+  "clean_customers.csv": {
+    "description": "Customer master data with customer_id",
+    "expected_primary_object": "customer",
+    "expected_participants": []
+  },
+  "clean_orders.csv": {
+    "description": "Order transactions with customer and product references",
+    "expected_primary_object": "order",
+    "expected_participants": [
+      "customer",
+      "product"
+    ]
+  },
+  "clean_products.csv": {
+    "description": "Product catalog with product_id",
+    "expected_primary_object": "product",
+    "expected_participants": []
+  },
+  "clean_invoices.csv": {
+    "description": "Invoices with customer reference",
+    "expected_primary_object": "invoice",
+    "expected_participants": [
+      "customer"
+    ]
+  },
+  "clean_employees.csv": {
+    "description": "Employee records with employee_id",
+    "expected_primary_object": "employee",
+    "expected_participants": []
+  },
+  "clean_students.csv": {
+    "description": "Student records with student_id",
+    "expected_primary_object": "student",
+    "expected_participants": []
+  },
+  "clean_patients.csv": {
+    "description": "Patient records with patient_id",
+    "expected_primary_object": "patient",
+    "expected_participants": []
+  },
+  "clean_transactions.csv": {
+    "description": "Transactions with account reference",
+    "expected_primary_object": "transaction",
+    "expected_participants": [
+      "account"
+    ]
+  },
+  "clean_suppliers.csv": {
+    "description": "Supplier master data with supplier_id",
+    "expected_primary_object": "supplier",
+    "expected_participants": []
+  },
+  "clean_shipments.csv": {
+    "description": "Shipments with order and supplier references",
+    "expected_primary_object": "shipment",
+    "expected_participants": [
+      "order",
+      "supplier"
+    ]
+  },
+  "denorm_spaces.csv": {
+    "description": "Spaces in column names, mixed case",
+    "expected_primary_object": "order",
+    "expected_participants": [
+      "customer",
+      "product"
+    ]
+  },
+  "denorm_abbreviations.csv": {
+    "description": "Abbreviated column names (cust_id, fname, etc.)",
+    "expected_primary_object": "customer",
+    "expected_participants": []
+  },
+  "denorm_camel_case.csv": {
+    "description": "CamelCase column names with department reference",
+    "expected_primary_object": "employee",
+    "expected_participants": [
+      "department"
+    ]
+  },
+  "denorm_mixed_case.csv": {
+    "description": "Inconsistent casing across column names",
+    "expected_primary_object": "patient",
+    "expected_participants": [
+      "doctor"
+    ]
+  },
+  "denorm_null_heavy.csv": {
+    "description": "Many null values in columns",
+    "expected_primary_object": "student",
+    "expected_participants": []
+  },
+  "denorm_duplicate_rows.csv": {
+    "description": "Duplicate rows and integer IDs",
+    "expected_primary_object": "product",
+    "expected_participants": []
+  },
+  "denorm_non_ascii.csv": {
+    "description": "Non-ASCII characters in data values",
+    "expected_primary_object": "product",
+    "expected_participants": []
+  },
+  "denorm_url_columns.csv": {
+    "description": "URL/link columns mixed in with entity columns",
+    "expected_primary_object": "product",
+    "expected_participants": [
+      "supplier"
+    ]
+  },
+  "denorm_all_lower.csv": {
+    "description": "All lowercase column names",
+    "expected_primary_object": "invoice",
+    "expected_participants": [
+      "client"
+    ]
+  },
+  "denorm_underscore_heavy.csv": {
+    "description": "Multiple underscores and long column names",
+    "expected_primary_object": "shipment",
+    "expected_participants": [
+      "warehouse"
+    ]
+  },
+  "denorm_timestamp_variants.csv": {
+    "description": "Various timestamp formats (created_at, updated, ts)",
+    "expected_primary_object": "transaction",
+    "expected_participants": [
+      "merchant"
+    ]
+  },
+  "denorm_phone_email.csv": {
+    "description": "Phone and email columns alongside entity fields",
+    "expected_primary_object": "contact",
+    "expected_participants": []
+  },
+  "denorm_boolean_flags.csv": {
+    "description": "Boolean flag columns (is_active, has_subscription) mixed with entity",
+    "expected_primary_object": "user",
+    "expected_participants": []
+  },
+  "denorm_amount_variants.csv": {
+    "description": "Multiple amount/price/cost/tax columns",
+    "expected_primary_object": "order",
+    "expected_participants": [
+      "customer"
+    ]
+  },
+  "denorm_code_mixture.csv": {
+    "description": "Columns with code/SKU/barcode patterns mixed in",
+    "expected_primary_object": "product",
+    "expected_participants": []
+  },
+  "adv_no_identifier.csv": {
+    "description": "All columns are attributes, no ID column at all",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_unique_names.csv": {
+    "description": "Name column with all unique values (looks like ID to cardinality)",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_index_column.csv": {
+    "description": "Has Unnamed/index column that should be ignored",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_all_numeric.csv": {
+    "description": "All columns are numeric measures, no entity",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_all_strings.csv": {
+    "description": "All columns are generic strings, no entity",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_generic_names.csv": {
+    "description": "Columns named id/name/type/code \u2014 generic, no specific entity",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_zip_latency.csv": {
+    "description": "High-cardinality location codes (zip codes, lat/lon) that look like IDs",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_status_only.csv": {
+    "description": "Only status/boolean columns, no business entity",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_boolean_id_lookalike.csv": {
+    "description": "Columns with _flag, is_ prefix making them look like booleans, but they're all we have",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_code_only.csv": {
+    "description": "Only code/SKU/reference columns with no descriptive fields",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "noent_stock_prices.csv": {
+    "description": "Stock price time series (Date, Open, High, Low, Close, Volume)",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "noent_monthly_revenue.csv": {
+    "description": "Monthly aggregated revenue by region",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "noent_daily_active_users.csv": {
+    "description": "Daily active user counts \u2014 pure metrics",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "noent_survey_results.csv": {
+    "description": "Survey response aggregates (question, avg_score, count)",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "noent_temperature_readings.csv": {
+    "description": "Sensor temperature readings over time",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "noent_exchange_rates.csv": {
+    "description": "Currency exchange rate time series",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "noent_website_metrics.csv": {
+    "description": "Website analytics metrics (pageviews, bounce_rate, sessions)",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "noent_inventory_counts.csv": {
+    "description": "Warehouse inventory counts by category (aggregated, no entity)",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "noent_quiz_scores.csv": {
+    "description": "Quiz score distributions (score_range, count, percentage)",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "noent_aggregated_orders.csv": {
+    "description": "Pre-aggregated order stats by month (no entity columns)",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "multi_order_details.csv": {
+    "description": "Order details with customer, product, and supplier references",
+    "expected_primary_object": "order",
+    "expected_participants": [
+      "customer",
+      "product",
+      "supplier"
+    ]
+  },
+  "multi_hospital_visits.csv": {
+    "description": "Hospital visits with patient, doctor, and hospital references",
+    "expected_primary_object": "visit",
+    "expected_participants": [
+      "patient",
+      "doctor",
+      "hospital"
+    ]
+  },
+  "multi_course_enrollments.csv": {
+    "description": "Course enrollments with student and course references",
+    "expected_primary_object": "enrollment",
+    "expected_participants": [
+      "student",
+      "course"
+    ]
+  },
+  "multi_support_tickets.csv": {
+    "description": "Support tickets with customer, agent, and product references",
+    "expected_primary_object": "ticket",
+    "expected_participants": [
+      "customer",
+      "agent",
+      "product"
+    ]
+  },
+  "multi_project_tasks.csv": {
+    "description": "Project tasks with project, assignee, and reviewer references",
+    "expected_primary_object": "task",
+    "expected_participants": [
+      "project",
+      "assignee",
+      "reviewer"
+    ]
+  },
+  "adv_hard_ambiguous_accounts.csv": {
+    "description": "account_id, owner_id, contact_id \u2014 multiple competing FK entities",
+    "expected_primary_object": "account",
+    "expected_participants": [
+      "owner",
+      "contact"
+    ]
+  },
+  "adv_hard_ambiguous_entities.csv": {
+    "description": "entity_id, parent_id, child_id, root_id \u2014 generic entity names",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_ambiguous_references.csv": {
+    "description": "ref_id, source_id, target_id, origin_id \u2014 pure FK soup",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_ambiguous_competing.csv": {
+    "description": "lead_id, account_id, opportunity_id, contact_id \u2014 CRM ambiguity. Accepts account as ambiguous alternative.",
+    "expected_primary_object": "lead",
+    "expected_participants": [
+      "account",
+      "contact",
+      "opportunity"
+    ],
+    "accepts_ambiguous": ["account"]
+  },
+  "adv_hard_generic_core.csv": {
+    "description": "id, name, type, status, date \u2014 classic ambiguous schema",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_generic_props.csv": {
+    "description": "key, value, description \u2014 generic KVP table",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_generic_metrics.csv": {
+    "description": "metric, value, unit, period \u2014 aggregated metrics",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_generic_codes.csv": {
+    "description": "code, label, category, sort_order \u2014 lookup table",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_mixed_claims.csv": {
+    "description": "claim_id, policy_id, customer_id, provider_id \u2014 customer has strong pattern",
+    "expected_primary_object": "claim",
+    "expected_participants": [
+      "policy",
+      "customer",
+      "provider"
+    ]
+  },
+  "adv_hard_mixed_policies.csv": {
+    "description": "policy_id, customer_id, agent_id, product_id \u2014 policy should win",
+    "expected_primary_object": "policy",
+    "expected_participants": [
+      "customer",
+      "agent",
+      "product"
+    ]
+  },
+  "adv_hard_mixed_appointments.csv": {
+    "description": "appointment_id, patient_id, doctor_id, room_id \u2014 appointment should win",
+    "expected_primary_object": "appointment",
+    "expected_participants": [
+      "patient",
+      "doctor"
+    ]
+  },
+  "adv_hard_mixed_logistics.csv": {
+    "description": "shipment_id, order_id, warehouse_id, carrier_id \u2014 shipment should win",
+    "expected_primary_object": "shipment",
+    "expected_participants": [
+      "order",
+      "warehouse"
+    ]
+  },
+  "adv_hard_noisy_export.csv": {
+    "description": "tbl_rec_id, acct_num, usr_ref, created_ts \u2014 abbreviated enterprise export",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_noisy_legacy.csv": {
+    "description": "rec_num, cust_no, prod_ref, trx_amt \u2014 legacy system naming",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_noisy_sap.csv": {
+    "description": "MATNR, WERKS, LGORT, BESTQ \u2014 SAP-style capital-letter columns",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_noisy_obfuscated.csv": {
+    "description": "_key, _fld1, _fld2 \u2014 system-generated names, no business meaning",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_traps_date_only.csv": {
+    "description": "date, day_of_week, month, quarter, year \u2014 pure date dimension",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_traps_single_id.csv": {
+    "description": "id, score, normalized_score, percentile \u2014 single system ID, no entity",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_traps_lookup_only.csv": {
+    "description": "country_code, country_name, region \u2014 simple lookup table",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  },
+  "adv_hard_traps_hash_keys.csv": {
+    "description": "row_hash, payload, checksum, version \u2014 system-internal table",
+    "expected_primary_object": null,
+    "expected_participants": [],
+    "abstention_test": true
+  }
+}

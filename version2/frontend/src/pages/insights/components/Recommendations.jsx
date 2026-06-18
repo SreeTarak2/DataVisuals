@@ -15,9 +15,9 @@ const CAT = {
     data_quality: { border: 'border-l-amber-500',  numBg: 'bg-amber-500/15 text-amber-400 border-amber-500/30', iconBg: 'bg-amber-500/10 border-amber-500/20', iconColor: 'text-amber-400',   badge: 'bg-amber-500/10 text-amber-400 border-amber-500/20', badgeText: 'Data Quality'  },
     relationship: { border: 'border-l-blue-500',   numBg: 'bg-blue-500/15 text-blue-400 border-blue-500/30',   iconBg: 'bg-blue-500/10 border-blue-500/20',   iconColor: 'text-blue-400',    badge: 'bg-blue-500/10 text-blue-400 border-blue-500/20',   badgeText: 'Relationship'  },
     anomaly:      { border: 'border-l-red-500',    numBg: 'bg-red-500/10 text-red-400 border-red-500/20',      iconBg: 'bg-red-500/10 border-red-500/20',     iconColor: 'text-red-400',     badge: 'bg-red-500/10 text-red-400 border-red-500/20',      badgeText: 'Anomaly'       },
-    distribution: { border: 'border-l-purple-500', numBg: 'bg-purple-500/15 text-purple-400 border-purple-500/30', iconBg: 'bg-purple-500/10 border-purple-500/20', iconColor: 'text-purple-400', badge: 'bg-purple-500/10 text-purple-400 border-purple-500/20', badgeText: 'Distribution' },
+    distribution: { border: 'border-l-orange-500', numBg: 'bg-orange-500/15 text-orange-400 border-orange-500/30', iconBg: 'bg-orange-500/10 border-orange-500/20', iconColor: 'text-orange-400', badge: 'bg-orange-500/10 text-orange-400 border-orange-500/20', badgeText: 'Distribution' },
     trend:        { border: 'border-l-emerald-500',numBg: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', iconBg: 'bg-emerald-500/10 border-emerald-500/20', iconColor: 'text-emerald-400', badge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20', badgeText: 'Trend' },
-    segment:      { border: 'border-l-purple-500', numBg: 'bg-purple-500/15 text-purple-400 border-purple-500/30', iconBg: 'bg-purple-500/10 border-purple-500/20', iconColor: 'text-purple-400', badge: 'bg-purple-500/10 text-purple-400 border-purple-500/20', badgeText: 'Segment' },
+    segment:      { border: 'border-l-orange-500', numBg: 'bg-orange-500/15 text-orange-400 border-orange-500/30', iconBg: 'bg-orange-500/10 border-orange-500/20', iconColor: 'text-orange-400', badge: 'bg-orange-500/10 text-orange-400 border-orange-500/20', badgeText: 'Segment' },
     positive:     { border: 'border-l-emerald-600',numBg: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20', iconBg: 'bg-emerald-500/10 border-emerald-500/20', iconColor: 'text-emerald-400', badge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20', badgeText: 'Positive' },
 };
 
@@ -99,7 +99,7 @@ const Recommendations = ({ recommendations = [], compact = false, onViewAll, onI
         <div className="backdrop-blur-sm rounded-2xl overflow-hidden border" style={{ backgroundColor: 'var(--surface-1)', borderColor: 'var(--surface-border)' }}>
             <div className="px-5 pt-5 pb-4 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-violet-500/10 border border-violet-500/20 rounded-xl flex items-center justify-center">
+                    <div className="w-8 h-8 bg-orange-500/10 border border-orange-500/20 rounded-xl flex items-center justify-center">
                         <Lightbulb className="w-4 h-4" style={{ color: 'var(--accent-primary)' }} />
                     </div>
                     <div>

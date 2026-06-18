@@ -65,7 +65,7 @@ export default function RegisterPage() {
             <div className="space-y-2">
               <h1 className="text-3xl font-bold tracking-tight text-white">Create Account</h1>
               <p className="text-zinc-400 text-base">
-                Join DataSage and start transforming your data.
+                Join Signal and start transforming your data.
               </p>
             </div>
 
@@ -189,7 +189,7 @@ export default function RegisterPage() {
         </div>
 
         <div className="mt-8 flex flex-col sm:flex-row items-center justify-between text-xs text-zinc-600 gap-4">
-          <p>© 2026 Datasage Inc.</p>
+          <p>© 2026 Signal Inc.</p>
           <div className="flex gap-6 uppercase tracking-wider font-bold">
             <Link to="#" className="hover:text-zinc-400 transition-colors">Privacy</Link>
             <Link to="#" className="hover:text-zinc-400 transition-colors">Terms</Link>

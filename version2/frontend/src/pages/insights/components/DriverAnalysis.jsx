@@ -11,7 +11,7 @@ import { renderBold } from '../../../lib/renderBold';
 const ImportanceBar = ({ value, maxValue, rank }) => {
     const pct = maxValue > 0 ? (value / maxValue) * 100 : 0;
     const colors = [
-        'bg-gradient-to-r from-violet-600 to-violet-400',
+        'bg-gradient-to-r from-orange-600 to-orange-400',
         'bg-gradient-to-r from-blue-600 to-blue-400',
         'bg-gradient-to-r from-cyan-600 to-cyan-400',
         'bg-gradient-to-r from-teal-600 to-teal-400',
@@ -51,13 +51,13 @@ const DriverCard = ({ driver, index, onInvestigate }) => {
                 className="w-full p-4 text-left"
             >
                 <div className="flex items-center gap-3 mb-3">
-                    <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500/20 to-blue-500/20 border border-violet-500/25 flex items-center justify-center shrink-0">
-                        <Target className="w-4 h-4 text-violet-400" />
+                    <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-500/20 to-blue-500/20 border border-orange-500/25 flex items-center justify-center shrink-0">
+                        <Target className="w-4 h-4 text-orange-400" />
                     </div>
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-semibold text-white">
-                                What drives <span className="text-violet-400">{driver.target}</span>?
+                                What drives <span className="text-orange-400">{driver.target}</span>?
                             </span>
                             <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700/60 font-mono uppercase tracking-wider">
                                 {driver.method?.replace('_', ' ')}
@@ -111,7 +111,7 @@ const DriverCard = ({ driver, index, onInvestigate }) => {
                                 onClick={() => onInvestigate(
                                     `Explain the key drivers of "${driver.target}". The top driver is "${driver.drivers?.[0]?.column}" with importance ${driver.drivers?.[0]?.importance}. Is this causal or just correlational? What actions can I take based on these drivers?`
                                 )}
-                                className="flex items-center gap-1.5 text-[13px] text-violet-400 hover:text-violet-300 transition-colors font-medium"
+                                className="flex items-center gap-1.5 text-[13px] text-orange-400 hover:text-orange-300 transition-colors font-medium"
                             >
                                 <MessageSquare className="w-3 h-3" />
                                 Analyze drivers with AI
@@ -144,14 +144,14 @@ const DriverAnalysis = ({ drivers = [], onInvestigate }) => {
         <div className="bg-slate-900/50 backdrop-blur-sm border border-slate-800/60 rounded-2xl overflow-hidden">
             <div className="px-5 pt-5 pb-4">
                 <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-violet-500/10 border border-violet-500/20 rounded-xl flex items-center justify-center">
-                        <Cpu className="w-4 h-4 text-violet-400" />
+                    <div className="w-8 h-8 bg-orange-500/10 border border-orange-500/20 rounded-xl flex items-center justify-center">
+                        <Cpu className="w-4 h-4 text-orange-400" />
                     </div>
                     <div>
                         <h3 className="text-sm font-semibold text-white">Driver Analysis</h3>
                         <p className="text-[13px] text-slate-400 mt-0.5">
                             {totalDrivers} feature{totalDrivers !== 1 ? 's' : ''} across {drivers.length} target{drivers.length !== 1 ? 's' : ''}
-                            <span className="text-violet-400/70 ml-1.5">· Mutual Information</span>
+                            <span className="text-orange-400/70 ml-1.5">· Mutual Information</span>
                         </p>
                     </div>
                 </div>

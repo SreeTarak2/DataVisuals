@@ -8,53 +8,46 @@ python-dotenv
 bcrypt
 passlib
 python-jose[cryptography]
-email-validator
+email-validator          # required at runtime by pydantic.EmailStr
 
 # ── Database ──
-motor
-pymongo
+motor                    # async MongoDB driver
+pymongo                  # sync MongoDB driver (used in background pipeline tasks)
+asyncpg                  # async PostgreSQL driver (used in PostgreSQL connector)
 
 # ── Async / HTTP ──
 aiofiles
 httpx
 
-# ── Task queue ──
-celery
-redis
-watchdog[watchmedo]
-
 # ── Data processing ──
 numpy
 pandas
 polars
-fastexcel
 scipy
-scikit-learn
-duckdb
+scikit-learn            # PCA, KMeans, IsolationForest for statistical analysis
+duckdb                  # SQL query execution engine
 
-# ── AI / Embeddings ──
-sentence-transformers
-langchain-huggingface
-langgraph
-chromadb
-faiss-cpu
-rank-bm25
+# ── AI / Embeddings / Vector Search ──
+sentence-transformers   # text embeddings for semantic search + belief store
+langchain-huggingface   # HuggingFaceEmbeddings integration
+langgraph               # QUIS agentic analysis pipeline
+chromadb                # Belief Store (user knowledge graph)
+faiss-cpu               # Vector index for dataset + query history search
+tiktoken                # Token counting for LLM context management
+rank-bm25               # Optional: BM25 hybrid search (lazy-imported)
 
 # ── Rate limiting ──
 slowapi
 
+# ── Caching (optional — falls back to in-memory) ──
+redis                   # Optional: used in cache_service + WebSocket rate limiter
+
 # ── File handling ──
-python-magic
+python-magic            # MIME type detection for uploaded files
 
 # ── PDF Generation ──
-weasyprint>=60.0
-matplotlib>=3.8.0
-
-# ── Resilience & Retry ──
-tenacity
-tiktoken
+weasyprint
+matplotlib
 
 # ── Misc ──
-requests
-websockets
-
+requests                # CLI eval script (scripts/chatbot_eval_runner.py)

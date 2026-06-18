@@ -493,4 +493,4 @@ The Overlay Renderer service has been developed to production-ready standards wi
 
 ---
 
-**Contact:** DataSage Engineering Team
+**Contact:** Signal Engineering Team

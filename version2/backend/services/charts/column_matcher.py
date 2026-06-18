@@ -6,7 +6,7 @@ Provides intelligent column matching for chart generation.
 Handles cases where LLM suggests column names that don't exactly match
 the dataset columns (case variations, spaces vs underscores, synonyms).
 
-Author: DataSage AI Team
+Author: Signal AI Team
 """
 
 import logging

@@ -42,7 +42,7 @@ const FeatureBento = () => {
                     <FeatureCard
                         icon={Bot}
                         title="Cut reporting time from 4 hours to 15 minutes"
-                        description="Chat with your data in plain English. Just ask 'What dropped our conversion rate on Tuesday?'—DataSage handles the joins, queries, and charting automatically."
+                        description="Chat with your data in plain English. Just ask 'What dropped our conversion rate on Tuesday?'—Signal handles the joins, queries, and charting automatically."
                         className="md:col-span-2 md:row-span-2 bg-[#0D0D0F] border border-white/5 rounded-2xl"
                         index={0}
                     />

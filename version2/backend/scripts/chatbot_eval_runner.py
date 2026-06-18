@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run repeatable chatbot evaluations against DataSage backend and export results
+Run repeatable chatbot evaluations against Signal backend and export results
 for prompt tuning.
 
 Usage example:
@@ -350,7 +350,7 @@ def write_outputs(results: List[Dict[str, Any]], out_dir: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run DataSage chatbot evaluation suite.")
+    parser = argparse.ArgumentParser(description="Run Signal chatbot evaluation suite.")
     parser.add_argument("--base-url", default="http://localhost:8000", help="Backend base URL.")
     parser.add_argument("--email", required=True, help="Login email.")
     parser.add_argument("--password", required=True, help="Login password.")

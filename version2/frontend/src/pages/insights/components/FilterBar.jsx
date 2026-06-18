@@ -13,13 +13,13 @@ const FilterChip = ({ column, value, onRemove }) => (
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.9 }}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-violet-500/15 text-violet-300 border border-violet-500/25 rounded-lg text-xs font-medium"
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-orange-500/15 text-orange-300 border border-orange-500/25 rounded-lg text-xs font-medium"
     >
         <span className="text-slate-400">{column}:</span>
         <span className="font-semibold">{value}</span>
         <button
             onClick={onRemove}
-            className="ml-0.5 p-0.5 hover:bg-violet-500/20 rounded transition-colors"
+            className="ml-0.5 p-0.5 hover:bg-orange-500/20 rounded transition-colors"
         >
             <X className="w-3 h-3" />
         </button>
@@ -119,7 +119,7 @@ const FilterBar = ({ appliedFilters = {}, filteredRowCount, onApplyFilters, onCl
                             onChange={(e) => setColumn(e.target.value)}
                             onKeyDown={handleKeyDown}
                             placeholder="column"
-                            className="w-24 px-2 py-1 text-xs bg-slate-800/80 border border-slate-700/60 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-violet-500/50"
+                            className="w-24 px-2 py-1 text-xs bg-slate-800/80 border border-slate-700/60 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-orange-500/50"
                         />
                         <span className="text-slate-600 text-xs">:</span>
                         <input
@@ -128,12 +128,12 @@ const FilterBar = ({ appliedFilters = {}, filteredRowCount, onApplyFilters, onCl
                             onChange={(e) => setValue(e.target.value)}
                             onKeyDown={handleKeyDown}
                             placeholder="value"
-                            className="w-24 px-2 py-1 text-xs bg-slate-800/80 border border-slate-700/60 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-violet-500/50"
+                            className="w-24 px-2 py-1 text-xs bg-slate-800/80 border border-slate-700/60 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-orange-500/50"
                         />
                         <button
                             onClick={handleAdd}
                             disabled={!column.trim() || !value.trim()}
-                            className="px-2 py-1 text-xs bg-violet-600 text-white rounded-lg hover:bg-violet-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed font-medium"
+                            className="px-2 py-1 text-xs bg-orange-600 text-white rounded-lg hover:bg-orange-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed font-medium"
                         >
                             Apply
                         </button>

@@ -1,5 +1,5 @@
 """
-Cache Service for DataSage AI
+Cache Service for Signal AI
 ==============================
 
 Provides caching layer for DataFrames and other expensive-to-compute data.

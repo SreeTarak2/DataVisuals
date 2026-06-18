@@ -1,0 +1,19 @@
+{
+  "timestamp": "20260616_030305",
+  "total_datasets": 22,
+  "failure_count": 1,
+  "failures": [
+    {
+      "dataset": "student_academic_performance.csv",
+      "category": "primary_object",
+      "expected_primary": "student",
+      "predicted_primary": null,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected primary 'student', got 'None'"
+    }
+  ],
+  "failure_categories": {
+    "primary_object": 1
+  }
+}

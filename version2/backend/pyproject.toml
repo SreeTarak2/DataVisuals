@@ -1,0 +1,76 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Signal backend API"
+requires-python = ">=3.11"
+dependencies = [
+    # ── Web framework & server ──
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+    "python-dotenv",
+    # ── Auth ──
+    "bcrypt",
+    "passlib",
+    "python-jose[cryptography]",
+    "email-validator",
+    # ── Database ──
+    "motor",
+    "pymongo",
+    # ── Async / HTTP ──
+    "aiofiles",
+    "httpx",
+    # ── Data processing ──
+    "numpy",
+    "pandas",
+    "polars",
+    "scipy",
+    "scikit-learn",
+    "duckdb",
+    # ── AI / Embeddings / Vector Search ──
+    "torch",  # pinned to CPU via [tool.uv.sources] below
+    "sentence-transformers",
+    "langchain-huggingface",
+    "langgraph",
+    "chromadb",
+    "faiss-cpu",
+    "tiktoken",
+    "rank-bm25",
+    # ── Rate limiting ──
+    "slowapi",
+    # ── Caching (optional — falls back to in-memory) ──
+    "redis",
+    # ── File handling ──
+    "python-magic",
+    # ── PDF Generation ──
+    "weasyprint",
+    "matplotlib",
+    # ── Misc ──
+    "requests",
+    "falkordb>=1.6.1",
+    "asyncpg>=0.31.0",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.12",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

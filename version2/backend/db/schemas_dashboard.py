@@ -28,6 +28,8 @@ class ComponentType(str, Enum):
     CHART = "chart"
     TABLE = "table"
     TEXT = "text"
+    PIVOT_TABLE = "pivot_table"
+    ANOMALY_FEED = "anomaly_feed"
 
 
 class ChartType(str, Enum):
@@ -45,6 +47,10 @@ class ChartType(str, Enum):
     # Multi-series charts
     MULTI_LINE = "multi_line"
     STACKED_AREA = "stacked_area"
+    DUAL_AXIS = "dual_axis"
+    COMBO = "combo"
+    FACET = "facet"
+    SMALL_MULTIPLES = "small_multiples"
     # New chart types
     RADAR = "radar"
     BUBBLE = "bubble"
@@ -54,6 +60,8 @@ class ChartType(str, Enum):
     VIOLIN = "violin"
     SUNBURST = "sunburst"
     GAUGE = "gauge"
+    BULLET = "bullet"
+    CHOROPLETH = "choropleth"
     CORRELATION_MATRIX = "correlation_matrix"
 
 
@@ -66,6 +74,17 @@ class AggregationType(str, Enum):
     NONE = "none"
     MAX = "max"
     MIN = "min"
+    MEDIAN = "median"
+    STD = "std"
+    PERCENTILE_25 = "percentile_25"
+    PERCENTILE_75 = "percentile_75"
+
+
+class PriorityLevel(str, Enum):
+    P1 = "P1"  # Hero — always full width, top of section
+    P2 = "P2"  # Featured — double width, second row
+    P3 = "P3"  # Standard — default
+    P4 = "P4"  # Supplementary — compact, below fold
 
 
 class LayoutGrid(str, Enum):
@@ -82,6 +101,8 @@ class BaseComponentConfig(BaseModel):
     type: ComponentType
     title: str = Field(..., min_length=1, max_length=100)
     span: int = Field(1, ge=1, le=4)
+    priority: Optional[PriorityLevel] = None
+    priority_reason: Optional[str] = None
 
     class Config:
         extra = "forbid"
@@ -116,6 +137,16 @@ class KpiConfig(BaseComponentConfig):
                 "none": "none",
                 "max": "max",
                 "min": "min",
+                "median": "median",
+                "std": "std",
+                "standard_deviation": "std",
+                "p25": "percentile_25",
+                "percentile_25": "percentile_25",
+                "q1": "percentile_25",
+                "p75": "percentile_75",
+                "percentile_75": "percentile_75",
+                "q3": "percentile_75",
+                "iqr": "percentile_75",
             }
             return mapping.get(v, v)
         return v
@@ -193,6 +224,25 @@ class ChartConfig(BaseComponentConfig):
             "correlation_matrix": "correlation_matrix",
             "correlation": "correlation_matrix",
             "matrix": "correlation_matrix",
+            # Multi-series chart types
+            "dual_axis": "dual_axis",
+            "dual_axis_chart": "dual_axis",
+            "dual_y": "dual_axis",
+            "secondary_axis": "dual_axis",
+            "combo": "combo",
+            "combo_chart": "combo",
+            "combination": "combo",
+            "combination_chart": "combo",
+            "bar_line": "combo",
+            "bar_and_line": "combo",
+            "facet": "facet",
+            "faceted": "facet",
+            "facet_chart": "facet",
+            "small_multiples": "small_multiples",
+            "small_multiple": "small_multiples",
+            "multiples": "small_multiples",
+            "panel": "facet",
+            "panels": "facet",
         }
         if rt in mapping:
             return mapping[rt]
@@ -232,6 +282,16 @@ class ChartConfig(BaseComponentConfig):
                 "none": "none",
                 "max": "max",
                 "min": "min",
+                "median": "median",
+                "std": "std",
+                "standard_deviation": "std",
+                "p25": "percentile_25",
+                "percentile_25": "percentile_25",
+                "q1": "percentile_25",
+                "p75": "percentile_75",
+                "percentile_75": "percentile_75",
+                "q3": "percentile_75",
+                "iqr": "percentile_75",
             }
             return mapping.get(v, v)
         return v
@@ -239,23 +299,28 @@ class ChartConfig(BaseComponentConfig):
     @model_validator(mode="after")
     def validate_chart(self):
         t = self.chart_type
+        t_value = t.value if hasattr(t, "value") else str(t)
         cols = self.columns
 
         # Pie supports 1 column (categorical distribution) or 2 columns (label + value)
-        if t == ChartType.PIE and len(cols) < 1:
+        if t_value == ChartType.PIE.value and len(cols) < 1:
             raise ValueError("Pie requires at least one column.")
 
         if (
-            t
+            t_value
             in [
-                ChartType.BAR,
-                ChartType.LINE,
-                ChartType.GROUPED_BAR,
-                ChartType.STACKED_BAR,
+                ChartType.BAR.value,
+                ChartType.LINE.value,
+                ChartType.GROUPED_BAR.value,
+                ChartType.STACKED_BAR.value,
+                ChartType.MULTI_LINE.value,
+                ChartType.STACKED_AREA.value,
+                ChartType.SCATTER.value,
+                ChartType.AREA.value,
             ]
             and len(cols) < 2
         ):
-            raise ValueError("Bar/Line/Grouped-Bar require at least x and y columns.")
+            raise ValueError(f"{t_value} requires at least x and y columns.")
 
         return self
 
@@ -278,9 +343,28 @@ class TextConfig(BaseComponentConfig):
 
 
 # -------------------------
+# PIVOT TABLE COMPONENT
+# -------------------------
+class PivotTableConfig(BaseComponentConfig):
+    type: Literal[ComponentType.PIVOT_TABLE] = ComponentType.PIVOT_TABLE
+    columns: List[str] = Field(..., min_length=3, max_length=6)  # row, col, val
+    aggregation: AggregationType = AggregationType.SUM
+
+
+# -------------------------
+# ANOMALY FEED COMPONENT
+# -------------------------
+class AnomalyFeedConfig(BaseComponentConfig):
+    type: Literal[ComponentType.ANOMALY_FEED] = ComponentType.ANOMALY_FEED
+    columns: Optional[List[str]] = None
+
+
+# -------------------------
 # UNION
 # -------------------------
-ComponentConfig = Union[KpiConfig, ChartConfig, TableConfig, TextConfig]
+ComponentConfig = Union[
+    KpiConfig, ChartConfig, TableConfig, TextConfig, PivotTableConfig, AnomalyFeedConfig
+]
 
 
 # -------------------------
@@ -312,9 +396,7 @@ class DashboardBlueprint(BaseModel):
 
         for comp in comps:
             if comp.span > max_cols:
-                raise ValueError(
-                    f"Component span {comp.span} exceeds grid width {max_cols}"
-                )
+                raise ValueError(f"Component span {comp.span} exceeds grid width {max_cols}")
 
         return self
 
@@ -341,9 +423,7 @@ class SchemaRepairer:
     """
 
     @staticmethod
-    def repair(
-        blueprint_dict: Dict[str, Any], schema_columns: Sequence
-    ) -> Dict[str, Any]:
+    def repair(blueprint_dict: Dict[str, Any], schema_columns: Sequence) -> Dict[str, Any]:
         # Defensive inputs
         if not isinstance(blueprint_dict, dict):
             blueprint_dict = {}
@@ -384,6 +464,10 @@ class SchemaRepairer:
                 fixed = SchemaRepairer._fix_chart(comp, all_cols, all_cols_lower)
             elif ctype == "table":
                 fixed = SchemaRepairer._fix_table(comp, all_cols, all_cols_lower)
+            elif ctype == "pivot_table":
+                fixed = SchemaRepairer._fix_pivot_table(comp, all_cols, all_cols_lower)
+            elif ctype == "anomaly_feed":
+                fixed = SchemaRepairer._fix_anomaly_feed(comp, all_cols, all_cols_lower)
             else:
                 # unknown, drop it
                 logger.debug("Dropping unknown component type: %r", ctype)
@@ -447,6 +531,25 @@ class SchemaRepairer:
             "correlation_matrix": "correlation_matrix",
             "correlation": "correlation_matrix",
             "matrix": "correlation_matrix",
+            # Multi-series chart types
+            "dual_axis": "dual_axis",
+            "dual_axis_chart": "dual_axis",
+            "dual_y": "dual_axis",
+            "secondary_axis": "dual_axis",
+            "combo": "combo",
+            "combo_chart": "combo",
+            "combination": "combo",
+            "combination_chart": "combo",
+            "bar_line": "combo",
+            "bar_and_line": "combo",
+            "facet": "facet",
+            "faceted": "facet",
+            "facet_chart": "facet",
+            "small_multiples": "small_multiples",
+            "small_multiple": "small_multiples",
+            "multiples": "small_multiples",
+            "panel": "facet",
+            "panels": "facet",
         }
         if rt in mapping:
             return mapping[rt]
@@ -500,13 +603,25 @@ class SchemaRepairer:
             )
             or "__all__"
         )
-        col_fixed = (
-            SchemaRepairer._fuzzy_col(col, all_cols, all_cols_lower) or "__all__"
-        )
+        col_fixed = SchemaRepairer._fuzzy_col(col, all_cols, all_cols_lower) or "__all__"
         agg = (cfg.get("aggregation") or "count").lower()
         agg = (
             agg
-            if agg in {"sum", "mean", "count", "nunique", "first", "none", "max", "min"}
+            if agg
+            in {
+                "sum",
+                "mean",
+                "count",
+                "nunique",
+                "first",
+                "none",
+                "max",
+                "min",
+                "median",
+                "std",
+                "percentile_25",
+                "percentile_75",
+            }
             else "count"
         )
         return {
@@ -541,18 +656,28 @@ class SchemaRepairer:
         agg = (cfg.get("aggregation") or "sum").lower()
         agg = (
             agg
-            if agg in {"sum", "mean", "count", "nunique", "first", "none", "max", "min"}
+            if agg
+            in {
+                "sum",
+                "mean",
+                "count",
+                "nunique",
+                "first",
+                "none",
+                "max",
+                "min",
+                "median",
+                "std",
+                "percentile_25",
+                "percentile_75",
+            }
             else "sum"
         )
         group = cfg.get("group_by") or []
         if isinstance(group, str):
             group = [group]
         fixed_group = [
-            g
-            for g in (
-                SchemaRepairer._fuzzy_col(g, all_cols, all_cols_lower) for g in group
-            )
-            if g
+            g for g in (SchemaRepairer._fuzzy_col(g, all_cols, all_cols_lower) for g in group) if g
         ]
         return {
             "type": "chart",
@@ -627,6 +752,53 @@ class SchemaRepairer:
                 },
             )
 
+    @staticmethod
+    def _fix_pivot_table(
+        comp: Dict[str, Any], all_cols: List[str], all_cols_lower: Dict[str, str]
+    ) -> Dict[str, Any]:
+        cfg = comp.get("config") or {}
+        title = comp.get("title") or cfg.get("title") or "Pivot Analysis"
+        span = int(comp.get("span", 4) or 4)
+        raw_cols = cfg.get("columns") or []
+        fixed_cols = []
+        for c in raw_cols:
+            match = SchemaRepairer._fuzzy_col(c, all_cols, all_cols_lower)
+            if match:
+                fixed_cols.append(match)
+        if len(fixed_cols) < 3:
+            # Fallback to first 3 columns
+            fixed_cols = all_cols[:3] if len(all_cols) >= 3 else all_cols
+        return {
+            "type": "pivot_table",
+            "title": title,
+            "span": span,
+            "config": {
+                "title": title,
+                "columns": fixed_cols,
+                "aggregation": cfg.get("aggregation", "sum"),
+            },
+        }
+
+    @staticmethod
+    def _fix_anomaly_feed(
+        comp: Dict[str, Any], all_cols: List[str], all_cols_lower: Dict[str, str]
+    ) -> Dict[str, Any]:
+        cfg = comp.get("config") or {}
+        title = comp.get("title") or cfg.get("title") or "Anomaly Insights"
+        span = int(comp.get("span", 2) or 2)
+        raw_cols = cfg.get("columns") or []
+        fixed_cols = []
+        for c in raw_cols:
+            match = SchemaRepairer._fuzzy_col(c, all_cols, all_cols_lower)
+            if match:
+                fixed_cols.append(match)
+        return {
+            "type": "anomaly_feed",
+            "title": title,
+            "span": span,
+            "config": {"title": title, "columns": fixed_cols or None},
+        }
+
 
 __all__ = [
     "DashboardBlueprint",
@@ -640,4 +812,5 @@ __all__ = [
     "ChartType",
     "AggregationType",
     "LayoutGrid",
+    "PriorityLevel",
 ]

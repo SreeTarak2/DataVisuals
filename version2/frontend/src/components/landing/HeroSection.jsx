@@ -74,7 +74,7 @@ const HeroSection = () => {
                                 <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
                             </span>
                             <span className="text-[11px] font-medium text-neutral-300 tracking-tight group-hover:text-white transition-colors">
-                                Meet DataSage — AI for your data stack
+                                Meet Signal — AI for your data stack
                             </span>
                             <ChevronRight className="w-3.5 h-3.5 text-neutral-500 group-hover:text-white group-hover:translate-x-0.5 transition-all" />
                         </Link>
@@ -253,7 +253,7 @@ const HeroSection = () => {
                                                     <p className="text-[10px] text-blue-400 uppercase font-bold tracking-widest">AI Observation</p>
                                                 </div>
                                                 <p className="text-xs text-neutral-300 leading-relaxed font-medium">
-                                                    "Revenue spike detected in North America. Correlating with recent campaign 'DataSage-v2' deployment."
+                                                    "Revenue spike detected in North America. Correlating with recent campaign 'Signal-v2' deployment."
                                                 </p>
                                             </motion.div>
                                         </div>

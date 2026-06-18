@@ -569,10 +569,10 @@ Include:
 
 ## License
 
-Internal DataSage Project - All Rights Reserved
+Internal Signal Project - All Rights Reserved
 
 ---
 
 **Last Updated:** 2025-01-10  
-**Maintained By:** DataSage Team  
-**Contact:** [team@datasage.internal]
+**Maintained By:** Signal Team  
+**Contact:** [team@signal.internal]

@@ -15,7 +15,7 @@ Key Features:
 5. Simpson's Paradox detection - Catches dangerous trend reversals
 6. Insight ranking - Score by significance × effect size × novelty
 
-Author: DataSage AI
+Author: Signal AI
 """
 
 import logging

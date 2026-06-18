@@ -12,7 +12,7 @@ Features:
 - Performance monitoring
 - Per-point statistical intelligence
 
-Author: DataSage AI Team
+Author: Signal Team
 Version: 2.1 (Production + Intelligence)
 """
 
@@ -152,9 +152,7 @@ class ChartRenderService:
             total_records = len(df)
 
             # ── Rank: sorted descending (1 = highest) ──
-            rank_sorted = sorted(
-                range(n), key=lambda i: numeric_values[i], reverse=True
-            )
+            rank_sorted = sorted(range(n), key=lambda i: numeric_values[i], reverse=True)
             rank_map = {}
             for rank_pos, idx in enumerate(rank_sorted):
                 rank_map[idx] = rank_pos + 1
@@ -263,9 +261,7 @@ class ChartRenderService:
             elif vs_avg_pct > -40:
                 parts.append(f"{vs_avg_pct:+.1f}% below average — underperforming")
             else:
-                parts.append(
-                    f"{vs_avg_pct:+.1f}% below average — significantly trailing"
-                )
+                parts.append(f"{vs_avg_pct:+.1f}% below average — significantly trailing")
 
         # Add std context for outliers
         if is_outlier and std > 0:
@@ -335,8 +331,7 @@ class ChartRenderService:
                 "total_rows": len(df),
                 "columns": config.columns,
                 "chart_type": chart_type_str,
-                "render_time_ms": (datetime.utcnow() - start_time).total_seconds()
-                * 1000,
+                "render_time_ms": (datetime.utcnow() - start_time).total_seconds() * 1000,
             }
 
             # ── Compute per-point statistical intelligence ──
@@ -399,9 +394,7 @@ class ChartRenderService:
             df = await enhanced_dataset_service.load_dataset_data(ds_id, user_id)
 
             # Now render the chart with the loaded dataframe
-            return await self.render_chart(
-                df, chart_config
-            )  # ← was: render_chart(df, config)
+            return await self.render_chart(df, chart_config)  # ← was: render_chart(df, config)
 
         except Exception as e:
             logger.error(f"✗ Failed to render chart from config: {e}")
@@ -438,15 +431,13 @@ class ChartRenderService:
             else:
                 charts.append(result)
 
-        logger.info(
-            f"✓ Rendered {len(charts)}/{len(chart_configs)} charts successfully"
-        )
+        logger.info(f"✓ Rendered {len(charts)}/{len(chart_configs)} charts successfully")
         return charts
 
     def _normalize_chart_type(self, chart_type_str: str) -> str:
         """
         Normalize chart type names from various formats to valid ChartType values.
-        
+
         Examples:
         - 'bar_chart' -> 'bar'
         - 'scatter_plot' -> 'scatter'
@@ -459,30 +450,30 @@ class ChartRenderService:
         # Mapping from alternative names to canonical ChartType values
         type_mapping = {
             # Basic aliases
-            'bar_chart': 'bar',
-            'line_chart': 'line',
-            'pie_chart': 'pie',
-            'histogram_chart': 'histogram',
-            'scatter_plot': 'scatter',
-            'heatmap_chart': 'heatmap',
-            'treemap_chart': 'treemap',
-            'area_chart': 'area',
-            'radar_chart': 'radar',
-            'bubble_chart': 'bubble',
-            'waterfall_chart': 'waterfall',
-            'funnel_chart': 'funnel',
-            'gauge_chart': 'gauge',
+            "bar_chart": "bar",
+            "line_chart": "line",
+            "pie_chart": "pie",
+            "histogram_chart": "histogram",
+            "scatter_plot": "scatter",
+            "heatmap_chart": "heatmap",
+            "treemap_chart": "treemap",
+            "area_chart": "area",
+            "radar_chart": "radar",
+            "bubble_chart": "bubble",
+            "waterfall_chart": "waterfall",
+            "funnel_chart": "funnel",
+            "gauge_chart": "gauge",
             # Short aliases
-            'donut': 'pie',
-            'donut_chart': 'pie',
-            'box': 'box_plot',
+            "donut": "pie",
+            "donut_chart": "pie",
+            "box": "box_plot",
             # Multi-series aliases
-            'multi_line_chart': 'multi_line',
-            'stacked_area_chart': 'stacked_area',
-            'grouped_bar_chart': 'grouped_bar',
-            'stacked_bar_chart': 'stacked_bar',
+            "multi_line_chart": "multi_line",
+            "stacked_area_chart": "stacked_area",
+            "grouped_bar_chart": "grouped_bar",
+            "stacked_bar_chart": "stacked_bar",
         }
-        
+
         normalized = chart_type_str.lower().strip()
         return type_mapping.get(normalized, normalized)
 
@@ -506,16 +497,63 @@ class ChartRenderService:
             else:
                 chart_type = chart_type_str
 
+            chart_types_requiring_two_cols = {
+                ChartType.BAR,
+                ChartType.LINE,
+                ChartType.GROUPED_BAR,
+                ChartType.STACKED_BAR,
+                ChartType.MULTI_LINE,
+                ChartType.STACKED_AREA,
+                ChartType.SCATTER,
+                ChartType.AREA,
+            }
+
             # Extract columns
             columns = chart_config.get("columns", [])
             if not columns:
-                # Try x_axis, y_axis fallback
+                # Try x_axis, y_axis fallback (with underscore)
                 x_axis = chart_config.get("x_axis")
                 y_axis = chart_config.get("y_axis")
                 if x_axis:
                     columns.append(x_axis)
                 if y_axis:
                     columns.append(y_axis)
+            # Also check for x, y (no underscore) - common in AI-generated configs
+            if not columns:
+                x_col = chart_config.get("x")
+                y_col = chart_config.get("y")
+                if x_col:
+                    columns.append(x_col)
+                if y_col:
+                    columns.append(y_col)
+
+            # Handle group_by as either string or list
+            raw_group_by = chart_config.get("group_by")
+            if isinstance(raw_group_by, str):
+                group_by = [raw_group_by]
+            elif isinstance(raw_group_by, list):
+                group_by = [g for g in raw_group_by if isinstance(g, str) and g.strip()]
+            else:
+                group_by = []
+
+            # Auto-repair AI configs that provide only one column for 2-axis charts.
+            # Prefer using group_by as X when present; otherwise duplicate the column and use COUNT.
+            aggregation = chart_config.get("aggregation", "none")
+            if len(columns) == 1 and chart_type in chart_types_requiring_two_cols:
+                if group_by and group_by[0] != columns[0]:
+                    columns = [group_by[0], columns[0]]
+                    logger.info(
+                        "Auto-repaired single-column chart config using group_by: "
+                        f"chart_type={chart_type}, columns={columns}"
+                    )
+                else:
+                    columns = [columns[0], columns[0]]
+                    if str(aggregation).lower() in {"none", "", "null"}:
+                        aggregation = "count"
+                    logger.info(
+                        "Auto-repaired single-column chart config with COUNT fallback: "
+                        f"chart_type={chart_type}, columns={columns}, aggregation={aggregation}"
+                    )
 
             # Create ChartConfig
             config = ChartConfig(
@@ -523,8 +561,8 @@ class ChartRenderService:
                 title=chart_config.get("title", "Chart"),
                 chart_type=chart_type,
                 columns=columns,
-                aggregation=chart_config.get("aggregation", "none"),
-                group_by=chart_config.get("group_by"),
+                aggregation=aggregation,
+                group_by=group_by,
                 span=chart_config.get("span", 1),
             )
 
@@ -536,7 +574,7 @@ class ChartRenderService:
 
     # ── Multi-series smart rendering ─────────────────────────────────────────
 
-    MULTI_SERIES_TYPES = {"dual_axis", "facet", "combo", "multi_series"}
+    MULTI_SERIES_TYPES = {"dual_axis", "facet", "combo", "multi_series", "small_multiples"}
 
     async def render_multi_series(
         self,
@@ -559,7 +597,9 @@ class ChartRenderService:
         - The chart type might be dual_axis or faceted (hydrate.py can't do these)
         - You want pattern insights attached to the result
         """
-        from services.charts.multi_series_chart_service import multi_series_chart_service
+        from services.charts.multi_series_chart_service import (
+            multi_series_chart_service,
+        )
 
         return await multi_series_chart_service.generate_chart(
             df=df,
@@ -589,10 +629,9 @@ class ChartRenderService:
         chart_type = chart_config.get("chart_type", "").lower()
         columns = chart_config.get("columns", [])
 
-        use_multi = (
-            chart_type in self.MULTI_SERIES_TYPES
-            or (chart_type in {"multi_line", "grouped_bar", "stacked_bar", "stacked_area"}
-                and len(columns) >= 3)
+        use_multi = chart_type in self.MULTI_SERIES_TYPES or (
+            chart_type in {"multi_line", "grouped_bar", "stacked_bar", "stacked_area"}
+            and len(columns) >= 3
         )
 
         if use_multi and len(columns) >= 2:
@@ -606,9 +645,10 @@ class ChartRenderService:
                 "dual_axis": "comparison",
                 "combo": "diagnosis",
                 "facet": "comparison",
+                "small_multiples": "comparison",
             }
             intent = intent_map.get(chart_type, chart_config.get("analysis_intent"))
-            time_indexed = chart_type in {"multi_line", "stacked_area"}
+            time_indexed = chart_type in {"multi_line", "stacked_area", "dual_axis", "combo"}
 
             return await self.render_multi_series(
                 df=df,

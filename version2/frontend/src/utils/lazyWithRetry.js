@@ -1,6 +1,6 @@
 import { lazy } from "react";
 
-const RETRY_PREFIX = "datasage-lazy-retry:";
+const RETRY_PREFIX = "signal-lazy-retry:";
 
 const isDynamicImportFetchError = (error) => {
     const message = String(error?.message || error || "");

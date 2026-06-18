@@ -7,7 +7,7 @@ Intelligently recommends visualizations based on:
 - Domain context (automotive, healthcare, sales, etc.)
 - Data relationships and patterns
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 1.0
 """
 

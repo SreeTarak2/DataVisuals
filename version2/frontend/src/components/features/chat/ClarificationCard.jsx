@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { X, Check, ChevronRight } from 'lucide-react';
 
 /**
- * ClarificationCard - Shows what DataSage understood before answering
+ * ClarificationCard - Shows what Signal understood before answering
  * 
  * Props:
  *   - originalQuery: The raw user query
@@ -99,7 +99,7 @@ const ClarificationCard = ({
         </div>
       </div>
 
-      {/* What DataSage will show */}
+      {/* What Signal will show */}
       <div style={{
         padding: '12px',
         background: 'var(--accent-primary-light)',

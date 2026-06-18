@@ -64,19 +64,21 @@ class ResponseCache:
         self._initialize_embeddings()
 
     def _initialize_embeddings(self):
-        """Initialize sentence transformer for semantic similarity."""
-        try:
-            from sentence_transformers import SentenceTransformer
+        """Initialize sentence transformer for semantic similarity.
 
-            self._embedding_model = SentenceTransformer(self.embedding_model_name)
-            logger.info(
-                f"Response cache using semantic embeddings: {self.embedding_model_name}"
-            )
-        except ImportError:
-            logger.warning(
-                "sentence-transformers not available, using word overlap matching"
-            )
-            self._embedding_model = None
+        Uses the shared embedding singleton to avoid loading the
+        133 MB model twice (SemanticCache also uses bge-small).
+        """
+        try:
+            from services.embeddings import get_bge_small_embedding
+
+            self._embedding_model = get_bge_small_embedding(self.embedding_model_name)
+            if self._embedding_model:
+                logger.info(
+                    f"Response cache using shared semantic embeddings: {self.embedding_model_name}"
+                )
+            else:
+                logger.warning("Shared embedding model unavailable, using word overlap matching")
         except Exception as e:
             logger.warning(f"Failed to load embedding model: {e}, using word overlap")
             self._embedding_model = None

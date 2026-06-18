@@ -1,0 +1,115 @@
+name: Deploy to Google Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+      - production
+    paths:
+      - 'version2/backend/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: us-central1
+  SERVICE_NAME: signal-backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: |
+          gcloud auth configure-docker gcr.io
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t gcr.io/$PROJECT_ID/$SERVICE_NAME:${{ github.sha }} \
+            -t gcr.io/$PROJECT_ID/$SERVICE_NAME:latest \
+            -f version2/backend/Dockerfile \
+            version2/backend
+
+      - name: Push Docker image to GCR
+        run: |
+          docker push gcr.io/$PROJECT_ID/$SERVICE_NAME:${{ github.sha }}
+          docker push gcr.io/$PROJECT_ID/$SERVICE_NAME:latest
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy $SERVICE_NAME \
+            --image gcr.io/$PROJECT_ID/$SERVICE_NAME:${{ github.sha }} \
+            --platform managed \
+            --region $REGION \
+            --allow-unauthenticated \
+            --set-env-vars ENVIRONMENT=production \
+            --memory 2Gi \
+            --cpu 2 \
+            --timeout 3600 \
+            --max-instances 100 \
+            --min-instances 1
+
+      - name: Get Cloud Run URL
+        run: |
+          URL=$(gcloud run services describe $SERVICE_NAME --platform managed --region $REGION --format 'value(status.url)')
+          echo "Service deployed to: $URL"
+          echo "DEPLOYMENT_URL=$URL" >> $GITHUB_ENV
+
+      - name: Post deployment status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = context.job.status;
+            const url = process.env.DEPLOYMENT_URL || 'Check logs for details';
+            github.rest.commits.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: status === 'success' ? 'success' : 'failure',
+              description: `Cloud Run deployment ${status}`,
+              target_url: url,
+              context: 'Cloud Run Deployment'
+            });
+
+  health-check:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run health check
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --platform managed \
+            --region ${{ env.REGION }} \
+            --format 'value(status.url)')
+          
+          for i in {1..10}; do
+            if curl -s "$SERVICE_URL/health" > /dev/null; then
+              echo "✓ Service is healthy!"
+              exit 0
+            fi
+            echo "Attempt $i: Waiting for service to be ready..."
+            sleep 10
+          done
+          
+          echo "✗ Service health check failed"
+          exit 1
+        env:
+          GCLOUD_CONFIG: ${{ secrets.GCP_PROJECT_ID }}

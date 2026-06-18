@@ -319,6 +319,7 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
         abortControllerRef.current = controller;
         isGeneratingRef.current = true;
         let generatedSuccessfully = false;
+        let lastDashboardConfig = null;
 
         const showGenerationError = (message, toastId = GENERATION_ERROR_TOAST_ID) => {
             const now = Date.now();
@@ -343,12 +344,16 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
                         'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ force_regenerate: !!forceRegenerate }),
+                    body: JSON.stringify({
+                        force_regenerate: !!forceRegenerate,
+                        redesign_mode: forceRegenerate ? 'layout' : 'full',
+                    }),
                     signal: controller.signal
                 });
 
                 if (response.ok) {
                     const dashboardConfig = await response.json();
+                    lastDashboardConfig = dashboardConfig;
                     console.log('AI Designer response:', dashboardConfig);
 
                     if (dashboardConfig.dashboard_blueprint && dashboardConfig.dashboard_blueprint.components) {
@@ -408,6 +413,7 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
 
             if (response.ok) {
                 const dashboardConfig = await response.json();
+                lastDashboardConfig = dashboardConfig;
                 console.log('Legacy dashboard response:', dashboardConfig);
 
                 const componentsArray = dashboardConfig.dashboard?.components || dashboardConfig.components;
@@ -459,10 +465,18 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
 
             if (generatedSuccessfully) {
                 setTimeout(() => {
-                    toast.success('✨ AI Dashboard generated successfully!', {
-                        id: 'dashboard-generated',
-                        duration: 3000,
-                    });
+                    const wasLayoutRedesign = forceRegenerate && lastDashboardConfig?.cached;
+                    if (wasLayoutRedesign) {
+                        toast.success('⚡ Dashboard rearranged instantly', {
+                            id: 'dashboard-generated',
+                            duration: 2500,
+                        });
+                    } else {
+                        toast.success('✨ AI Dashboard generated successfully!', {
+                            id: 'dashboard-generated',
+                            duration: 3000,
+                        });
+                    }
                 }, 100);
             }
         }

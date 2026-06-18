@@ -1,0 +1,37 @@
+{
+  "timestamp": "20260616_120158",
+  "total_datasets": 92,
+  "failure_count": 3,
+  "failures": [
+    {
+      "dataset": "Serayu_Chicken_60k.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "product",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'product'"
+    },
+    {
+      "dataset": "adv_code_only.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "product",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'product'"
+    },
+    {
+      "dataset": "supply_chain_data.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "product",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'product'"
+    }
+  ],
+  "failure_categories": {
+    "abstention": 3
+  }
+}

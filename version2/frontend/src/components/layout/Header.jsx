@@ -12,16 +12,14 @@ import useDatasetStore from '../../store/datasetStore';
 import { useTheme } from '../../store/themeStore';
 import useDashboardActionStore from '../../store/dashboardActionStore';
 import { toast } from 'react-hot-toast';
-import useSidebarStore from '../../store/sidebarStore';
-import { PanelLeft } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 /* ─── Route → breadcrumb label map ─── */
 const ROUTE_LABELS = {
   app: null,
   dashboard: 'Dashboard',
-  workspace: 'Workspace',
-  datasets: 'Workspace',
+  workspace: 'Assets',
+  datasets: 'Assets',
   chat: 'AI Chat',
   charts: 'Charts Studio',
   settings: 'Settings',
@@ -133,7 +131,7 @@ const DatasetIndicator = ({ dataset, onClick, isOpen }) => {
     >
       <div
         className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0 shadow-sm"
-        style={{ backgroundColor: 'var(--accent-purple-light)' }}
+        style={{ backgroundColor: 'var(--accent-orange-light)' }}
       >
         <Database className="w-3.5 h-3.5" style={{ color: 'var(--accent-purple)' }} />
       </div>
@@ -341,7 +339,6 @@ const ThemeSwitcher = () => {
 const Header = () => {
   const { user } = useAuth();
   const { selectedDataset, setSelectedDataset, fetchDatasets, datasets } = useDatasetStore();
-  const { toggle } = useSidebarStore();
   const [showDatasetDropdown, setShowDatasetDropdown] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const datasetRef = useRef(null);
@@ -380,6 +377,8 @@ const Header = () => {
     toast.success(`Switched to "${dataset.name || dataset.filename}"`);
   };
 
+  const isSettingsPage = location.pathname.includes('/settings');
+
   return (
     <>
       <header
@@ -390,40 +389,34 @@ const Header = () => {
         }}
       >
         <div className="flex items-center gap-3 px-4 min-w-0 flex-1">
-          <button
-            onClick={toggle}
-            className="w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:bg-elevated text-muted hover:text-header shrink-0"
-            title="Toggle Sidebar"
-          >
-            <PanelLeft className="w-4.5 h-4.5" />
-          </button>
-
-          <div className="w-px h-4 opacity-50 bg-current shrink-0" style={{ color: 'var(--border)' }} />
-
           <Breadcrumbs />
 
-          <div
-            className="w-0.5 h-3.5 rounded-full hidden sm:block shrink-0"
-            style={{ backgroundColor: 'var(--border)' }}
-          />
+          {!isSettingsPage && (
+            <>
+              <div
+                className="w-0.5 h-3.5 rounded-full hidden sm:block shrink-0"
+                style={{ backgroundColor: 'var(--border)' }}
+              />
 
-          <div className="relative hidden sm:block" ref={datasetRef}>
-            <DatasetIndicator
-              dataset={selectedDataset}
-              isOpen={showDatasetDropdown}
-              onClick={() => setShowDatasetDropdown(!showDatasetDropdown)}
-            />
-            <AnimatePresence>
-              {showDatasetDropdown && (
-                <DatasetDropdown
-                  datasets={datasets}
-                  selectedDataset={selectedDataset}
-                  onSelect={handleDatasetSelect}
-                  onUpload={() => { setShowDatasetDropdown(false); setShowUploadModal(true); }}
+              <div className="relative hidden sm:block" ref={datasetRef}>
+                <DatasetIndicator
+                  dataset={selectedDataset}
+                  isOpen={showDatasetDropdown}
+                  onClick={() => setShowDatasetDropdown(!showDatasetDropdown)}
                 />
-              )}
-            </AnimatePresence>
-          </div>
+                <AnimatePresence>
+                  {showDatasetDropdown && (
+                    <DatasetDropdown
+                      datasets={datasets}
+                      selectedDataset={selectedDataset}
+                      onSelect={handleDatasetSelect}
+                      onUpload={() => { setShowDatasetDropdown(false); setShowUploadModal(true); }}
+                    />
+                  )}
+                </AnimatePresence>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-2 px-3">
@@ -476,10 +469,11 @@ const Header = () => {
             onClick={() => setShowUploadModal(true)}
             className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all"
             style={{
-              backgroundColor: 'var(--accent-primary-light)',
-              color: 'var(--accent-primary)',
-              border: '1px solid var(--border)',
+              backgroundColor: "var(--accent-primary)",
+              color: "white",
+              border: "1px solid var(--accent-primary)",
             }}
+
           >
             <Upload className="w-3.5 h-3.5" />
             <span>Upload</span>

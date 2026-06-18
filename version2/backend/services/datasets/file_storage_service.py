@@ -87,6 +87,76 @@ class FileStorageService:
             logger.error(f"Failed to save file for user {user_id}: {e}")
             raise HTTPException(status_code=500, detail="Could not save the uploaded file.")
 
+    def _check_content_magic(self, file_path: str, expected_ext: str) -> None:
+        """
+        Verify file content matches its extension via magic-byte signatures.
+
+        Raises HTTPException on obvious mismatch.
+        """
+        try:
+            import magic
+            with open(file_path, 'rb') as f:
+                header = f.read(4096)
+            mime = magic.from_buffer(header, mime=True)
+
+            ext_to_mime = {
+                'csv':  ('text/csv', 'text/plain', 'text/comma-separated-values', 'application/csv'),
+                'xlsx': ('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                         'application/octet-stream'),  # some systems return octet-stream for xlsx
+                'xls':  ('application/vnd.ms-excel', 'application/octet-stream'),
+                'json': ('application/json', 'text/plain'),
+            }
+            allowed = ext_to_mime.get(expected_ext, ())
+            if allowed and mime not in allowed:
+                logger.warning(
+                    f"Content MIME mismatch for .{expected_ext} file: got '{mime}', "
+                    f"expected one of {allowed}"
+                )
+                # Soft-warning only — some CSV files legitimately report as
+                # text/plain or application/octet-stream.  We log but don't reject.
+        except ImportError:
+            logger.debug("python-magic not installed; skipping content validation")
+        except Exception as e:
+            logger.debug(f"Content validation skipped ({e})")
+
+    def _check_csv_formula_injection(self, file_path: str) -> None:
+        """
+        Check CSV for cells starting with dangerous formula prefixes (=, +, -, @).
+
+        These are CSV injection / formula injection vectors. When exported to
+        Excel or Google Sheets, they can execute arbitrary formulas.
+
+        We scan the first 10KB of the file and log a warning if detected.
+        This is a soft check — we read the file but don't reject it.
+        """
+        try:
+            dangerous_prefixes = ('=', '+', '-', '@', '\t', '\r')
+            with open(file_path, 'r', errors='replace') as f:
+                chunk = f.read(10240)  # first ~10KB
+
+            lines = chunk.split('\n')
+            suspicious_cells = []
+            for i, line in enumerate(lines[:200]):  # check first 200 lines
+                if not line.strip():
+                    continue
+                cells = line.split(',')
+                for j, cell in enumerate(cells):
+                    cell_stripped = cell.strip()
+                    if cell_stripped and cell_stripped[0] in dangerous_prefixes:
+                        suspicious_cells.append(f"row {i+1}, col {j+1}: '{cell_stripped[:30]}'")
+                        if len(suspicious_cells) >= 10:
+                            break
+                if len(suspicious_cells) >= 10:
+                    break
+
+            if suspicious_cells:
+                logger.warning(
+                    f"CSV formula injection risk: {len(suspicious_cells)} cell(s) start with "
+                    f"dangerous prefixes. Examples: {suspicious_cells[:5]}"
+                )
+        except Exception as e:
+            logger.debug(f"CSV formula injection check skipped ({e})")
+
     async def save_file_from_path(self, source_path: str, filename: str, user_id: str) -> Dict[str, Any]:
         """Moves a file from a temp path to permanent storage. Used by streaming uploads."""
         try:
@@ -96,7 +166,14 @@ class FileStorageService:
                     status_code=400,
                     detail=f"File type not supported. Allowed types: {', '.join(self.allowed_extensions)}"
                 )
-            
+
+            # Validate content against expected extension
+            self._check_content_magic(source_path, file_ext)
+
+            # Check CSV formula injection risk
+            if file_ext == 'csv':
+                self._check_csv_formula_injection(source_path)
+
             source = Path(source_path)
             file_size = source.stat().st_size
             

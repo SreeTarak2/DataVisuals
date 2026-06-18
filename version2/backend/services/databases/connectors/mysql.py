@@ -6,6 +6,7 @@ Implements DatabaseConnector for MySQL databases with full security
 from typing import Optional, Any, List, Dict
 from .base import DatabaseConnector, SecurityValidator
 import aiomysql
+import asyncio
 import time
 import logging
 
@@ -21,8 +22,40 @@ class MySQLConnector(DatabaseConnector):
         self._connection_params: Optional[Dict] = None
 
     def _build_connection_params(self) -> Dict:
-        """Build MySQL connection parameters from config"""
+        """Build MySQL connection parameters from config
+
+        Priority:
+        1. Parse from ``connection_url`` if provided (mysql://user:pass@host:port/db)
+        2. Build from individual fields (host, port, username, password, database)
+        """
         config = self.config
+
+        # Parse connection URL if provided
+        connection_url = config.get('connection_url')
+        if connection_url:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(connection_url)
+                params = {
+                    'host': parsed.hostname or 'localhost',
+                    'port': parsed.port or 3306,
+                    'user': parsed.username or 'root',
+                    'password': parsed.password or '',
+                    'db': (parsed.path.lstrip('/') if parsed.path else 'mysql'),
+                    'autocommit': True,
+                    'connect_timeout': self._connection_timeout,
+                }
+                # Add SSL parameters if configured
+                ssl_mode = config.get('ssl_mode', 'PREFERRED')
+                if ssl_mode in ['REQUIRED', 'VERIFY_CA', 'VERIFY_IDENTITY']:
+                    params['ssl'] = {
+                        'ca': config.get('ssl_ca'),
+                        'cert': config.get('ssl_cert'),
+                        'key': config.get('ssl_key'),
+                    }
+                return params
+            except Exception:
+                logger.warning("Failed to parse MySQL connection URL, falling back to individual fields")
 
         params = {
             'host': config.get('host', 'localhost'),
@@ -46,49 +79,68 @@ class MySQLConnector(DatabaseConnector):
         return params
 
     async def connect(self) -> bool:
-        """Connect to MySQL database with connection pooling"""
+        """Connect to MySQL database with connection pooling and retry logic"""
         start_time = self._log_operation_start("connect", {"host": self.config.get('host')})
 
-        try:
-            if self._pool is not None:
-                return True
-
-            self._connection_params = self._build_connection_params()
-
-            # Create connection pool with security settings
-            self._pool = await aiomysql.create_pool(
-                host=self._connection_params['host'],
-                port=self._connection_params['port'],
-                user=self._connection_params['user'],
-                password=self._connection_params['password'],
-                db=self._connection_params['db'],
-                autocommit=self._connection_params['autocommit'],
-                connect_timeout=self._connection_params['connect_timeout'],
-                minsize=1,
-                maxsize=self._pool_size,
-                pool_recycle=300,
-            )
-
-            # Test the pool by acquiring a connection
-            async with self._pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute("SELECT 1")
-                    await cur.fetchone()
-
-            self._connected_at = time.time()
-            self._log_operation_end("connect", {"host": self.config.get('host')}, start_time, True)
+        if self._pool is not None:
             return True
 
-        except aiomysql.Error as e:
-            error_msg = f"MySQL connection error: {str(e)}"
-            logger.error(error_msg)
-            self._log_operation_end("connect", {"host": self.config.get('host')}, start_time, False, error_msg)
-            return False
-        except Exception as e:
-            error_msg = f"Unexpected connection error: {str(e)}"
-            logger.error(error_msg)
-            self._log_operation_end("connect", {"host": self.config.get('host')}, start_time, False, error_msg)
-            return False
+        self._connection_params = self._build_connection_params()
+        last_error = None
+
+        for attempt in range(self._max_retries):
+            try:
+                self._pool = await aiomysql.create_pool(
+                    host=self._connection_params['host'],
+                    port=self._connection_params['port'],
+                    user=self._connection_params['user'],
+                    password=self._connection_params['password'],
+                    db=self._connection_params['db'],
+                    autocommit=self._connection_params['autocommit'],
+                    connect_timeout=self._connection_params['connect_timeout'],
+                    minsize=1,
+                    maxsize=self._pool_size,
+                    pool_recycle=300,
+                )
+
+                async with self._pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("SELECT 1")
+                        await cur.fetchone()
+
+                self._connected_at = time.time()
+                self._log_operation_end("connect", {"host": self.config.get('host')}, start_time, True)
+                return True
+
+            except (aiomysql.Error, ConnectionError, OSError) as e:
+                last_error = e
+                self._pool = None
+                if attempt < self._max_retries - 1:
+                    delay = self._retry_delay_seconds * (2 ** attempt)
+                    logger.warning(
+                        f"MySQL connection attempt {attempt + 1}/{self._max_retries} "
+                        f"failed: {e}. Retrying in {delay:.1f}s..."
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    error_msg = f"MySQL connection error after {self._max_retries} attempts: {last_error}"
+                    logger.error(error_msg)
+            except Exception as e:
+                last_error = e
+                self._pool = None
+                if attempt < self._max_retries - 1:
+                    delay = self._retry_delay_seconds * (2 ** attempt)
+                    logger.warning(
+                        f"MySQL connection attempt {attempt + 1}/{self._max_retries} "
+                        f"failed: {e}. Retrying in {delay:.1f}s..."
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    error_msg = f"Unexpected connection error after {self._max_retries} attempts: {last_error}"
+                    logger.error(error_msg)
+
+        self._log_operation_end("connect", {"host": self.config.get('host')}, start_time, False, str(last_error))
+        return False
 
     async def disconnect(self) -> None:
         """Disconnect from MySQL database and close pool"""
@@ -183,6 +235,65 @@ class MySQLConnector(DatabaseConnector):
             logger.error(error_msg)
             self._log_operation_end("get_tables", {"database": self.config.get('database')}, start_time, False, error_msg)
             raise
+
+    async def get_foreign_keys(self) -> List[Dict[str, Any]]:
+        """
+        Get all foreign key constraints in the MySQL database.
+
+        Queries INFORMATION_SCHEMA.KEY_COLUMN_USAGE for the
+        configured database.
+
+        Returns:
+            List of dicts with constraint_name, table_name, column_name,
+            referenced_table, referenced_column
+        """
+        start_time = self._log_operation_start("get_foreign_keys", {"database": self.config.get('database')})
+
+        try:
+            if not self._pool:
+                raise RuntimeError("Not connected to database")
+
+            database = self.config.get('database', '')
+
+            async with self._pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    query = """
+                        SELECT
+                            tc.CONSTRAINT_NAME AS constraint_name,
+                            kcu.TABLE_NAME AS table_name,
+                            kcu.COLUMN_NAME AS column_name,
+                            kcu.REFERENCED_TABLE_NAME AS referenced_table,
+                            kcu.REFERENCED_COLUMN_NAME AS referenced_column
+                        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                        JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+                            ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+                            AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+                            AND tc.TABLE_NAME = kcu.TABLE_NAME
+                        WHERE tc.TABLE_SCHEMA = %s
+                          AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+                        ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
+                    """
+                    await cur.execute(query, (database,))
+                    rows = await cur.fetchall()
+                    result = [
+                        {
+                            "constraint_name": row['constraint_name'],
+                            "table_name": row['table_name'],
+                            "column_name": row['column_name'],
+                            "referenced_table": row['referenced_table'],
+                            "referenced_column": row['referenced_column'],
+                        }
+                        for row in rows
+                    ]
+
+            self._log_operation_end("get_foreign_keys", {"database": database, "count": len(result)}, start_time, True)
+            return result
+
+        except Exception as e:
+            error_msg = f"Error getting foreign keys: {str(e)}"
+            logger.error(error_msg)
+            self._log_operation_end("get_foreign_keys", {"database": self.config.get('database')}, start_time, False, error_msg)
+            return []
 
     async def get_table_schema(self, table_name: str) -> List[Dict[str, Any]]:
         """Get schema for MySQL table"""

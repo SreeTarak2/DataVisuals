@@ -13,7 +13,7 @@ const PATTERN_ICONS = {
 
 const PATTERN_COLORS = {
   trend:       { bg: 'bg-[#5B88B2]/15', border: 'border-[#5B88B2]/20', text: 'text-[#5B88B2]' },
-  comparison:  { bg: 'bg-[#a78bfa]/15', border: 'border-[#a78bfa]/20', text: 'text-[#a78bfa]' },
+  comparison:  { bg: 'bg-[#E85002]/15', border: 'border-[#E85002]/20', text: 'text-[#E85002]' },
   correlation: { bg: 'bg-[#10b981]/15', border: 'border-[#10b981]/20', text: 'text-[#10b981]' },
   composition: { bg: 'bg-[#f59e0b]/15', border: 'border-[#f59e0b]/20', text: 'text-[#f59e0b]' },
   intensity:   { bg: 'bg-[#ef4444]/15', border: 'border-[#ef4444]/20', text: 'text-[#ef4444]' },

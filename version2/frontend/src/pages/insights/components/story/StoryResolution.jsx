@@ -80,7 +80,7 @@ const StoryResolution = ({ resolution, onInvestigate }) => {
                     transition={{ duration: 0.5, delay: 0.1 }}
                     className="mb-8"
                 >
-                    <div className="relative p-6 rounded-2xl bg-gradient-to-br from-indigo-500/10 via-slate-800/50 to-violet-500/10 border border-indigo-500/30">
+                    <div className="relative p-6 rounded-2xl bg-gradient-to-br from-indigo-500/10 via-slate-800/50 to-orange-500/10 border border-indigo-500/30">
                         {/* Priority badge */}
                         <div className="absolute -top-3 left-6">
                             <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/40">

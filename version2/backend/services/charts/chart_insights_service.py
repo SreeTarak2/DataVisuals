@@ -12,7 +12,7 @@ Features:
 - Quality gates: rejects generic/weak explanations before caching
 - Rich chart-type-specific context extraction for prompts
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 3.0 (Productive Explanations with Quality Gates)
 """
 

@@ -235,9 +235,7 @@ class AIDesignerService:
                             "type": "table",
                             "title": "Recent Activity",
                             "span": 2,
-                            "config": {
-                                "columns": ["date", "event", "details", "impact"]
-                            },
+                            "config": {"columns": ["date", "event", "details", "impact"]},
                         },
                     ],
                 },
@@ -729,6 +727,7 @@ class AIDesignerService:
         design_preference: Optional[str] = None,
         force_regenerate: bool = False,
         conversation_summary: Optional[str] = None,
+        redesign_mode: str = "layout",
     ) -> Dict[str, Any]:
         """
         Design an intelligent dashboard for a dataset.
@@ -737,8 +736,10 @@ class AIDesignerService:
             dataset_id: Dataset identifier
             user_id: User identifier
             design_preference: Optional pattern preference
-            force_regenerate: If True, regenerate even if dashboard exists. If False (default), return cached dashboard.
+            force_regenerate: If True, regenerate even if dashboard exists.
             conversation_summary: Optional summary of prior conversation for context-aware design
+            redesign_mode: "layout" = rearrange existing components (fast, no LLM calls),
+                           "full" = re-compute everything (slow, full pipeline)
 
         Returns:
             Dashboard blueprint with pattern info
@@ -754,9 +755,7 @@ class AIDesignerService:
             dataset_doc = await self._db_op(self.db.uploads.find_one, query)
 
             if not dataset_doc or not dataset_doc.get("metadata"):
-                raise RuntimeError(
-                    "Dataset metadata missing — cannot design dashboard."
-                )
+                raise RuntimeError("Dataset metadata missing — cannot design dashboard.")
 
             # CHECK FOR EXISTING DASHBOARD (unless force_regenerate is True)
             if not force_regenerate:
@@ -786,10 +785,12 @@ class AIDesignerService:
 
             metadata = dataset_doc["metadata"]
 
+            # ── LAYOUT-ONLY REDESIGN: Rearrange existing components without LLM calls ──
+            if force_regenerate and redesign_mode == "layout":
+                return await self._redesign_layout_only(dataset_id, user_id, metadata)
+
             # 1. choose pattern
-            best_pattern = await self._analyze_dataset_for_pattern(
-                metadata, design_preference
-            )
+            best_pattern = await self._analyze_dataset_for_pattern(metadata, design_preference)
             pattern = self.design_patterns.get(best_pattern) or next(
                 iter(self.design_patterns.values())
             )
@@ -821,9 +822,7 @@ class AIDesignerService:
                     raw_blueprint = result["blueprint"]
 
                     # 4. Rigorous validation of the multi-agent blueprint
-                    blueprint = self._validate_and_enhance_design(
-                        raw_blueprint, metadata, pattern
-                    )
+                    blueprint = self._validate_and_enhance_design(raw_blueprint, metadata, pattern)
 
                     ai_metadata = result.get("metadata", {})
                     component_count = len((blueprint or {}).get("components", []))
@@ -856,9 +855,7 @@ class AIDesignerService:
                     logger.warning(
                         "🔐 OpenRouter auth issue detected; using data-aware pattern fallback"
                     )
-                    blueprint = self._adapt_pattern_to_data(
-                        pattern["blueprint"], metadata
-                    )
+                    blueprint = self._adapt_pattern_to_data(pattern["blueprint"], metadata)
                     ai_reasoning = "Pattern fallback (OpenRouter authentication failure) — columns adapted to dataset"
                 else:
                     logger.info("↩️ Falling back to single-model approach")
@@ -878,9 +875,7 @@ class AIDesignerService:
                                 f"AI Designer LLM Response (remaining): {full_response[800:]}"
                             )
                     except Exception as e:
-                        logger.exception(
-                            f"LLM call failed: {e}; falling back to pattern blueprint"
-                        )
+                        logger.exception(f"LLM call failed: {e}; falling back to pattern blueprint")
                         ai_output = {
                             "dashboard": pattern["blueprint"],
                             "reasoning": "fallback LLM failure",
@@ -921,13 +916,9 @@ class AIDesignerService:
                         }
                     },
                 )
-                logger.info(
-                    f"Updated artifact_status to 'ready' for dataset {dataset_id}"
-                )
+                logger.info(f"Updated artifact_status to 'ready' for dataset {dataset_id}")
             except Exception as status_err:
-                logger.warning(
-                    f"Failed to update artifact_status (non-fatal): {status_err}"
-                )
+                logger.warning(f"Failed to update artifact_status (non-fatal): {status_err}")
 
             logger.info(
                 f"{'Regenerated' if force_regenerate else 'Created'} dashboard for dataset {dataset_id}"
@@ -947,11 +938,213 @@ class AIDesignerService:
             raise RuntimeError(f"Failed to design dashboard: {e}") from e
 
     # ---------------------------------------------------------
+    # Layout-only redesign (no LLM calls, instant)
+    # ---------------------------------------------------------
+    async def _redesign_layout_only(
+        self,
+        dataset_id: str,
+        user_id: str,
+        metadata: Dict,
+    ) -> Dict[str, Any]:
+        """
+        Re-arrange existing dashboard components without re-computing.
+        Loads the cached blueprint, picks a new layout pattern, and re-assembles.
+        Zero LLM calls. Returns in ~100ms.
+        """
+        # 1. Load existing dashboard blueprint
+        existing_dashboard = await self._db_op(
+            self.db.dashboards.find_one,
+            {"dataset_id": dataset_id, "user_id": user_id, "is_default": True},
+        )
+
+        if not existing_dashboard or not existing_dashboard.get("blueprint"):
+            # No cached blueprint — fall back to full pipeline
+            logger.info(
+                f"[Layout redesign] No cached blueprint for {dataset_id}, falling back to full pipeline"
+            )
+            # Re-call with full mode
+            return await self.design_intelligent_dashboard(
+                dataset_id=dataset_id,
+                user_id=user_id,
+                force_regenerate=True,
+                redesign_mode="full",
+            )
+
+        blueprint = existing_dashboard["blueprint"]
+        components = blueprint.get("components", [])
+        current_pattern = existing_dashboard.get("design_pattern", "simple_overview")
+
+        # 2. Categorize existing components by type
+        kpis = [c for c in components if c.get("type") == "kpi"]
+        charts = [c for c in components if c.get("type") == "chart"]
+        insights = [c for c in components if c.get("type") == "insight"]
+        tables = [c for c in components if c.get("type") in ("data_table", "table")]
+
+        logger.info(
+            f"[Layout redesign] Rearranging {len(kpis)} KPIs, {len(charts)} charts, "
+            f"{len(insights)} insights for dataset {dataset_id}"
+        )
+
+        # 3. Pick a different pattern (rotate through available patterns)
+        new_pattern_key = self._get_next_pattern(current_pattern)
+        new_pattern = self.design_patterns.get(new_pattern_key)
+
+        if not new_pattern:
+            new_pattern_key = "simple_overview"
+            new_pattern = self.design_patterns.get(new_pattern_key)
+
+        # 4. Re-assemble components with new layout
+        new_components = self._assemble_layout(
+            kpis=kpis,
+            charts=charts,
+            insights=insights,
+            tables=tables,
+            pattern=new_pattern,
+        )
+
+        new_blueprint = {
+            "components": new_components,
+            "summary": blueprint.get("summary", ""),
+            "description": blueprint.get("description", ""),
+        }
+
+        # 5. Persist the new layout
+        design_doc = {
+            "dataset_id": dataset_id,
+            "user_id": user_id,
+            "design_pattern": new_pattern_key,
+            "blueprint": new_blueprint,
+            "created_at": datetime.utcnow(),
+            "is_default": True,
+        }
+
+        await self._db_op(
+            self.db.dashboards.update_one,
+            {"dataset_id": dataset_id, "user_id": user_id, "is_default": True},
+            {"$set": design_doc},
+            upsert=True,
+        )
+
+        # Update artifact status
+        try:
+            try:
+                dataset_oid = ObjectId(dataset_id)
+                query = {"_id": dataset_oid, "user_id": user_id}
+            except Exception:
+                query = {"_id": dataset_id, "user_id": user_id}
+
+            await self._db_op(
+                self.db.uploads.update_one,
+                query,
+                {
+                    "$set": {
+                        "artifact_status.dashboard_design": "ready",
+                        "artifact_status.dashboard_generated_at": datetime.utcnow(),
+                    }
+                },
+            )
+        except Exception as status_err:
+            logger.warning(f"Failed to update artifact_status (non-fatal): {status_err}")
+
+        logger.info(
+            f"[Layout redesign] Rearranged dashboard for {dataset_id}: "
+            f"{new_pattern_key} -> {new_pattern.get('name', new_pattern_key)}"
+        )
+
+        return {
+            "dashboard_blueprint": new_blueprint,
+            "design_pattern": new_pattern_key,
+            "pattern_name": new_pattern.get("name", new_pattern_key),
+            "reasoning": f"Layout rearranged: {new_pattern.get('name', new_pattern_key)} (no LLM calls)",
+            "cached": True,
+            "created_at": design_doc["created_at"],
+        }
+
+    # Pattern rotation for layout-only redesign
+    _LAYOUT_PATTERNS = [
+        "simple_overview",
+        "temporal_overview",
+        "multivariate_analysis",
+        "executive_kpi_trend",
+        "comparative_analysis",
+    ]
+
+    def _get_next_pattern(self, current: str) -> str:
+        """Rotate to next pattern in cycle, ensuring variety on each redesign."""
+        try:
+            idx = self._LAYOUT_PATTERNS.index(current)
+        except ValueError:
+            idx = 0
+        return self._LAYOUT_PATTERNS[(idx + 1) % len(self._LAYOUT_PATTERNS)]
+
+    def _assemble_layout(
+        self,
+        kpis: List[Dict],
+        charts: List[Dict],
+        insights: List[Dict],
+        tables: List[Dict],
+        pattern: Dict,
+    ) -> List[Dict]:
+        """
+        Re-assemble existing components into a new layout based on the pattern.
+        Preserves all component data, only changes order and span.
+        """
+        new_components = []
+
+        # Get the pattern's component template to understand the target layout
+        template_components = pattern.get("blueprint", {}).get("components", [])
+
+        # Count how many of each type the pattern expects
+        kpi_slots = sum(1 for c in template_components if c.get("type") == "kpi")
+        chart_slots = sum(1 for c in template_components if c.get("type") == "chart")
+
+        # Assign KPIs to slots (preserve existing KPIs, fill up to pattern limit)
+        for i, kpi in enumerate(kpis[:kpi_slots]):
+            new_kpi = dict(kpi)  # shallow copy
+            # Apply span from template if available
+            template_kpi = next((c for c in template_components if c.get("type") == "kpi"), None)
+            if template_kpi:
+                new_kpi["span"] = template_kpi.get("span", 1)
+            new_components.append(new_kpi)
+
+        # Assign charts to slots
+        for i, chart in enumerate(charts[:chart_slots]):
+            new_chart = dict(chart)
+            template_chart = next(
+                (c for c in template_components if c.get("type") == "chart"), None
+            )
+            if template_chart:
+                new_chart["span"] = template_chart.get("span", 2)
+            new_components.append(new_chart)
+
+        # Add insights if any
+        for insight in insights:
+            new_components.append(dict(insight))
+
+        # Add tables if any
+        for table in tables:
+            new_components.append(dict(table))
+
+        # If we have fewer components than the pattern expects, fill remaining slots
+        # by cycling through available components
+        template_count = len(template_components)
+        if len(new_components) < template_count:
+            remaining = template_count - len(new_components)
+            source_pool = kpis + charts
+            for i in range(remaining):
+                if source_pool:
+                    src = source_pool[i % len(source_pool)]
+                    template_slot = template_components[len(new_components)]
+                    filled = dict(src)
+                    filled["span"] = template_slot.get("span", 1)
+                    new_components.append(filled)
+
+        return new_components
+
+    # ---------------------------------------------------------
     # Pattern selection
     # ---------------------------------------------------------
-    async def _analyze_dataset_for_pattern(
-        self, metadata: Dict, preference: Optional[str]
-    ) -> str:
+    async def _analyze_dataset_for_pattern(self, metadata: Dict, preference: Optional[str]) -> str:
         """
         Select the best pattern for the dataset.
 
@@ -969,17 +1162,9 @@ class AIDesignerService:
 
         total_rows = overview.get("total_rows", 0)
 
-        numeric = sum(
-            1
-            for c in colmeta
-            if c.get("type") in ("numeric", "integer", "float", "int")
-        )
-        categorical = sum(
-            1 for c in colmeta if c.get("type") in ("string", "categorical", "utf8")
-        )
-        temporal = sum(
-            1 for c in colmeta if c.get("type") in ("date", "datetime", "timestamp")
-        )
+        numeric = sum(1 for c in colmeta if c.get("type") in ("numeric", "integer", "float", "int"))
+        categorical = sum(1 for c in colmeta if c.get("type") in ("string", "categorical", "utf8"))
+        temporal = sum(1 for c in colmeta if c.get("type") in ("date", "datetime", "timestamp"))
 
         # Calculate complexity score
         complexity = 0
@@ -1020,9 +1205,7 @@ class AIDesignerService:
 
         # Universal Pattern 3: Segmentation Dashboard
         if has_grouping and categorical >= 1:
-            logger.info(
-                f"Pattern selected: segmentation_dashboard (has_grouping={has_grouping})"
-            )
+            logger.info(f"Pattern selected: segmentation_dashboard (has_grouping={has_grouping})")
             return "segmentation_dashboard"
 
         # Universal Pattern 4: Multivariate Analysis
@@ -1061,20 +1244,14 @@ class AIDesignerService:
     # ---------------------------------------------------------
     # Blueprint validation / repair
     # ---------------------------------------------------------
-    def _validate_and_enhance_design(
-        self, blueprint: Dict, metadata: Dict, pattern: Dict
-    ) -> Dict:
+    def _validate_and_enhance_design(self, blueprint: Dict, metadata: Dict, pattern: Dict) -> Dict:
         """
         Validates the structure of the blueprint and then passes it through
         a rigorous data-aware validation layer to remove hallucinated columns
         and enforce cardinality limits.
         """
         # Handle nested structure (some LLMs return {dashboard: {components: [...]}})
-        if (
-            blueprint
-            and "dashboard" in blueprint
-            and isinstance(blueprint["dashboard"], dict)
-        ):
+        if blueprint and "dashboard" in blueprint and isinstance(blueprint["dashboard"], dict):
             logger.info("Detected nested 'dashboard' key, extracting inner blueprint")
             blueprint = blueprint["dashboard"]
 
@@ -1089,9 +1266,7 @@ class AIDesignerService:
         # Rigorous Data-Aware Validation Pass
         valid_components = []
         for comp in components:
-            validated_comp = self._validate_blueprint_component_with_data_stats(
-                comp, metadata
-            )
+            validated_comp = self._validate_blueprint_component_with_data_stats(comp, metadata)
             if validated_comp:
                 valid_components.append(validated_comp)
 
@@ -1114,9 +1289,7 @@ class AIDesignerService:
 
         # ensure chart exists
         if "chart" not in types:
-            first_col = (metadata.get("column_metadata") or [{}])[0].get(
-                "name", "value"
-            )
+            first_col = (metadata.get("column_metadata") or [{}])[0].get("name", "value")
             blueprint["components"].insert(
                 1,
                 {
@@ -1206,9 +1379,14 @@ class AIDesignerService:
                 actual_cols[1] if len(actual_cols) > 1 else None
             )
 
-            if cfg.get("group_by"):
-                resolved_group = [resolve_column(g) for g in cfg["group_by"]]
-                cfg["group_by"] = [g for g in resolved_group if g]
+            group_val = cfg.get("group_by")
+            if group_val:
+                if isinstance(group_val, list):
+                    resolved_group = [resolve_column(g) for g in group_val]
+                    cfg["group_by"] = [g for g in resolved_group if g]
+                else:
+                    resolved = resolve_column(str(group_val))
+                    cfg["group_by"] = resolved if resolved else None
 
             # Enforce Cardinality Limits for Pie Charts
             if chart_type in ["pie", "pie_chart", "donut"]:
@@ -1224,6 +1402,33 @@ class AIDesignerService:
                         fallback_reasons.append(
                             f"Pie chart changed to Bar chart because '{group_col}' has high cardinality ({unique_count} > 15)."
                         )
+
+        elif ctype in ["pivot_table", "anomaly_feed"]:
+            # Resolve all columns
+            requested_cols = cfg.get("columns", [])
+            actual_cols = []
+            for c in requested_cols:
+                resolved = resolve_column(c)
+                if resolved:
+                    actual_cols.append(resolved)
+                else:
+                    fallback_reasons.append(f"Dropped hallucinated column '{c}'.")
+
+            if not actual_cols:
+                return None  # Unrecoverable
+
+            cfg["columns"] = actual_cols
+
+            if ctype == "pivot_table":
+                # Also resolve index/columns/values for pivot
+                if cfg.get("index"):
+                    cfg["index"] = [resolve_column(i) for i in cfg["index"] if resolve_column(i)]
+                if cfg.get("columns"):
+                    cfg["columns"] = [
+                        resolve_column(c) for c in cfg["columns"] if resolve_column(c)
+                    ]
+                if cfg.get("values"):
+                    cfg["values"] = [resolve_column(v) for v in cfg["values"] if resolve_column(v)]
 
         comp["config"] = cfg
         if fallback_reasons:
@@ -1262,9 +1467,7 @@ class AIDesignerService:
             and "id" not in c.get("name", "").lower()
         ]
         temporal_cols = [
-            c["name"]
-            for c in colmeta
-            if c.get("type") in ("date", "datetime", "timestamp")
+            c["name"] for c in colmeta if c.get("type") in ("date", "datetime", "timestamp")
         ]
         all_cols = [c["name"] for c in colmeta[:6] if c.get("name")]
 
@@ -1362,9 +1565,7 @@ class AIDesignerService:
                 f"DOMAIN: {domain_intel['domain']} (confidence: {domain_intel.get('confidence', 0):.0%})"
             ]
             if domain_intel.get("key_metrics"):
-                domain_parts.append(
-                    f"  Key metrics: {', '.join(domain_intel['key_metrics'][:6])}"
-                )
+                domain_parts.append(f"  Key metrics: {', '.join(domain_intel['key_metrics'][:6])}")
             if domain_intel.get("measures"):
                 domain_parts.append(
                     f"  Measures (numeric for aggregation): {', '.join(domain_intel['measures'][:8])}"
@@ -1401,9 +1602,7 @@ class AIDesignerService:
             if card_level == "low":
                 card_tag = f" [LOW-CARD: {unique_count} unique — good for grouping/pie]"
             elif card_level == "very_high":
-                card_tag = (
-                    f" [HIGH-CARD: {unique_count} unique — ID-like, skip for charts]"
-                )
+                card_tag = f" [HIGH-CARD: {unique_count} unique — ID-like, skip for charts]"
             elif card_level == "high":
                 card_tag = f" [HIGH-CARD: {unique_count} unique — bad for pie/bar]"
             elif card_level == "medium":
@@ -1417,9 +1616,7 @@ class AIDesignerService:
                 lo = num_summary.get("min")
                 hi = num_summary.get("max")
                 mean = num_summary.get("mean")
-                range_str = (
-                    f" range={_fmt_num(lo)}–{_fmt_num(hi)}, mean={_fmt_num(mean)}"
-                )
+                range_str = f" range={_fmt_num(lo)}–{_fmt_num(hi)}, mean={_fmt_num(mean)}"
                 # Flag continuous numeric (needs binning if used as x-axis)
                 n_uniq = unique_count if isinstance(unique_count, int) else 0
                 if n_uniq > 15:
@@ -1430,17 +1627,14 @@ class AIDesignerService:
             # Categorical/boolean: show actual unique values for low-cardinality columns
             top_values = c.get("top_values", [])
             if top_values and (
-                card_level in ("low", "")
-                or (isinstance(unique_count, int) and unique_count <= 15)
+                card_level in ("low", "") or (isinstance(unique_count, int) and unique_count <= 15)
             ):
                 vals = [str(v["value"]) for v in top_values[:8]]
                 vals_str = f" values: {', '.join(vals)}"
                 col_lines.append(f"  • {col_name} ({col_type}){card_tag}{vals_str}")
                 continue
 
-            col_lines.append(
-                f"  • {col_name} ({col_type}){card_tag} — e.g. {sample_val}"
-            )
+            col_lines.append(f"  • {col_name} ({col_type}){card_tag} — e.g. {sample_val}")
 
         sections.append("COLUMNS:\n" + "\n".join(col_lines))
         if len(colmeta) > 30:
@@ -1476,8 +1670,7 @@ class AIDesignerService:
             ]
             if skewed:
                 skew_names = [
-                    f"{d.get('column', '')} (skew={d.get('skewness', 0):.1f})"
-                    for d in skewed[:5]
+                    f"{d.get('column', '')} (skew={d.get('skewness', 0):.1f})" for d in skewed[:5]
                 ]
                 sections.append(
                     f"SKEWED COLUMNS (consider log scale or median instead of mean): {', '.join(skew_names)}"
@@ -1486,9 +1679,7 @@ class AIDesignerService:
         # --- Section 7: Statistical findings ---
         outlier_info = statistical_findings.get("outliers", [])
         if outlier_info:
-            outlier_cols = [
-                o.get("column", "") for o in outlier_info[:5] if o.get("column")
-            ]
+            outlier_cols = [o.get("column", "") for o in outlier_info[:5] if o.get("column")]
             if outlier_cols:
                 sections.append(
                     f"OUTLIER COLUMNS (consider filtering or box plots): {', '.join(outlier_cols)}"

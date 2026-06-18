@@ -1,7 +1,7 @@
 """
 Cache Services
 ==============
-Centralized cache services for DataSage AI.
+Centralized cache services for Signal AI.
 
 Modules:
 - CacheService: General-purpose DataFrame caching (Redis + in-memory LRU)

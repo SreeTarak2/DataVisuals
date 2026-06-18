@@ -10,7 +10,7 @@ Features:
 4. Visual Hierarchy - Proper layout structure
 5. Auto-Fix - Automatically fix common issues
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 1.0
 """
 

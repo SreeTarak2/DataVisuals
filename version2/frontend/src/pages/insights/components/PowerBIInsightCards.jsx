@@ -21,7 +21,7 @@ import { cn } from '../../../lib/utils';
 const TYPE_META = {
     anomaly:      { label: 'Anomalies',    icon: AlertTriangle, color: '#ef4444' },
     trend:        { label: 'Trends',       icon: TrendingUp,    color: '#3b82f6' },
-    correlation:  { label: 'Correlations', icon: Link2,         color: '#a78bfa' },
+    correlation:  { label: 'Correlations', icon: Link2,         color: '#E85002' },
     driver:       { label: 'Drivers',      icon: Cpu,           color: '#22d3ee' },
     segment:      { label: 'Segments',     icon: Users,         color: '#f59e0b' },
     distribution: { label: 'Distribution', icon: BarChart3,     color: '#10b981' },

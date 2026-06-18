@@ -48,7 +48,7 @@ async def download_pdf_report(
         return Response(content=result, media_type="text/html")
 
     dataset_name = dataset.get("name", "report").replace(" ", "_").lower()
-    filename = f"{dataset_name}_datasage_report.pdf"
+    filename = f"{dataset_name}_signal_report.pdf"
     return Response(
         content=result,
         media_type="application/pdf",

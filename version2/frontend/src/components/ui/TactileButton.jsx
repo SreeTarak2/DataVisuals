@@ -27,7 +27,7 @@ const TactileButton = React.forwardRef(({
             whileHover={{ scale: 1.02, y: -2 }}
             whileTap={{ scale: 0.98, y: 0 }}
             className={cn(
-                "relative overflow-hidden inline-flex items-center justify-center transition-all duration-200 font-inter-tight tracking-tight",
+                "relative overflow-hidden inline-flex items-center justify-center transition-all duration-200 tracking-tight",
                 variants[variant],
                 sizes[size],
                 className

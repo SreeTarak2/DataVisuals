@@ -48,7 +48,7 @@ class MultiSeriesChartService:
         title: str,
         analysis_intent: Optional[str] = None,
         time_indexed: bool = False,
-        auto_strategy: bool = True
+        auto_strategy: bool = True,
     ) -> Dict[str, Any]:
         """
         Generate multi-series chart end-to-end.
@@ -78,15 +78,10 @@ class MultiSeriesChartService:
         """
         from .series_strategy_router import series_strategy_router
         from .pattern_detection_router import pattern_detection_router
-        from db.schemas_charts import (
-            MultiSeriesViewSpec,
-            SeriesStrategy,
-            AnalysisIntent
-        )
+        from db.schemas_charts import MultiSeriesViewSpec, SeriesStrategy, AnalysisIntent
 
         logger.info(
-            f"Generate chart: {title}, "
-            f"{len(metric_columns)} series, intent={analysis_intent}"
+            f"Generate chart: {title}, {len(metric_columns)} series, intent={analysis_intent}"
         )
 
         start_time = datetime.utcnow()
@@ -97,19 +92,13 @@ class MultiSeriesChartService:
 
             # Step 2: Run pattern detection (parallel to prep)
             patterns = await pattern_detection_router.run_detection(
-                df,
-                metric_columns,
-                x_column,
-                time_indexed=time_indexed
+                df, metric_columns, x_column, time_indexed=time_indexed
             )
 
             # Step 3: Determine strategy
             if auto_strategy:
                 strategy = await self._recommend_strategy(
-                    df,
-                    metric_columns,
-                    analysis_intent,
-                    patterns
+                    df, metric_columns, analysis_intent, patterns
                 )
             else:
                 strategy = "overlay"  # Default fallback
@@ -124,26 +113,16 @@ class MultiSeriesChartService:
                 y_roles=[{"column": col, "role": "series"} for col in metric_columns],
                 analysis_intent=analysis_intent or "comparison",
                 patterns=patterns,
-                quality_score=0.5  # Placeholder, will update after render
+                quality_score=0.5,  # Placeholder, will update after render
             )
 
             # Step 5: Render using strategy router
             chart_dict = await series_strategy_router.route_rendering(spec, df)
 
             # Step 6: Run validation & generate insights
-            quality_score = await self._validate_quality(
-                chart_dict,
-                spec,
-                df,
-                metric_columns
-            )
+            quality_score = await self._validate_quality(chart_dict, spec, df, metric_columns)
 
-            narrative = await self._generate_narrative(
-                spec,
-                patterns,
-                quality_score,
-                strategy
-            )
+            narrative = await self._generate_narrative(spec, patterns, quality_score, strategy)
 
             # Step 7: Aggregate and return
             result = {
@@ -154,7 +133,7 @@ class MultiSeriesChartService:
                 "narrative": narrative,
                 "strategy_used": strategy,
                 "render_time_ms": (datetime.utcnow() - start_time).total_seconds() * 1000,
-                "timestamp": start_time.isoformat()
+                "timestamp": start_time.isoformat(),
             }
 
             logger.info(f"Chart generation complete: {quality_score:.2f} quality")
@@ -165,10 +144,7 @@ class MultiSeriesChartService:
             raise
 
     def _validate_generation_input(
-        self,
-        df: pl.DataFrame,
-        metric_columns: List[str],
-        x_column: str
+        self, df: pl.DataFrame, metric_columns: List[str], x_column: str
     ) -> None:
         """Validate inputs before chart generation."""
         if df.is_empty():
@@ -195,13 +171,13 @@ class MultiSeriesChartService:
         df: pl.DataFrame,
         metric_columns: List[str],
         analysis_intent: Optional[str],
-        patterns: List[Dict[str, Any]]
+        patterns: List[Dict[str, Any]],
     ) -> str:
         """
         Recommend best visualization strategy driven by detected patterns.
 
         Priority order:
-        1. Panel suggestion (too many series / high cardinality) → facet
+        1. Panel suggestion (too many series / high cardinality) → facet/small_multiples
         2. Scale mismatch detected → dual_axis
         3. Explicit composition intent → stacked
         4. Explicit comparison of categories with 2+ cat dims → grouped
@@ -216,15 +192,37 @@ class MultiSeriesChartService:
             for p in patterns:
                 if p.get("pattern_type") == "panel_suggestion":
                     if p.get("metrics", {}).get("suggests_facet"):
-                        return "facet"
+                        # Use small_multiples for cleaner layout
+                        return "small_multiples"
 
         # Fallback: too many series regardless of detector
+        if num_series > 6:
+            return "small_multiples"
         if num_series > 4:
             return "facet"
 
         # 2. Scale mismatch → dual axis
         if "scale_mismatch" in pattern_types:
             return "dual_axis"
+
+        # Auto-detect scale mismatch: check if metrics have vastly different ranges
+        if num_series >= 2:
+            ranges = []
+            for col in metric_columns:
+                if col in df.columns and df[col].dtype in [
+                    pl.Int32,
+                    pl.Int64,
+                    pl.Float32,
+                    pl.Float64,
+                ]:
+                    col_min = df[col].min()
+                    col_max = df[col].max()
+                    if col_min is not None and col_max is not None and col_min != 0:
+                        ranges.append(abs(col_max / col_min))
+            if len(ranges) >= 2:
+                max_range_ratio = max(ranges) / min(ranges) if min(ranges) > 0 else float("inf")
+                if max_range_ratio > 100:
+                    return "dual_axis"
 
         # 3. Composition intent → stacked
         if analysis_intent == "composition":
@@ -233,7 +231,9 @@ class MultiSeriesChartService:
         # 4. Comparison across multiple categories → grouped bars
         if analysis_intent == "comparison":
             # Check if x-axis is categorical (non-numeric, non-date)
-            return "grouped"
+            if df.schema.get(df.columns[0]) in [pl.Utf8, pl.Categorical]:
+                return "grouped"
+            return "overlay"
 
         # 5. Combo: if intent is to show volume + rate together
         if analysis_intent == "diagnosis" and num_series == 2:
@@ -243,11 +243,7 @@ class MultiSeriesChartService:
         return "overlay"
 
     async def _validate_quality(
-        self,
-        chart_dict: Dict[str, Any],
-        spec,
-        df: pl.DataFrame,
-        metric_columns: List[str]
+        self, chart_dict: Dict[str, Any], spec, df: pl.DataFrame, metric_columns: List[str]
     ) -> float:
         """
         Calculate quality score (0-1).
@@ -289,11 +285,7 @@ class MultiSeriesChartService:
             return 0.5
 
     async def _generate_narrative(
-        self,
-        spec,
-        patterns: List[Dict[str, Any]],
-        quality_score: float,
-        strategy: str
+        self, spec, patterns: List[Dict[str, Any]], quality_score: float, strategy: str
     ) -> str:
         """
         Generate narrative explaining chart choice.
@@ -312,18 +304,14 @@ class MultiSeriesChartService:
             "relationship": "reveal correlations",
             "distribution": "examine distributions",
             "ranking": "rank performance",
-            "diagnosis": "diagnose anomalies"
+            "diagnosis": "diagnose anomalies",
         }.get(intent, "analyze data")
 
-        narrative = (
-            f"We chose {strategy.upper()} visualization to {intent_text}. "
-        )
+        narrative = f"We chose {strategy.upper()} visualization to {intent_text}. "
 
         if patterns:
             pattern_types = set(p.get("pattern_type", "unknown") for p in patterns)
-            narrative += (
-                f"Detected patterns: {', '.join(pattern_types)}. "
-            )
+            narrative += f"Detected patterns: {', '.join(pattern_types)}. "
 
         narrative += f"Quality: {quality_score:.0%}."
 

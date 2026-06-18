@@ -102,7 +102,7 @@ const useChatStore = create(
         streamingContent: state.streamingContent + token
       })),
 
-      finishStreaming: (fullContent, chartConfig = null, sql = null, insights = [], dataSummary = '', resultTable = null, followUpSuggestions = [], showFollowUpSuggestions = false) => {
+      finishStreaming: (fullContent, chartConfig = null, sql = null, insights = [], dataSummary = '', resultTable = null, followUpSuggestions = [], showFollowUpSuggestions = false, renderIntent = null) => {
         const state = get();
         const { currentConversationId, streamingMessageId } = state;
 
@@ -123,6 +123,8 @@ const useChatStore = create(
           show_follow_up_suggestions: showFollowUpSuggestions,
           insights: insights,
           data_summary: dataSummary,
+          // Agentic render intent: controls which blocks are shown in the UI
+          render_intent: renderIntent || null,
           timestamp: new Date().toISOString(),
         };
 
@@ -317,6 +319,8 @@ const useChatStore = create(
               show_follow_up_suggestions: msg.show_follow_up_suggestions || false,
               sql: msg.sql || null,
               technical_details: msg.technical_details || null,
+              // Restore render_intent so historical messages render correctly
+              render_intent: msg.render_intent || null,
               timestamp: msg.timestamp || conv.created_at
             }));
 
@@ -615,7 +619,7 @@ const useChatStore = create(
       },
     }),
     {
-      name: 'datasage-chat-store',
+      name: 'signal-chat-store',
       // Persist conversations but strip chart_config and data_summary from messages
       // to prevent localStorage quota exhaustion (chart data can be 50-200KB per message)
       partialize: (state) => {
@@ -630,6 +634,7 @@ const useChatStore = create(
               sql: msg.sql || null,
               isEdited: msg.isEdited || false,
               hasChart: !!msg.chart_config,
+              render_intent: msg.render_intent || null,
               timestamp: msg.timestamp,
             })),
           };

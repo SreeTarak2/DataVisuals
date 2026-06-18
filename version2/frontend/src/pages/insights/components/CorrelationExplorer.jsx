@@ -84,7 +84,7 @@ const CorrelationCard = ({ corr, index, onInvestigate }) => {
                             <div className="pt-2">
                                 <button
                                     onClick={() => onInvestigate(`Explain the ${corr.strength.toLowerCase()} ${corr.direction} correlation (r=${corr.value}) between "${corr.column1}" and "${corr.column2}". Is this causal?`)}
-                                    className="flex items-center gap-1.5 text-[13px] text-[var(--cat-violet)] hover:text-violet-300 transition-colors font-medium"
+                                    className="flex items-center gap-1.5 text-[13px] text-[var(--cat-violet)] hover:text-orange-300 transition-colors font-medium"
                                 >
                                     <MessageSquare className="w-3 h-3" />
                                     Analyze with AI <ArrowRight className="w-2.5 h-2.5" />

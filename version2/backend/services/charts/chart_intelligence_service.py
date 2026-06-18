@@ -11,7 +11,7 @@ Strategy:
 5. LLM Validation (expert review)
 6. User Feedback Loop (continuous learning)
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 1.0
 """
 
@@ -1000,20 +1000,26 @@ class ChartIntelligenceService:
         elif chart_type == "treemap":
             path_col = categorical_cols[0] if categorical_cols else None
             value_col = numeric_cols[0] if numeric_cols else None
-            if path_col and value_col:
+            if not path_col or not value_col:
+                return None
+            # Guard: prefer a two-level hierarchy. If only one categorical
+            # column exists, fall back to a single-level treemap only if
+            # it would show meaningful aggregation (not just a value count).
+            path_col_2 = categorical_cols[1] if len(categorical_cols) >= 2 and categorical_cols[1] != path_col else None
+            if path_col_2:
+                config["config"] = {
+                    "path": [path_col, path_col_2],
+                    "values": value_col,
+                    "aggregation": "sum",
+                }
+            else:
+                # Single categorical column — treemap would be flat.
+                # Still allow it if data is interesting, but lower priority.
                 config["config"] = {
                     "path": [path_col],
                     "values": value_col,
                     "aggregation": "sum",
                 }
-            elif len(categorical_cols) >= 2 and value_col:
-                config["config"] = {
-                    "path": categorical_cols[:2],
-                    "values": value_col,
-                    "aggregation": "sum",
-                }
-            else:
-                return None
 
         elif chart_type == "waterfall":
             x_col = (
@@ -1441,26 +1447,50 @@ class ChartIntelligenceService:
         }
 
     def _build_universal_treemap_chart(self, stats: Dict) -> Optional[Dict]:
-        """Build a treemap chart for hierarchical composition."""
+        """
+        Build a treemap chart for hierarchical composition.
+
+        Guard: Only suggest treemap when:
+          - At least 2 distinct categorical columns exist (forming a hierarchy)
+          - The first categorical column is not the same as the second
+          - A meaningful numeric column exists for aggregation
+        Otherwise the treemap renders as a flat, single-level chart
+        which is better served by a bar or pie chart.
+        """
         categorical_cols = stats.get("categorical_columns", [])
         numeric_cols = stats.get("numeric_columns", [])
 
         if len(categorical_cols) < 2 or not numeric_cols:
             return None
 
+        # Guard: the two path columns must be DIFFERENT.
+        # If they're the same (e.g. column appears in both slots),
+        # the treemap has only one hierarchical level and is better
+        # shown as a bar or pie chart.
+        path_col_0 = categorical_cols[0]
+        path_col_1 = categorical_cols[1]
+        if path_col_0 == path_col_1 or not path_col_1:
+            return None
+
+        # Guard: the numeric column must actually be usable for aggregation.
+        # No point showing a treemap sized by a count of categorical values.
+        value_col = numeric_cols[0]
+        if not value_col:
+            return None
+
         return {
             "chart_type": "treemap",
-            "title": f"{numeric_cols[0]} by {categorical_cols[0]} > {categorical_cols[1]}",
+            "title": f"{value_col.replace('_', ' ').title()} by {path_col_0.replace('_', ' ').title()} > {path_col_1.replace('_', ' ').title()}",
             "config": {
-                "path": categorical_cols[:2],
-                "values": numeric_cols[0],
+                "path": [path_col_0, path_col_1],
+                "values": value_col,
                 "aggregation": "sum",
             },
             "reason": "Hierarchical composition of values",
             "source": "universal_pattern",
             "story_type": "hierarchical",
-            "priority": 7,
-            "confidence_multiplier": 0.85,
+            "priority": 6,
+            "confidence_multiplier": 0.75,
         }
 
     def _build_universal_waterfall_chart(self, stats: Dict) -> Optional[Dict]:

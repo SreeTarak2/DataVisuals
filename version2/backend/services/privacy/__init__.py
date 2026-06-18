@@ -1,7 +1,7 @@
 """
 Privacy Services
 ================
-Comprehensive privacy and data protection services for DataSage.
+Comprehensive privacy and data protection services for Signal.
 
 Services:
 - PII Detection: Automatically detect personally identifiable information

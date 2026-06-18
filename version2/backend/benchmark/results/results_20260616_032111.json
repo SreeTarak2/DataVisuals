@@ -1,0 +1,1345 @@
+{
+  "timestamp": "20260616_032111",
+  "metrics": {
+    "total_datasets": 72,
+    "primary_object_accuracy": 0.875,
+    "participant_precision": 0.861,
+    "participant_recall": 0.847,
+    "abstention_accuracy": 0.986,
+    "failure_count": 14
+  },
+  "results": [
+    {
+      "dataset": "Bank_Churn_Classification_Dataset.csv",
+      "expected_primary": "customer",
+      "predicted_primary": "customer",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.412,
+      "entity_count": 1,
+      "table_name": "Bank_Churn_Classification_Dataset"
+    },
+    {
+      "dataset": "GlobalWeatherRepository.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "GlobalWeatherRepository"
+    },
+    {
+      "dataset": "SPY_close_price_5Y.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "SPY_close_price_5Y"
+    },
+    {
+      "dataset": "Serayu_Chicken_60k.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "Serayu_Chicken_60k"
+    },
+    {
+      "dataset": "Sheet1 (Nike Dataset)_Sheet1 (1).csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "Sheet1 (Nike Dataset)_Sheet1 (1)"
+    },
+    {
+      "dataset": "SuperStoreOrders - SuperStoreOrders.csv",
+      "expected_primary": "order",
+      "predicted_primary": "order",
+      "primary_correct": true,
+      "expected_participants": [
+        "product"
+      ],
+      "predicted_participants": [
+        "product"
+      ],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.654,
+      "entity_count": 2,
+      "table_name": "SuperStoreOrders - SuperStoreOrders"
+    },
+    {
+      "dataset": "adv_all_numeric.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "adv_all_numeric"
+    },
+    {
+      "dataset": "adv_all_strings.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "adv_all_strings"
+    },
+    {
+      "dataset": "adv_boolean_id_lookalike.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "adv_boolean_id_lookalike"
+    },
+    {
+      "dataset": "adv_code_only.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "adv_code_only"
+    },
+    {
+      "dataset": "adv_generic_names.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "adv_generic_names"
+    },
+    {
+      "dataset": "adv_index_column.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "adv_index_column"
+    },
+    {
+      "dataset": "adv_no_identifier.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "adv_no_identifier"
+    },
+    {
+      "dataset": "adv_status_only.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "adv_status_only"
+    },
+    {
+      "dataset": "adv_unique_names.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "adv_unique_names"
+    },
+    {
+      "dataset": "adv_zip_latency.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "adv_zip_latency"
+    },
+    {
+      "dataset": "amazon.csv",
+      "expected_primary": "product",
+      "predicted_primary": "product",
+      "primary_correct": true,
+      "expected_participants": [
+        "review",
+        "user"
+      ],
+      "predicted_participants": [
+        "review",
+        "user"
+      ],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.596,
+      "entity_count": 3,
+      "table_name": "amazon"
+    },
+    {
+      "dataset": "blinkit_dataset.csv",
+      "expected_primary": "product",
+      "predicted_primary": "product",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.648,
+      "entity_count": 1,
+      "table_name": "blinkit_dataset"
+    },
+    {
+      "dataset": "bmw.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "bmw"
+    },
+    {
+      "dataset": "clean_customers.csv",
+      "expected_primary": "customer",
+      "predicted_primary": "customer",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.791,
+      "entity_count": 1,
+      "table_name": "clean_customers"
+    },
+    {
+      "dataset": "clean_employees.csv",
+      "expected_primary": "employee",
+      "predicted_primary": "employee",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.761,
+      "entity_count": 1,
+      "table_name": "clean_employees"
+    },
+    {
+      "dataset": "clean_invoices.csv",
+      "expected_primary": "invoice",
+      "predicted_primary": "customer",
+      "primary_correct": false,
+      "expected_participants": [
+        "customer"
+      ],
+      "predicted_participants": [
+        "invoice"
+      ],
+      "participant_precision": 0.0,
+      "participant_recall": 0.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.328,
+      "entity_count": 2,
+      "table_name": "clean_invoices"
+    },
+    {
+      "dataset": "clean_orders.csv",
+      "expected_primary": "order",
+      "predicted_primary": "order",
+      "primary_correct": true,
+      "expected_participants": [
+        "customer",
+        "product"
+      ],
+      "predicted_participants": [
+        "customer",
+        "product"
+      ],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.64,
+      "entity_count": 3,
+      "table_name": "clean_orders"
+    },
+    {
+      "dataset": "clean_patients.csv",
+      "expected_primary": "patient",
+      "predicted_primary": "patient",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.791,
+      "entity_count": 1,
+      "table_name": "clean_patients"
+    },
+    {
+      "dataset": "clean_products.csv",
+      "expected_primary": "product",
+      "predicted_primary": "product",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.791,
+      "entity_count": 1,
+      "table_name": "clean_products"
+    },
+    {
+      "dataset": "clean_shipments.csv",
+      "expected_primary": "shipment",
+      "predicted_primary": "order",
+      "primary_correct": false,
+      "expected_participants": [
+        "order",
+        "supplier"
+      ],
+      "predicted_participants": [],
+      "participant_precision": 0.0,
+      "participant_recall": 0.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.322,
+      "entity_count": 3,
+      "table_name": "clean_shipments"
+    },
+    {
+      "dataset": "clean_students.csv",
+      "expected_primary": "student",
+      "predicted_primary": "student",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.791,
+      "entity_count": 1,
+      "table_name": "clean_students"
+    },
+    {
+      "dataset": "clean_suppliers.csv",
+      "expected_primary": "supplier",
+      "predicted_primary": "supplier",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.63,
+      "entity_count": 1,
+      "table_name": "clean_suppliers"
+    },
+    {
+      "dataset": "clean_transactions.csv",
+      "expected_primary": "transaction",
+      "predicted_primary": "order",
+      "primary_correct": false,
+      "expected_participants": [
+        "account"
+      ],
+      "predicted_participants": [
+        "account"
+      ],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.337,
+      "entity_count": 2,
+      "table_name": "clean_transactions"
+    },
+    {
+      "dataset": "cleaned_dataset.csv",
+      "expected_primary": "order",
+      "predicted_primary": "order",
+      "primary_correct": true,
+      "expected_participants": [
+        "product"
+      ],
+      "predicted_participants": [
+        "product"
+      ],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.576,
+      "entity_count": 2,
+      "table_name": "cleaned_dataset"
+    },
+    {
+      "dataset": "denorm_abbreviations.csv",
+      "expected_primary": "customer",
+      "predicted_primary": "customer",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.429,
+      "entity_count": 1,
+      "table_name": "denorm_abbreviations"
+    },
+    {
+      "dataset": "denorm_all_lower.csv",
+      "expected_primary": "invoice",
+      "predicted_primary": "invoice",
+      "primary_correct": true,
+      "expected_participants": [
+        "client"
+      ],
+      "predicted_participants": [
+        "client"
+      ],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.541,
+      "entity_count": 2,
+      "table_name": "denorm_all_lower"
+    },
+    {
+      "dataset": "denorm_amount_variants.csv",
+      "expected_primary": "order",
+      "predicted_primary": "order",
+      "primary_correct": true,
+      "expected_participants": [
+        "customer"
+      ],
+      "predicted_participants": [
+        "customer"
+      ],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.624,
+      "entity_count": 2,
+      "table_name": "denorm_amount_variants"
+    },
+    {
+      "dataset": "denorm_boolean_flags.csv",
+      "expected_primary": "user",
+      "predicted_primary": "user",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.761,
+      "entity_count": 1,
+      "table_name": "denorm_boolean_flags"
+    },
+    {
+      "dataset": "denorm_camel_case.csv",
+      "expected_primary": "employee",
+      "predicted_primary": "employee",
+      "primary_correct": true,
+      "expected_participants": [
+        "department"
+      ],
+      "predicted_participants": [],
+      "participant_precision": 0.0,
+      "participant_recall": 0.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.791,
+      "entity_count": 1,
+      "table_name": "denorm_camel_case"
+    },
+    {
+      "dataset": "denorm_code_mixture.csv",
+      "expected_primary": "product",
+      "predicted_primary": "product",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.74,
+      "entity_count": 1,
+      "table_name": "denorm_code_mixture"
+    },
+    {
+      "dataset": "denorm_duplicate_rows.csv",
+      "expected_primary": "product",
+      "predicted_primary": "product",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.835,
+      "entity_count": 1,
+      "table_name": "denorm_duplicate_rows"
+    },
+    {
+      "dataset": "denorm_mixed_case.csv",
+      "expected_primary": "patient",
+      "predicted_primary": "patient",
+      "primary_correct": true,
+      "expected_participants": [
+        "doctor"
+      ],
+      "predicted_participants": [],
+      "participant_precision": 0.0,
+      "participant_recall": 0.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.88,
+      "entity_count": 1,
+      "table_name": "denorm_mixed_case"
+    },
+    {
+      "dataset": "denorm_non_ascii.csv",
+      "expected_primary": "product",
+      "predicted_primary": "product",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.791,
+      "entity_count": 1,
+      "table_name": "denorm_non_ascii"
+    },
+    {
+      "dataset": "denorm_null_heavy.csv",
+      "expected_primary": "student",
+      "predicted_primary": "student",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.761,
+      "entity_count": 1,
+      "table_name": "denorm_null_heavy"
+    },
+    {
+      "dataset": "denorm_phone_email.csv",
+      "expected_primary": "contact",
+      "predicted_primary": "contact",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.607,
+      "entity_count": 1,
+      "table_name": "denorm_phone_email"
+    },
+    {
+      "dataset": "denorm_spaces.csv",
+      "expected_primary": "order",
+      "predicted_primary": "order",
+      "primary_correct": true,
+      "expected_participants": [
+        "customer",
+        "product"
+      ],
+      "predicted_participants": [
+        "customer",
+        "product"
+      ],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.328,
+      "entity_count": 3,
+      "table_name": "denorm_spaces"
+    },
+    {
+      "dataset": "denorm_timestamp_variants.csv",
+      "expected_primary": "transaction",
+      "predicted_primary": null,
+      "primary_correct": false,
+      "expected_participants": [
+        "merchant"
+      ],
+      "predicted_participants": [],
+      "participant_precision": 0.0,
+      "participant_recall": 0.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "denorm_timestamp_variants"
+    },
+    {
+      "dataset": "denorm_underscore_heavy.csv",
+      "expected_primary": "shipment",
+      "predicted_primary": "shipment",
+      "primary_correct": true,
+      "expected_participants": [
+        "warehouse"
+      ],
+      "predicted_participants": [],
+      "participant_precision": 0.0,
+      "participant_recall": 0.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.348,
+      "entity_count": 1,
+      "table_name": "denorm_underscore_heavy"
+    },
+    {
+      "dataset": "denorm_url_columns.csv",
+      "expected_primary": "product",
+      "predicted_primary": "product",
+      "primary_correct": true,
+      "expected_participants": [
+        "supplier"
+      ],
+      "predicted_participants": [],
+      "participant_precision": 0.0,
+      "participant_recall": 0.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.679,
+      "entity_count": 2,
+      "table_name": "denorm_url_columns"
+    },
+    {
+      "dataset": "drugs_side_effects_drugs_com.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "drugs_side_effects_drugs_com"
+    },
+    {
+      "dataset": "ecommerce_orders.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "ecommerce_orders"
+    },
+    {
+      "dataset": "global_education_data.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "global_education_data"
+    },
+    {
+      "dataset": "gold_prices_10y.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "gold_prices_10y"
+    },
+    {
+      "dataset": "hr_clean.csv",
+      "expected_primary": "employee",
+      "predicted_primary": "employee",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.402,
+      "entity_count": 1,
+      "table_name": "hr_clean"
+    },
+    {
+      "dataset": "hr_raw.csv",
+      "expected_primary": "employee",
+      "predicted_primary": "employee",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.403,
+      "entity_count": 1,
+      "table_name": "hr_raw"
+    },
+    {
+      "dataset": "mental_health_survey_dataset_300k.csv",
+      "expected_primary": "participant",
+      "predicted_primary": "participant",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.399,
+      "entity_count": 1,
+      "table_name": "mental_health_survey_dataset_300k"
+    },
+    {
+      "dataset": "multi_course_enrollments.csv",
+      "expected_primary": "enrollment",
+      "predicted_primary": "student",
+      "primary_correct": false,
+      "expected_participants": [
+        "course",
+        "student"
+      ],
+      "predicted_participants": [],
+      "participant_precision": 0.0,
+      "participant_recall": 0.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.337,
+      "entity_count": 2,
+      "table_name": "multi_course_enrollments"
+    },
+    {
+      "dataset": "multi_hospital_visits.csv",
+      "expected_primary": "visit",
+      "predicted_primary": "patient",
+      "primary_correct": false,
+      "expected_participants": [
+        "doctor",
+        "hospital",
+        "patient"
+      ],
+      "predicted_participants": [],
+      "participant_precision": 0.0,
+      "participant_recall": 0.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.548,
+      "entity_count": 1,
+      "table_name": "multi_hospital_visits"
+    },
+    {
+      "dataset": "multi_order_details.csv",
+      "expected_primary": "order",
+      "predicted_primary": "order",
+      "primary_correct": true,
+      "expected_participants": [
+        "customer",
+        "product",
+        "supplier"
+      ],
+      "predicted_participants": [
+        "customer",
+        "product"
+      ],
+      "participant_precision": 1.0,
+      "participant_recall": 0.667,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.64,
+      "entity_count": 4,
+      "table_name": "multi_order_details"
+    },
+    {
+      "dataset": "multi_project_tasks.csv",
+      "expected_primary": "task",
+      "predicted_primary": null,
+      "primary_correct": false,
+      "expected_participants": [
+        "assignee",
+        "project",
+        "reviewer"
+      ],
+      "predicted_participants": [],
+      "participant_precision": 0.0,
+      "participant_recall": 0.0,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "multi_project_tasks"
+    },
+    {
+      "dataset": "multi_support_tickets.csv",
+      "expected_primary": "ticket",
+      "predicted_primary": "customer",
+      "primary_correct": false,
+      "expected_participants": [
+        "agent",
+        "customer",
+        "product"
+      ],
+      "predicted_participants": [
+        "product"
+      ],
+      "participant_precision": 1.0,
+      "participant_recall": 0.333,
+      "abstention_correct": true,
+      "is_failure": true,
+      "primary_confidence": 0.322,
+      "entity_count": 2,
+      "table_name": "multi_support_tickets"
+    },
+    {
+      "dataset": "noent_aggregated_orders.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "noent_aggregated_orders"
+    },
+    {
+      "dataset": "noent_daily_active_users.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "noent_daily_active_users"
+    },
+    {
+      "dataset": "noent_exchange_rates.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "noent_exchange_rates"
+    },
+    {
+      "dataset": "noent_inventory_counts.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "noent_inventory_counts"
+    },
+    {
+      "dataset": "noent_monthly_revenue.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "noent_monthly_revenue"
+    },
+    {
+      "dataset": "noent_quiz_scores.csv",
+      "expected_primary": null,
+      "predicted_primary": "student",
+      "primary_correct": false,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": false,
+      "is_failure": true,
+      "primary_confidence": 0.375,
+      "entity_count": 1,
+      "table_name": "noent_quiz_scores"
+    },
+    {
+      "dataset": "noent_stock_prices.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "noent_stock_prices"
+    },
+    {
+      "dataset": "noent_survey_results.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "noent_survey_results"
+    },
+    {
+      "dataset": "noent_temperature_readings.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "noent_temperature_readings"
+    },
+    {
+      "dataset": "noent_website_metrics.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "noent_website_metrics"
+    },
+    {
+      "dataset": "saas_revenue.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "saas_revenue"
+    },
+    {
+      "dataset": "store_customers.csv",
+      "expected_primary": "customer",
+      "predicted_primary": "customer",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.437,
+      "entity_count": 1,
+      "table_name": "store_customers"
+    },
+    {
+      "dataset": "student_academic_performance.csv",
+      "expected_primary": "student",
+      "predicted_primary": "student",
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.506,
+      "entity_count": 1,
+      "table_name": "student_academic_performance"
+    },
+    {
+      "dataset": "supply_chain_data.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "supply_chain_data"
+    },
+    {
+      "dataset": "vehicle_listings.csv",
+      "expected_primary": null,
+      "predicted_primary": null,
+      "primary_correct": true,
+      "expected_participants": [],
+      "predicted_participants": [],
+      "participant_precision": 1.0,
+      "participant_recall": 1.0,
+      "abstention_correct": true,
+      "is_failure": false,
+      "primary_confidence": 0.0,
+      "entity_count": 0,
+      "table_name": "vehicle_listings"
+    }
+  ],
+  "failures": [
+    {
+      "dataset": "clean_invoices.csv",
+      "category": "primary_object",
+      "expected_primary": "invoice",
+      "predicted_primary": "customer",
+      "expected_participants": [
+        "customer"
+      ],
+      "predicted_participants": [
+        "invoice"
+      ],
+      "reason": "Expected primary 'invoice', got 'customer'"
+    },
+    {
+      "dataset": "clean_shipments.csv",
+      "category": "primary_object",
+      "expected_primary": "shipment",
+      "predicted_primary": "order",
+      "expected_participants": [
+        "order",
+        "supplier"
+      ],
+      "predicted_participants": [],
+      "reason": "Expected primary 'shipment', got 'order'"
+    },
+    {
+      "dataset": "clean_transactions.csv",
+      "category": "primary_object",
+      "expected_primary": "transaction",
+      "predicted_primary": "order",
+      "expected_participants": [
+        "account"
+      ],
+      "predicted_participants": [
+        "account"
+      ],
+      "reason": "Expected primary 'transaction', got 'order'"
+    },
+    {
+      "dataset": "denorm_camel_case.csv",
+      "category": "participation_recall",
+      "expected_primary": "employee",
+      "predicted_primary": "employee",
+      "expected_participants": [
+        "department"
+      ],
+      "predicted_participants": [],
+      "reason": "Missing participants: {'department'}"
+    },
+    {
+      "dataset": "denorm_mixed_case.csv",
+      "category": "participation_recall",
+      "expected_primary": "patient",
+      "predicted_primary": "patient",
+      "expected_participants": [
+        "doctor"
+      ],
+      "predicted_participants": [],
+      "reason": "Missing participants: {'doctor'}"
+    },
+    {
+      "dataset": "denorm_timestamp_variants.csv",
+      "category": "primary_object",
+      "expected_primary": "transaction",
+      "predicted_primary": null,
+      "expected_participants": [
+        "merchant"
+      ],
+      "predicted_participants": [],
+      "reason": "Expected primary 'transaction', got 'None'"
+    },
+    {
+      "dataset": "denorm_underscore_heavy.csv",
+      "category": "participation_recall",
+      "expected_primary": "shipment",
+      "predicted_primary": "shipment",
+      "expected_participants": [
+        "warehouse"
+      ],
+      "predicted_participants": [],
+      "reason": "Missing participants: {'warehouse'}"
+    },
+    {
+      "dataset": "denorm_url_columns.csv",
+      "category": "participation_recall",
+      "expected_primary": "product",
+      "predicted_primary": "product",
+      "expected_participants": [
+        "supplier"
+      ],
+      "predicted_participants": [],
+      "reason": "Missing participants: {'supplier'}"
+    },
+    {
+      "dataset": "multi_course_enrollments.csv",
+      "category": "primary_object",
+      "expected_primary": "enrollment",
+      "predicted_primary": "student",
+      "expected_participants": [
+        "course",
+        "student"
+      ],
+      "predicted_participants": [],
+      "reason": "Expected primary 'enrollment', got 'student'"
+    },
+    {
+      "dataset": "multi_hospital_visits.csv",
+      "category": "primary_object",
+      "expected_primary": "visit",
+      "predicted_primary": "patient",
+      "expected_participants": [
+        "doctor",
+        "hospital",
+        "patient"
+      ],
+      "predicted_participants": [],
+      "reason": "Expected primary 'visit', got 'patient'"
+    },
+    {
+      "dataset": "multi_order_details.csv",
+      "category": "participation_recall",
+      "expected_primary": "order",
+      "predicted_primary": "order",
+      "expected_participants": [
+        "customer",
+        "product",
+        "supplier"
+      ],
+      "predicted_participants": [
+        "customer",
+        "product"
+      ],
+      "reason": "Missing participants: {'supplier'}"
+    },
+    {
+      "dataset": "multi_project_tasks.csv",
+      "category": "primary_object",
+      "expected_primary": "task",
+      "predicted_primary": null,
+      "expected_participants": [
+        "assignee",
+        "project",
+        "reviewer"
+      ],
+      "predicted_participants": [],
+      "reason": "Expected primary 'task', got 'None'"
+    },
+    {
+      "dataset": "multi_support_tickets.csv",
+      "category": "primary_object",
+      "expected_primary": "ticket",
+      "predicted_primary": "customer",
+      "expected_participants": [
+        "agent",
+        "customer",
+        "product"
+      ],
+      "predicted_participants": [
+        "product"
+      ],
+      "reason": "Expected primary 'ticket', got 'customer'"
+    },
+    {
+      "dataset": "noent_quiz_scores.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "student",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'student'"
+    }
+  ]
+}

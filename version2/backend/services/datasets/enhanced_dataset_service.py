@@ -13,6 +13,7 @@ from bson import ObjectId
 
 from db.database import get_database
 from core.config import settings
+from utils.json_encoder import ensure_json_serializable
 from services.datasets.file_storage_service import file_storage_service
 from services.datasets.faiss_vector_service import faiss_vector_service
 from services.cache import cache_service
@@ -77,7 +78,8 @@ class EnhancedDatasetService:
             if existing_dataset:
                 existing_dataset["id"] = str(existing_dataset["_id"])
                 existing_dataset.pop("_id", None)
-                return existing_dataset
+                # Sanitize datetime & other non-serializable types for JSON response
+                return ensure_json_serializable(existing_dataset)
 
             return None
         except Exception as e:
@@ -85,7 +87,7 @@ class EnhancedDatasetService:
             return None
 
     async def upload_dataset(
-        self, file: UploadFile, user_id: str, name: str = None, description: str = None
+        self, file: UploadFile, user_id: str, name: str = None, description: str = None, analysis_intent: str = None
     ) -> JSONResponse:
         """
         Handles the initial upload request with validation and duplicate detection.
@@ -177,6 +179,7 @@ class EnhancedDatasetService:
                 "user_id": user_id,
                 "name": name or file.filename.split(".")[0],
                 "description": description or "",
+                "analysis_intent": analysis_intent or None,
                 "file_id": file_metadata["file_id"],
                 "original_filename": file.filename,
                 "file_path": file_metadata["file_path"],
@@ -196,15 +199,16 @@ class EnhancedDatasetService:
 
             await self.db.uploads.insert_one(dataset_doc)
 
-            # Lazy import to avoid circular dependency
-            from workers.pipeline.dataset import process_dataset_task
+            # Fire-and-forget: launch processing in background
+            import asyncio as _asyncio
+            from services.pipeline.process import process_dataset
 
-            task = process_dataset_task.delay(
-                dataset_id, file_metadata["file_path"], user_id
+            _asyncio.create_task(
+                process_dataset(dataset_id, file_metadata["file_path"], user_id)
             )
 
             logger.info(
-                f"New dataset {dataset_id} accepted for processing. Task ID: {task.id}"
+                f"New dataset {dataset_id} accepted for processing."
             )
 
             return JSONResponse(
@@ -212,7 +216,7 @@ class EnhancedDatasetService:
                 content={
                     "is_duplicate": False,
                     "dataset_id": dataset_id,
-                    "task_id": task.id,
+                    "task_id": dataset_id,
                     "message": "Dataset upload accepted and is now being processed.",
                 },
             )

@@ -51,7 +51,7 @@ const directionIcon = (d) => {
   if (!d) return null;
   if (d === 'positive')    return <TrendingUp size={11} className="text-green-700" />;
   if (d === 'negative')    return <TrendingUp size={11} className="rotate-180 text-red-700" />;
-  if (d === 'non-linear')  return <Activity size={11} className="text-purple-700" />;
+  if (d === 'non-linear')  return <Activity size={11} className="text-orange-700" />;
   return <ArrowRightLeft size={11} className="text-blue-700" />;
 };
 
@@ -72,7 +72,7 @@ function* parseSseChunk(text, buffer) {
 const AgentRow = ({ agent, status, label }) => {
   const statusIcon = {
     idle:    <span className="w-2 h-2 rounded-full bg-border/60 shrink-0" />,
-    running: <Loader2 size={13} className="text-purple-700 animate-spin shrink-0" />,
+    running: <Loader2 size={13} className="text-orange-700 animate-spin shrink-0" />,
     done:    <CheckCircle2 size={13} className="text-green-700 shrink-0" />,
     error:   <AlertCircle size={13} className="text-red-700 shrink-0" />,
   }[status] || null;
@@ -87,7 +87,7 @@ const AgentRow = ({ agent, status, label }) => {
       <div className="flex-1 min-w-0">
         <span className={`text-[12px] font-medium ${
           status === 'done'    ? 'text-secondary' :
-          status === 'running' ? 'text-purple-700' :
+          status === 'running' ? 'text-orange-700' :
           status === 'error'   ? 'text-red-700'  : 'text-muted'
         }`}>
           {agent.label}
@@ -162,13 +162,13 @@ const ChartConfigCard = ({ cfg, index }) => {
       className="rounded-xl border border-border bg-elevated/40 p-3 mb-2"
     >
       <div className="flex items-start gap-2.5">
-        <div className="w-8 h-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center shrink-0">
-          <Icon size={15} className="text-purple-700" />
+        <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center shrink-0">
+          <Icon size={15} className="text-orange-700" />
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-[12px] font-semibold text-header leading-snug">{cfg.title || 'Chart'}</p>
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-            <span className="text-[10px] font-mono text-violet-300 bg-violet-500/10 px-1.5 py-0.5 rounded">
+            <span className="text-[10px] font-mono text-orange-300 bg-orange-500/10 px-1.5 py-0.5 rounded">
               {cfg.chart_type}
             </span>
             {cols.map(c => (
@@ -407,7 +407,7 @@ const AgenticPanel = ({ datasetId, onClose }) => {
       {/* header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
-          <Brain size={16} className="text-purple-700" />
+          <Brain size={16} className="text-orange-700" />
           <span className="text-sm font-semibold text-header">EDA Pipeline</span>
           {hasResult && (
             <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${
@@ -436,14 +436,14 @@ const AgenticPanel = ({ datasetId, onClose }) => {
               onClick={() => setActiveTab(t.id)}
               className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[11px] font-semibold transition-colors
                 ${active
-                  ? 'text-purple-700 border-b-2 border-purple-700'
+                  ? 'text-orange-700 border-b-2 border-orange-700'
                   : 'text-muted hover:text-secondary border-b-2 border-transparent'
                 }`}
             >
               <Icon size={13} />
               {t.label}
               {t.id === 'charts' && charts.length > 0 && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 font-bold ml-0.5">
+                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-orange-500/20 text-orange-300 font-bold ml-0.5">
                   {charts.length}
                 </span>
               )}
@@ -467,7 +467,7 @@ const AgenticPanel = ({ datasetId, onClose }) => {
                 onChange={e => setQuestion(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && !running && runPipeline()}
                 disabled={running}
-                className="w-full text-[12px] bg-elevated border border-border rounded-lg px-3 py-2 text-header placeholder:text-muted/60 focus:outline-none focus:border-violet-500/60 transition-colors"
+                className="w-full text-[12px] bg-elevated border border-border rounded-lg px-3 py-2 text-header placeholder:text-muted/60 focus:outline-none focus:border-orange-500/60 transition-colors"
               />
             </div>
 
@@ -479,7 +479,7 @@ const AgenticPanel = ({ datasetId, onClose }) => {
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-40
                   ${running
                     ? 'bg-rose-600/80 hover:bg-rose-600 text-white'
-                    : 'bg-violet-600 hover:bg-violet-500 text-white'
+                    : 'bg-orange-600 hover:bg-orange-500 text-white'
                   }`}
               >
                 {running
@@ -536,10 +536,10 @@ const AgenticPanel = ({ datasetId, onClose }) => {
               <>
                 {/* planner intent */}
                 {plannerIntent && (
-                  <div className="mb-4 p-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
+                  <div className="mb-4 p-3 rounded-xl border border-orange-500/20 bg-orange-500/5">
                     <div className="flex items-center gap-1.5 mb-1">
-                      <Eye size={12} className="text-purple-700" />
-                      <span className="text-[10px] font-semibold text-violet-300 uppercase tracking-wider">Intent</span>
+                      <Eye size={12} className="text-orange-700" />
+                      <span className="text-[10px] font-semibold text-orange-300 uppercase tracking-wider">Intent</span>
                     </div>
                     <p className="text-[12px] text-secondary leading-[1.5]">{plannerIntent}</p>
                     {drivers.length > 0 && (
@@ -596,7 +596,7 @@ const AgenticPanel = ({ datasetId, onClose }) => {
                 {charts.length > 0 && (
                   <button
                     onClick={() => setActiveTab('charts')}
-                    className="w-full text-[12px] text-violet-300 bg-violet-500/10 border border-violet-500/20 rounded-xl py-2.5 hover:bg-violet-500/15 transition-colors flex items-center justify-center gap-1.5"
+                    className="w-full text-[12px] text-orange-300 bg-orange-500/10 border border-orange-500/20 rounded-xl py-2.5 hover:bg-orange-500/15 transition-colors flex items-center justify-center gap-1.5"
                   >
                     <BarChart3 size={13} />
                     View {charts.length} chart recommendation{charts.length !== 1 ? 's' : ''}
@@ -641,7 +641,7 @@ const AgenticPanel = ({ datasetId, onClose }) => {
 
       {/* footer */}
       <div className="px-4 py-2 border-t border-border flex items-center gap-1.5 shrink-0">
-        <Sparkles size={11} className="text-violet-500/50" />
+        <Sparkles size={11} className="text-orange-500/50" />
         <span className="text-[10px] text-slate-600">6-agent EDA · Planner → Data → Uni → Bi → Viz → QA</span>
       </div>
     </motion.div>

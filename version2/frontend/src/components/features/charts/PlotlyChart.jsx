@@ -302,22 +302,22 @@ const normalizeLineSeries = (xArr = [], yArr = [], targetPoints = DENSITY.TARGET
 // Each chart type gets a visually distinct palette that conveys meaning
 const PALETTES = {
   // Bar charts: warm, bold, high-contrast categorical colors
-  bar: ['#6366f1', '#8b5cf6', '#a78bfa', '#c084fc', '#e879f9', '#f472b6', '#fb7185', '#f97316'],
+  bar: ['#6366f1', '#E85002', '#E85002', '#c084fc', '#e879f9', '#f472b6', '#fb7185', '#f97316'],
   // Line charts: cool gradient progression (low→high energy)
   line: ['#06b6d4', '#22d3ee', '#67e8f9', '#a5f3fc'],
   // Pie/donut: maximally distinct, perceptually balanced (no adjacent similar hues)
-  pie: ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6', '#14b8a6', '#f97316', '#84cc16'],
+  pie: ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#E85002', '#14b8a6', '#f97316', '#84cc16'],
   // Scatter: distinguishable point colors
-  scatter: ['#06b6d4', '#a78bfa', '#34d399', '#fbbf24', '#f87171', '#fb923c'],
+  scatter: ['#06b6d4', '#E85002', '#34d399', '#fbbf24', '#f87171', '#fb923c'],
   // Box/violin: soft, distinguishable per-group colors
-  box: ['#818cf8', '#34d399', '#fbbf24', '#f87171', '#22d3ee', '#a78bfa', '#fb923c', '#84cc16', '#e879f9', '#2dd4bf',
+  box: ['#818cf8', '#34d399', '#fbbf24', '#f87171', '#22d3ee', '#E85002', '#fb923c', '#84cc16', '#e879f9', '#2dd4bf',
          '#f472b6', '#a3e635', '#38bdf8', '#c084fc', '#facc15', '#4ade80', '#f43f5e', '#06b6d4', '#d946ef', '#fca5a5'],
   // Heatmap: sequential (handled by colorscale, not palette)
   heatmap: [],
   // Area: layered translucent fills
-  area: ['#06b6d4', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444'],
+  area: ['#06b6d4', '#E85002', '#10b981', '#f59e0b', '#ef4444'],
   // Default fallback
-  default: ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6', '#14b8a6'],
+  default: ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#E85002', '#14b8a6'],
 };
 
 // Get palette for a chart type
@@ -363,7 +363,6 @@ const applyTraceColors = (traces, chartType, colorOffset = 0) => {
       // Pie: full palette rotation + enforce modern donut styling
       enhanced.hole = trace.hole ?? 0.65;
       enhanced.textinfo = 'none';
-      enhanced.hovertemplate = '<b>%{label}</b><br>Count: %{value}<br>%{percent}<extra></extra>';
       enhanced.marker = {
         ...(trace.marker || {}),
         colors: palette,
@@ -383,240 +382,30 @@ const applyTraceColors = (traces, chartType, colorOffset = 0) => {
         ];
       }
     }
+    else if (traceType === 'indicator') {
+      // Bullet/Indicator: use primary color for the bar
+      enhanced.number = { font: { color: color, size: 40 } };
+      if (enhanced.gauge) {
+        enhanced.gauge.bar = { color: color };
+      }
+    } else if (traceType === 'choropleth') {
+      // Choropleth: premium color scale
+      if (!enhanced.colorscale) {
+        enhanced.colorscale = 'Viridis';
+      }
+    }
+
     return enhanced;
   });
 };
 
-const CustomTooltip = ({ visible, x, y, data }) => {
-  if (!visible || !data || !Array.isArray(data.items) || data.items.length === 0) return null;
-
-  const { xLabel, xValue, items, grandTotal, yLabel, avg, rank, totalCategories, totalRecords, backendInsight, isOutlier, zScore, percentile } = data;
-  const isSingle = items.length === 1;
-  const primaryItem = items[0];
-  const pct = grandTotal > 0 ? ((primaryItem.rawValue / grandTotal) * 100) : 0;
-  const vsAvg = avg > 0 ? (((primaryItem.rawValue - avg) / avg) * 100) : null;
-
-  // Use backend-computed insight if available, otherwise fall back to client heuristic
-  const generateInsight = () => {
-    if (backendInsight) return backendInsight;
-    if (!primaryItem) return null;
-    if (rank === 1) return 'Highest value across all categories';
-    if (rank === totalCategories) return 'Lowest value across all categories';
-    if (vsAvg !== null) {
-      if (vsAvg > 50) return 'Significantly above the average for this dataset';
-      if (vsAvg > 15) return 'Moderately above average — a strong performer';
-      if (vsAvg > 0) return 'Slightly above average';
-      if (vsAvg > -15) return 'Slightly below average';
-      if (vsAvg > -50) return 'Moderately below average';
-      return 'Significantly below the average for this dataset';
-    }
-    if (pct > 30) return 'Dominant share — contributes a major portion';
-    if (pct < 5) return 'Minor share — relatively small contribution';
-    return null;
-  };
-
-  const insight = generateInsight();
-
-  // Position: default top-right of cursor, flip near edges
-  const tooltipStyle = { left: x + 16, top: y - 16 };
-  if (x > window.innerWidth - 320) tooltipStyle.left = x - 300;
-  if (y > window.innerHeight - 320) tooltipStyle.top = y - 280;
-
-  return createPortal(
-    <AnimatePresence>
-      <MotionDiv
-        initial={{ opacity: 0, y: 6, scale: 0.96 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 6, scale: 0.96 }}
-        transition={{ duration: 0.12, ease: 'easeOut' }}
-        style={{
-          position: 'fixed',
-          ...tooltipStyle,
-          zIndex: 9999,
-          pointerEvents: 'none',
-        }}
-      >
-        <div
-          style={{
-            width: isSingle ? 260 : 280,
-            borderRadius: 12,
-            overflow: 'hidden',
-            background: 'rgba(26,25,28,0.97)',
-            backdropFilter: 'blur(24px)',
-            border: '1px solid rgba(202,210,253,0.10)',
-            boxShadow: '0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(202,210,253,0.04)',
-            fontFamily: 'Inter, -apple-system, system-ui, sans-serif',
-          }}
-        >
-          {/* ── Header: Category identification ── */}
-          <div style={{ padding: '10px 14px 8px', borderBottom: '1px solid rgba(202,210,253,0.07)' }}>
-            <div style={{ fontSize: 9, fontWeight: 600, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>
-              {xLabel || 'Category'}
-            </div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#CAD2FD', letterSpacing: '-0.01em' }}>
-              {xValue ?? '—'}
-            </div>
-          </div>
-
-          {/* ── Primary metric rows ── */}
-          <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {items.map((item, index) => {
-              const itemPct = grandTotal > 0 ? ((item.rawValue / grandTotal) * 100) : 0;
-              return (
-                <div key={`${item.name}-${index}`}>
-                  {/* Hero value row */}
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-                      <span style={{
-                        width: 8, height: 8, borderRadius: '50%',
-                        backgroundColor: item.color, flexShrink: 0,
-                        boxShadow: `0 0 10px ${item.color}40`,
-                      }} />
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{
-                          fontSize: 10, color: '#9CA3AF', marginBottom: 2,
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                        }}>
-                          {yLabel || item.name || 'Value'}
-                        </div>
-                        <div style={{ fontSize: 20, fontWeight: 800, color: '#CAD2FD', fontVariantNumeric: 'tabular-nums', lineHeight: 1, letterSpacing: '-0.02em' }}>
-                          {item.value}
-                        </div>
-                      </div>
-                    </div>
-                    {/* Percentage badge */}
-                    <div style={{ textAlign: 'right', flexShrink: 0, paddingTop: 2 }}>
-                      <div style={{
-                        fontSize: 13, fontWeight: 700, color: item.color,
-                        fontVariantNumeric: 'tabular-nums', lineHeight: 1,
-                      }}>
-                        {itemPct.toFixed(1)}%
-                      </div>
-                      <div style={{ fontSize: 9, color: '#6B7280', marginTop: 2 }}>
-                        of total
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Proportion bar */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{
-                      flex: 1, height: 4, borderRadius: 3,
-                      background: 'rgba(202,210,253,0.06)', overflow: 'hidden',
-                    }}>
-                      <div style={{
-                        height: '100%', borderRadius: 3,
-                        width: `${Math.min(itemPct, 100)}%`,
-                        background: `linear-gradient(90deg, ${item.color}CC, ${item.color})`,
-                        transition: 'width 0.2s ease',
-                      }} />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* ── Benchmarking row ── */}
-          {(vsAvg !== null || rank || isOutlier) && (
-            <div style={{
-              padding: '8px 14px',
-              borderTop: '1px solid rgba(202,210,253,0.06)',
-              display: 'flex', gap: 6, flexWrap: 'wrap',
-            }}>
-              {isOutlier && (
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '3px 8px', borderRadius: 6,
-                  background: 'rgba(245,158,11,0.12)',
-                  border: '1px solid rgba(245,158,11,0.25)',
-                }}>
-                  <span style={{ fontSize: 10 }}>⚠</span>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: '#f59e0b', letterSpacing: '0.04em' }}>
-                    OUTLIER
-                  </span>
-                </div>
-              )}
-              {vsAvg !== null && (
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '3px 8px', borderRadius: 6,
-                  background: vsAvg >= 0 ? 'rgba(16,185,129,0.10)' : 'rgba(239,68,68,0.10)',
-                  border: `1px solid ${vsAvg >= 0 ? 'rgba(16,185,129,0.20)' : 'rgba(239,68,68,0.20)'}`,
-                }}>
-                  <span style={{ fontSize: 10, color: vsAvg >= 0 ? '#34d399' : '#f87171' }}>
-                    {vsAvg >= 0 ? '▲' : '▼'}
-                  </span>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: vsAvg >= 0 ? '#34d399' : '#f87171', fontVariantNumeric: 'tabular-nums' }}>
-                    {Math.abs(vsAvg).toFixed(1)}% vs avg
-                  </span>
-                </div>
-              )}
-              {rank && totalCategories && (
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '3px 8px', borderRadius: 6,
-                  background: rank <= 3 ? 'rgba(251,191,36,0.10)' : 'rgba(202,210,253,0.06)',
-                  border: `1px solid ${rank <= 3 ? 'rgba(251,191,36,0.22)' : 'rgba(202,210,253,0.08)'}`,
-                }}>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: rank <= 3 ? '#fbbf24' : '#9CA3AF', fontVariantNumeric: 'tabular-nums' }}>
-                    {rank <= 3 ? ['🥇','🥈','🥉'][rank - 1] + ' ' : ''}#{rank} of {totalCategories}
-                  </span>
-                </div>
-              )}
-              {typeof percentile === 'number' && (
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '3px 8px', borderRadius: 6,
-                  background: percentile >= 75 ? 'rgba(16,185,129,0.10)' : percentile <= 25 ? 'rgba(239,68,68,0.08)' : 'rgba(202,210,253,0.06)',
-                  border: `1px solid ${percentile >= 75 ? 'rgba(16,185,129,0.20)' : percentile <= 25 ? 'rgba(239,68,68,0.15)' : 'rgba(202,210,253,0.08)'}`,
-                }}>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: percentile >= 75 ? '#34d399' : percentile <= 25 ? '#f87171' : '#9CA3AF', fontVariantNumeric: 'tabular-nums' }}>
-                    P{Math.round(percentile)}
-                  </span>
-                </div>
-              )}
-              {typeof totalRecords === 'number' && totalRecords > 0 && (
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '3px 8px', borderRadius: 6,
-                  background: 'rgba(202,210,253,0.06)',
-                  border: '1px solid rgba(202,210,253,0.08)',
-                }}>
-                  <span style={{ fontSize: 10, fontWeight: 500, color: '#6B7280' }}>
-                    {totalRecords.toLocaleString()} records
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── Intelligence insight ── */}
-          {insight && (
-            <div style={{
-              padding: '8px 14px 10px',
-              borderTop: '1px dashed rgba(202,210,253,0.08)',
-              display: 'flex', alignItems: 'flex-start', gap: 6,
-            }}>
-              <span style={{ fontSize: 11, flexShrink: 0, marginTop: 1 }}>{backendInsight ? '🔬' : '💡'}</span>
-              <span style={{ fontSize: 10, fontStyle: 'italic', color: backendInsight ? '#CAD2FD' : '#B0B8C4', lineHeight: 1.4 }}>
-                {insight}
-              </span>
-            </div>
-          )}
-        </div>
-      </MotionDiv>
-    </AnimatePresence>,
-    document.body
-  );
-};
+// Removed CustomTooltip definition per user request.
 
 const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartType = 'bar', onPointClick, pointIntelligence, chartTitle, colorOffset = 0 }) => {
   const plotRef = useRef(null);
   const resizeObserverRef = useRef(null);
   const resizeFrameRef = useRef(null);
   const dataHashRef = useRef(null);
-  const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, data: null });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -670,14 +459,13 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
           if (isPlotlyFormat) {
             // Data is already in Plotly format — enhance line/scatter traces
             processedData = data.map(trace => {
-              const enhanced = { ...trace, hoverinfo: 'none' };
+              const enhanced = { ...trace };
               const traceType = (trace.type || '').toLowerCase();
 
               // Enforce modern donut styling for pie traces regardless of stored state
               if (traceType === 'pie') {
                 enhanced.hole = trace.hole ?? 0.65;
                 enhanced.textinfo = 'none';
-                enhanced.hovertemplate = '<b>%{label}</b><br>Count: %{value}<br>%{percent}<extra></extra>';
               }
 
               const isScatterLine = traceType === 'scatter' &&
@@ -770,8 +558,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                   color: countValues.map((_, i) => histPalette[i % histPalette.length]),
                   line: { width: 0 }
                 },
-                name: 'Frequency',
-                hoverinfo: 'none'
+                name: 'Frequency'
               }];
             } else {
               // Fallback to first two keys
@@ -790,8 +577,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                   color: yVals.map((_, i) => histPalette[i % histPalette.length]),
                   line: { width: 0 }
                 },
-                name: yKey,
-                hoverinfo: 'none'
+                name: yKey
               }];
             }
           }
@@ -852,7 +638,6 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                   symbol: 'circle',
                 } : undefined,
                 name: yLabel,
-                hoverinfo: 'none',
                 // Show number of displayed points vs total
                 meta: {
                   totalPoints,
@@ -898,8 +683,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                   color: barColors,
                   line: { width: 0 },
                 },
-                name: yLabel,
-                hoverinfo: 'none'
+                name: yLabel
               }];
             }
           } else if ((chartType === 'pie' || chartType === 'pie_chart') && Array.isArray(data) && data.length > 0) {
@@ -969,8 +753,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                   color: 'rgba(10,13,20,0.8)',
                   width: 2
                 }
-              },
-              hoverinfo: 'none'
+              }
             }];
           } else if (Array.isArray(data) && data.length > 0) {
             // Generic fallback for any unhandled chart types
@@ -997,8 +780,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                 line: { width: 0 },
                 opacity: plotType === 'scatter' ? 0.85 : 1,
               },
-              name: yLabel,
-              hoverinfo: 'none'
+              name: yLabel
             }];
           }
 
@@ -1023,6 +805,79 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             }
           }
 
+          // ── Add statistical reference lines for distribution charts ──
+          let statisticalShapes = [];
+          let statisticalAnnotations = [];
+          const isDistributionType = ['box_plot', 'violin', 'histogram', 'scatter'].includes(chartType);
+          if (isDistributionType && processedData.length > 0) {
+            const firstTrace = processedData[0];
+            const yValues = (firstTrace.y || []).filter(v => typeof v === 'number' && Number.isFinite(v));
+            if (yValues.length > 0) {
+              const sorted = [...yValues].sort((a, b) => a - b);
+              const n = sorted.length;
+              const mean = yValues.reduce((a, b) => a + b, 0) / n;
+              const median = n % 2 === 0 ? (sorted[n / 2 - 1] + sorted[n / 2]) / 2 : sorted[Math.floor(n / 2)];
+              const q1 = sorted[Math.floor(n * 0.25)];
+              const q3 = sorted[Math.floor(n * 0.75)];
+
+              // Median reference line
+              statisticalShapes.push({
+                type: 'line',
+                xref: 'paper',
+                x0: 0, x1: 1,
+                y0: median, y1: median,
+                line: { color: 'rgba(251, 146, 60, 0.6)', width: 1.5, dash: 'dot' },
+              });
+              statisticalAnnotations.push({
+                xref: 'paper', x: 1.01,
+                yref: 'y', y: median,
+                text: `Median: ${formatValue(median)}`,
+                showarrow: false,
+                font: { size: 10, color: 'rgba(251, 146, 60, 0.8)' },
+                xanchor: 'left',
+                bgcolor: 'rgba(251, 146, 60, 0.1)',
+                borderpad: 2,
+              });
+
+              // Mean reference line (if different from median)
+              if (Math.abs(mean - median) / (Math.abs(median) || 1) > 0.05) {
+                statisticalShapes.push({
+                  type: 'line',
+                  xref: 'paper',
+                  x0: 0, x1: 1,
+                  y0: mean, y1: mean,
+                  line: { color: 'rgba(56, 189, 248, 0.5)', width: 1, dash: 'dash' },
+                });
+                statisticalAnnotations.push({
+                  xref: 'paper', x: 1.01,
+                  yref: 'y', y: mean,
+                  text: `Mean: ${formatValue(mean)}`,
+                  showarrow: false,
+                  font: { size: 10, color: 'rgba(56, 189, 248, 0.7)' },
+                  xanchor: 'left',
+                  bgcolor: 'rgba(56, 189, 248, 0.1)',
+                  borderpad: 2,
+                });
+              }
+
+              // IQR shaded region
+              if (chartType === 'histogram' || chartType === 'box_plot') {
+                statisticalShapes.push({
+                  type: 'rect',
+                  xref: 'paper',
+                  x0: 0, x1: 1,
+                  y0: q1, y1: q3,
+                  fillcolor: 'rgba(16, 185, 129, 0.06)',
+                  line: { width: 0 },
+                  layer: 'below',
+                });
+              }
+            }
+          }
+
+          const isChoropleth = processedData.some(t => (t.type || '').toLowerCase() === 'choropleth');
+          const isIndicator = processedData.some(t => (t.type || '').toLowerCase() === 'indicator');
+
           const defaultLayout = {
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
@@ -1031,7 +886,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
               family: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
               size: 13
             },
-            xaxis: {
+            xaxis: isIndicator ? { visible: false } : {
               color: '#8b949e',
               gridcolor: isLineType ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0)',
               showgrid: isLineType,
@@ -1053,7 +908,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
                 },
               } : {}),
             },
-            yaxis: {
+            yaxis: isIndicator ? { visible: false } : {
               color: '#8b949e',
               // Subtle grid lines on Y axis — lets users estimate values
               gridcolor: 'rgba(255,255,255,0.06)',
@@ -1072,8 +927,31 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
               t: autoAnnotations.length > 0 ? 50 : 30,
               b: wasDownsampled ? 80 : 55,
             },
-            hovermode: 'x unified',
-            showlegend: chartType !== 'pie' && chartType !== 'donut',
+            hovermode: 'closest', // Changed from 'x unified' to 'closest' to prevent misaligned vertical crosshair lines
+            hoverlabel: {
+              bgcolor: 'rgba(15, 23, 42, 0.95)', // dark slate
+              bordercolor: 'rgba(255, 255, 255, 0.1)',
+              font: {
+                family: 'Inter, -apple-system, sans-serif',
+                size: 13,
+                color: '#f8fafc'
+              },
+              align: 'left',
+              namelength: -1
+            },
+            showlegend: chartType !== 'pie' && chartType !== 'donut' && !isIndicator,
+            ...(isChoropleth ? {
+              geo: {
+                bgcolor: 'transparent',
+                showframe: false,
+                showcoastlines: true,
+                coastlinecolor: 'rgba(255,255,255,0.2)',
+                projection: { type: 'equirectangular' },
+                lakecolor: 'rgba(59, 130, 246, 0.1)',
+                showlakes: true,
+                landcolor: 'rgba(255,255,255,0.03)'
+              }
+            } : {}),
             legend: {
               orientation: 'h',
               yanchor: 'bottom',
@@ -1086,18 +964,27 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             },
             // Auto-annotate min/max peaks
             annotations: autoAnnotations,
+            // Statistical reference lines for distribution charts
+            shapes: statisticalShapes,
           };
 
           // Merge layout: default ← parent layout, but keep our annotations
           const mergedAnnotations = [
             ...(autoAnnotations || []),
+            ...(statisticalAnnotations || []),
             ...(layout?.annotations || []),
+          ];
+
+          const mergedShapes = [
+            ...(statisticalShapes || []),
+            ...(layout?.shapes || []),
           ];
 
           await Plotly.newPlot(plotRef.current, processedData, {
             ...defaultLayout,
             ...layout,
             annotations: mergedAnnotations,
+            shapes: mergedShapes,
             autosize: true,
             useResizeHandler: true,
           }, {
@@ -1117,134 +1004,7 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
             ...config
           });
 
-          // Extract axis labels from layout for enriched tooltips
-          const mergedLayout = { ...layout };
-          const xAxisLabel = mergedLayout?.xaxis?.title?.text || mergedLayout?.xaxis?.title || '';
-          const yAxisLabel = mergedLayout?.yaxis?.title?.text || mergedLayout?.yaxis?.title || '';
-
-          // Attach hover event
-          plotRef.current.on('plotly_hover', (eventData) => {
-            if (!eventData || !eventData.points || eventData.points.length === 0) return;
-
-            const points = eventData.points;
-            const xVal = points[0].x;
-
-            // Compute grand total (sum across ALL bars/points in the trace)
-            const firstTrace = points[0]?.data;
-            const allYValues = firstTrace?.y || firstTrace?.values || [];
-            const grandTotal = allYValues.reduce((s, v) => s + (Number(v) || 0), 0);
-
-            // Compute average across all data points in the trace
-            const numericYValues = allYValues.map(v => Number(v) || 0).filter(v => v > 0);
-            const avg = numericYValues.length > 0 ? numericYValues.reduce((s, v) => s + v, 0) / numericYValues.length : 0;
-
-            // Compute total categories/data points
-            const totalCategories = numericYValues.length;
-
-            // Total records from dataset metadata if available
-            const totalRecords = firstTrace?.meta?.totalRecords || null;
-
-            let total = 0;
-            const items = points.map(pt => {
-              const rawValue = Number(pt.y ?? pt.value ?? 0) || 0;
-              total += rawValue;
-              // Use yAxisLabel as item name for single-series, trace name for multi-series
-              const traceName = pt.data.name || pt.fullData.name || '';
-              // Prefer axis label, then chart title, then trace name — avoids "Chart" as metric label
-              const metricLabel = yAxisLabel || (chartTitle && chartTitle !== 'Chart' ? chartTitle : null) || traceName || 'Value';
-              return {
-                name: metricLabel,
-                value: formatValue(rawValue),
-                rawValue,
-                color: resolvePointColor(pt)
-              };
-            });
-
-            // Compute rank of the current value (1 = highest)
-            const currentValue = items[0]?.rawValue || 0;
-            const sortedValues = [...numericYValues].sort((a, b) => b - a);
-            const rank = sortedValues.indexOf(currentValue) + 1;
-
-            // For Pie charts
-            if (chartType === 'pie' || chartType === 'donut') {
-               const pt = points[0];
-               const pieValues = Array.isArray(pt?.data?.values) ? pt.data.values : [];
-               const pieTotal = pieValues.reduce((sum, value) => sum + (Number(value) || 0), 0);
-               const pieNumericValues = pieValues.map(v => Number(v) || 0).filter(v => v > 0);
-               const pieAvg = pieNumericValues.length > 0 ? pieNumericValues.reduce((s, v) => s + v, 0) / pieNumericValues.length : 0;
-               const pieSorted = [...pieNumericValues].sort((a, b) => b - a);
-               const pieVal = Number(pt.value) || 0;
-               const pieRank = pieSorted.indexOf(pieVal) + 1;
-
-               // Look up pre-computed intelligence from backend
-               const ptIntel = pointIntelligence?.points?.[String(pt.label)] || null;
-
-               setTooltip({
-                 visible: true,
-                 x: eventData.event.clientX,
-                 y: eventData.event.clientY,
-                 data: {
-                   xLabel: pointIntelligence?.x_label || xAxisLabel || 'Slice',
-                   xValue: pt.label,
-                   yLabel: pointIntelligence?.y_label || yAxisLabel || 'Value',
-                   items: [{
-                     name: pt.label,
-                     value: formatValue(pieVal),
-                     rawValue: pieVal,
-                     color: resolvePointColor(pt)
-                   }],
-                   grandTotal: pieTotal,
-                   avg: ptIntel ? pointIntelligence.stats.mean : pieAvg,
-                   rank: ptIntel?.rank || pieRank,
-                   totalCategories: ptIntel ? Object.keys(pointIntelligence.points).length : pieNumericValues.length,
-                   totalRecords: ptIntel?.record_count || pointIntelligence?.total_records || null,
-                   backendInsight: ptIntel?.insight || null,
-                   isOutlier: ptIntel?.is_outlier || false,
-                   zScore: ptIntel?.z_score || null,
-                   percentile: ptIntel?.percentile || null,
-                 }
-               });
-            } else {
-              // For multi-series, keep individual trace names
-              const enrichedItems = points.length > 1
-                ? points.filter(pt => (Number(pt.y ?? 0) || 0) > 0).map(pt => ({
-                    name: pt.data.name || pt.fullData.name || 'Series',
-                    value: formatValue(Number(pt.y ?? 0) || 0),
-                    rawValue: Number(pt.y ?? 0) || 0,
-                    color: resolvePointColor(pt)
-                  }))
-                : items.filter(item => item.rawValue > 0);
-
-              // Look up pre-computed intelligence from backend
-              const ptIntel = pointIntelligence?.points?.[String(xVal)] || null;
-
-              setTooltip({
-                visible: true,
-                x: eventData.event.clientX,
-                y: eventData.event.clientY,
-                data: {
-                  xLabel: pointIntelligence?.x_label || xAxisLabel,
-                  xValue: xVal,
-                  yLabel: pointIntelligence?.y_label || yAxisLabel || '',
-                  items: enrichedItems.length > 0 ? enrichedItems : items,
-                  grandTotal,
-                  avg: ptIntel ? pointIntelligence.stats.mean : avg,
-                  rank: ptIntel?.rank || (rank > 0 ? rank : null),
-                  totalCategories: ptIntel ? Object.keys(pointIntelligence.points).length : totalCategories,
-                  totalRecords: ptIntel?.record_count || pointIntelligence?.total_records || null,
-                  backendInsight: ptIntel?.insight || null,
-                  isOutlier: ptIntel?.is_outlier || false,
-                  zScore: ptIntel?.z_score || null,
-                  percentile: ptIntel?.percentile || null,
-                }
-              });
-            }
-          });
-
-          // Attach unhover event
-          plotRef.current.on('plotly_unhover', () => {
-             setTooltip(prev => ({ ...prev, visible: false }));
-          });
+          // Removed CustomTooltip hover/unhover logic to rely purely on native Plotly tooltips
 
           // Attach click event for drill-down
           plotRef.current.on('plotly_click', (eventData) => {
@@ -1349,7 +1109,6 @@ const PlotlyChart = memo(({ data, layout = {}, style = {}, config = {}, chartTyp
           </div>
         )}
       </div>
-      {!isLoading && !error && <CustomTooltip {...tooltip} />}
     </>
   );
 }, (prevProps, nextProps) => {

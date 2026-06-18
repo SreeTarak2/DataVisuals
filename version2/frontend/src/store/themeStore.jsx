@@ -69,7 +69,7 @@ const useThemeStore = create(
       },
     }),
     {
-      name: "datasage-theme",
+      name: "signal-theme",
       onRehydrateStorage: () => (state) => {
         if (!state) return;
         const resolvedTheme = applyThemeToDom(state.theme || "dark");

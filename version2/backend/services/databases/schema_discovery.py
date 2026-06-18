@@ -10,32 +10,60 @@ import hashlib
 import json
 import time
 import logging
+from datetime import date, datetime
 
 if TYPE_CHECKING:
     from db.schemas_pipeline import DatasetProfile
 
 logger = logging.getLogger(__name__)
 
-_SCALAR = (str, int, float, bool)
+_SCALAR = (str, int, float, bool, type(None))
+
+
+def _flatten_document(doc: Dict[str, Any], parent_key: str = "", sep: str = ".") -> Dict[str, Any]:
+    """
+    Recursively flatten a nested document into dot-notation keys so Polars can
+    build a DataFrame without losing nested structure.
+
+    - Preserves scalar types (str, int, float, bool, None) as-is.
+    - Datetime/date objects → ISO-format strings (Polars can parse these back).
+    - Nested dicts → flattened with dot notation (e.g. "address.city").
+    - Arrays/lists → JSON string (avoids losing array data entirely).
+    - MongoDB internal keys (_id, __v) ARE kept (the connector already converts
+      ObjectId → str; `_id` is needed for row identity).
+    - Everything else → str.
+    """
+    items: List[tuple[str, Any]] = []
+    for k, v in doc.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+
+        if v is None:
+            items.append((new_key, None))
+        elif isinstance(v, (str, int, float, bool)):
+            items.append((new_key, v))
+        elif isinstance(v, (datetime, date)):
+            items.append((new_key, v.isoformat()))
+        elif isinstance(v, dict):
+            items.extend(_flatten_document(v, new_key, sep=sep).items())
+        elif isinstance(v, (list, tuple)):
+            # Arrays → JSON string so array-of-objects is not silently lost
+            try:
+                items.append((new_key, json.dumps(v, default=str)))
+            except (TypeError, ValueError):
+                items.append((new_key, str(v)))
+        else:
+            # Fallback: anything else becomes str
+            items.append((new_key, str(v)))
+
+    return dict(items)
 
 
 def _coerce_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Strip non-scalar values so polars can build a DataFrame from DB sample rows.
-    Skips MongoDB internal keys (_id, __v). Converts ObjectId / nested objects to str.
+    Legacy alias — delegates to ``_flatten_document`` per-row.
+    Kept for backward compatibility in case external callers exist.
     """
-    clean = []
-    for row in rows:
-        r: Dict[str, Any] = {}
-        for k, v in row.items():
-            if k.startswith("_") or k.startswith("__"):
-                continue
-            if v is None or isinstance(v, _SCALAR):
-                r[k] = v
-            else:
-                r[k] = str(v)
-        clean.append(r)
-    return clean
+    return [_flatten_document(r) for r in rows]
 
 
 class SchemaDiscoveryService:

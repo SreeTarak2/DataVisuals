@@ -7,7 +7,7 @@ export default function AuthPreview() {
     return (
         <div className="hidden md:flex md:w-1/2 relative bg-[#09090b] overflow-hidden p-6 lg:p-12 items-center justify-center">
             <div className="absolute top-1/4 -right-20 w-80 h-80 bg-indigo-600/20 rounded-full blur-[120px]" />
-            <div className="absolute bottom-1/4 -left-20 w-80 h-80 bg-purple-600/10 rounded-full blur-[120px]" />
+            <div className="absolute bottom-1/4 -left-20 w-80 h-80 bg-orange-600/10 rounded-full blur-[120px]" />
 
             <div className="relative w-full max-w-2xl space-y-6">
                 <div className="grid grid-cols-6 gap-4 lg:gap-6">
@@ -200,7 +200,7 @@ export default function AuthPreview() {
                         Transform Data into Insights
                     </h2>
                     <p className="text-zinc-400 text-sm lg:text-base max-w-md mx-auto leading-relaxed">
-                        Make informed decisions with DataSage's powerful analytics.
+                        Make informed decisions with Signal's powerful analytics.
                     </p>
                     <div className="flex justify-center gap-2 pt-2 lg:pt-4">
                         <div className="w-1.5 h-1.5 rounded-full bg-white" />

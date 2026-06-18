@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-const SIDEBAR_KEY = 'datasage-sidebar-expanded';
+const SIDEBAR_KEY = 'signal-sidebar-expanded';
 
 const useSidebarStore = create((set) => ({
     expanded: (() => {

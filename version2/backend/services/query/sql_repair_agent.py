@@ -1,7 +1,7 @@
 """
 sql_repair_agent.py
 ====================
-Self-healing SQL agent for DataSage — handles every DuckDB error class
+Self-healing SQL agent for Signal — handles every DuckDB error class
 observed in production logs.
 
 Each fix is its own function so it can be tested and swapped independently.

@@ -567,3 +567,54 @@ async def update_title(conversation_id: str, user_id: str, title: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to update conversation title {conversation_id}: {e}")
         return False
+
+
+# -----------------------------------------------------------
+# Auto-Name Conversation
+# -----------------------------------------------------------
+
+
+async def auto_name_conversation(conv_id: str, user_id: str, first_message: str) -> None:
+    """
+    Auto-generate a short descriptive title for a new conversation using Mistral Nemo.
+
+    Fire-and-forget: never raises — all errors are caught and logged.
+    The title is generated from the user's first message and saved to the conversation.
+    """
+    try:
+        from services.llm_router import llm_router
+
+        prompt = (
+            "Generate a short, descriptive title (5 words or fewer) for this conversation.\n\n"
+            f"User's first message: \"{first_message}\"\n\n"
+            "Rules:\n"
+            "- 5 words maximum\n"
+            "- Descriptive and specific to the user's query\n"
+            "- No quotes, no punctuation except apostrophes\n"
+            "- Use plain English title case\n"
+            "- Just return the title, nothing else"
+        )
+
+        response = await llm_router.call(
+            prompt=prompt,
+            model_role="conversation_naming",
+            expect_json=False,
+            temperature=0.3,
+            max_tokens=30,
+        )
+
+        if isinstance(response, str) and response.strip():
+            title = response.strip().strip('"').strip("'")
+            # Cap length to avoid absurdly long titles
+            if len(title) > 60:
+                title = title[:60]
+            if title:
+                await update_title(str(conv_id), user_id, title)
+                logger.info(f"Auto-named conversation {conv_id}: '{title}'")
+            else:
+                logger.warning(f"Auto-naming returned empty title for conv {conv_id}")
+        else:
+            logger.warning(f"Auto-naming did not return a string for conv {conv_id}: {type(response)}")
+
+    except Exception as e:
+        logger.warning(f"Failed to auto-name conversation {conv_id}: {e}")

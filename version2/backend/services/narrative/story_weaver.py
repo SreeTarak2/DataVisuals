@@ -12,7 +12,7 @@ The dual-model approach ensures:
 - DeepSeek handles complex analysis (computation, statistics)
 - Qwen handles plain English output (no jargon, business-friendly)
 
-Author: DataSage Team
+Author: Signal Team
 """
 
 import json

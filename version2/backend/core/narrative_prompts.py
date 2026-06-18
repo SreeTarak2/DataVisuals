@@ -14,7 +14,7 @@ Model Settings:
   Stage 1 & 2 → temperature: 0.1  (deterministic, factual)
   Stage 3      → temperature: 0.3  (clear, professional, not robotic)
 
-Author: DataSage Team (based on Claude.ai Enterprise Narrative System)
+Author: Signal Team (based on Claude.ai Enterprise Narrative System)
 """
 
 from typing import Dict, Any, List, Optional
@@ -1027,9 +1027,7 @@ def validate_narration_quality(narration_output: dict, domain: str) -> dict:
     report_text = str(narration_output)
     banned_words = JARGON_BAN.get(domain.lower(), JARGON_BAN["finance"])
 
-    found_jargon = [
-        word for word in banned_words if word.lower() in report_text.lower()
-    ]
+    found_jargon = [word for word in banned_words if word.lower() in report_text.lower()]
     if found_jargon:
         issues.append(f"Banned jargon found: {', '.join(found_jargon)}")
 

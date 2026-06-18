@@ -41,7 +41,7 @@ const VisualEvidencePanel = ({
         return 'text-blue-400 bg-blue-400/10 border-blue-400/20';
       case 'performance':
       case 'bar':
-        return 'text-purple-400 bg-purple-400/10 border-purple-400/20';
+        return 'text-orange-400 bg-orange-400/10 border-orange-400/20';
       case 'anomaly':
       case 'box':
         return 'text-orange-400 bg-orange-400/10 border-orange-400/20';

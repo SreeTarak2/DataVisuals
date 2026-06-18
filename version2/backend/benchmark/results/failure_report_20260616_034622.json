@@ -1,0 +1,80 @@
+{
+  "timestamp": "20260616_034622",
+  "total_datasets": 92,
+  "failure_count": 5,
+  "failures": [
+    {
+      "dataset": "adv_hard_ambiguous_accounts.csv",
+      "category": "abstention",
+      "expected_primary": "account",
+      "predicted_primary": "account",
+      "expected_participants": [],
+      "predicted_participants": [
+        "contact"
+      ],
+      "reason": "Expected no primary, got 'account'"
+    },
+    {
+      "dataset": "adv_hard_ambiguous_competing.csv",
+      "category": "abstention",
+      "expected_primary": "lead",
+      "predicted_primary": "account",
+      "expected_participants": [],
+      "predicted_participants": [
+        "contact"
+      ],
+      "reason": "Expected no primary, got 'account'"
+    },
+    {
+      "dataset": "adv_hard_mixed_appointments.csv",
+      "category": "primary_object",
+      "expected_primary": "appointment",
+      "predicted_primary": "patient",
+      "expected_participants": [
+        "doctor",
+        "patient"
+      ],
+      "predicted_participants": [
+        "doctor"
+      ],
+      "reason": "Expected primary 'appointment', got 'patient'"
+    },
+    {
+      "dataset": "adv_hard_mixed_claims.csv",
+      "category": "primary_object",
+      "expected_primary": "claim",
+      "predicted_primary": "customer",
+      "expected_participants": [
+        "customer",
+        "policy",
+        "provider"
+      ],
+      "predicted_participants": [
+        "claim",
+        "policy"
+      ],
+      "reason": "Expected primary 'claim', got 'customer'"
+    },
+    {
+      "dataset": "adv_hard_mixed_policies.csv",
+      "category": "primary_object",
+      "expected_primary": "policy",
+      "predicted_primary": "customer",
+      "expected_participants": [
+        "agent",
+        "customer",
+        "product"
+      ],
+      "predicted_participants": [
+        "agent",
+        "policy",
+        "product"
+      ],
+      "reason": "Expected primary 'policy', got 'customer'"
+    }
+  ],
+  "failure_categories": {
+    "abstention": 2,
+    "primary_object": 3
+  }
+}

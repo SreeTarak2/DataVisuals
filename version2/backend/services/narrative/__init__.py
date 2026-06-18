@@ -6,7 +6,7 @@ Services for transforming analytical findings into narrative stories.
 Modules:
     - story_weaver: Main engine for weaving findings into stories
 
-Author: DataSage Team
+Author: Signal Team
 """
 
 from services.narrative.story_weaver import StoryWeaver, story_weaver

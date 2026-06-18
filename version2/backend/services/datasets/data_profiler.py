@@ -7,7 +7,7 @@ Comprehensive data profiling for intelligent analysis:
 - Data quality metrics (nulls, completeness, consistency)
 - Relationship inference (potential foreign keys, hierarchies)
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 1.0
 """
 

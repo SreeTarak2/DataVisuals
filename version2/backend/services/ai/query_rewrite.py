@@ -46,6 +46,7 @@ class QueryUnderstanding:
     Full output of the query understanding pipeline.
     Callers use enriched_query for downstream LLM calls.
     what_i_understood is shown in the UI clarification card.
+    routing drives the execution path: sql | metadata | conversational.
     """
 
     original_query: str
@@ -56,11 +57,83 @@ class QueryUnderstanding:
     archetype: str = "analyst"
     decision_at_stake: str = ""
     was_enriched: bool = False
+    routing: str = "sql"  # "sql" | "metadata" | "conversational"
 
 
 # =============================================================================
 # VOCABULARY FINGERPRINTS  (rule-based pre-classifier — no LLM call needed)
 # =============================================================================
+
+# Vocabulary for metadata question detection.
+# Substring-based (not regex) — easy to extend, no false positives on data queries.
+_METADATA_VOCAB: frozenset = frozenset(
+    {
+        "column",
+        "columns",
+        "field",
+        "fields",
+        "schema",
+        "structure",
+        "data type",
+        "data types",
+        "dtype",
+        "dtypes",
+        "describe",
+        "what data",
+        "what information",
+        "what variables",
+        "attributes",
+        "header",
+        "headers",
+        "available data",
+        "what columns",
+        "column name",
+        "column names",
+        "what fields",
+        "list of columns",
+        "list columns",
+        "what can i ask",
+        "what can you tell",
+    }
+)
+
+# Vocabulary for obvious conversational / off-topic detection (fast-path only).
+# Intentionally narrow — nuanced cases go to the full LLM intent path.
+_CONVERSATIONAL_VOCAB: frozenset = frozenset(
+    {
+        "hello",
+        "hi there",
+        "hey there",
+        "how are you",
+        "what's up",
+        "good morning",
+        "good evening",
+        "good night",
+        "tell me a joke",
+        "who are you",
+        "what is your name",
+        "who made you",
+        "what can you do",
+    }
+)
+
+
+def _is_metadata_question(query: str) -> bool:
+    """Vocabulary-based metadata detection — runs in microseconds, no LLM."""
+    q = query.lower()
+    return any(term in q for term in _METADATA_VOCAB)
+
+
+def _fast_routing(query: str) -> str:
+    """
+    Vocabulary-based routing hint for the fast path.
+    Returns "metadata" | "sql" only — conversational detection is left to
+    the full LLM intent path because false positives are too risky.
+    """
+    if _is_metadata_question(query):
+        return "metadata"
+    return "sql"
+
 
 _EXPERT_TERMS = {
     "correlation",
@@ -209,9 +282,7 @@ def _is_vague(query: str) -> bool:
     """Check if query matches known underspecified patterns."""
     q = query.strip()
     if len(q.split()) <= 4:
-        if not any(
-            col_hint in q.lower() for col_hint in _ANALYST_TERMS | _EXPERT_TERMS
-        ):
+        if not any(col_hint in q.lower() for col_hint in _ANALYST_TERMS | _EXPERT_TERMS):
             return True
     return any(p.search(q) for p in _COMPILED_VAGUE)
 
@@ -223,9 +294,7 @@ def _has_vocabulary_gap(query: str, available_columns: Optional[list] = None) ->
         return False
 
     cols_to_check = available_columns or list(_SKEW_PRONE_COLUMNS)
-    return any(
-        col.lower() in q for col in cols_to_check if col.lower() in _SKEW_PRONE_COLUMNS
-    )
+    return any(col.lower() in q for col in cols_to_check if col.lower() in _SKEW_PRONE_COLUMNS)
 
 
 # =============================================================================
@@ -239,11 +308,9 @@ def _build_intent_detection_prompt(
     available_columns: list,
     archetype: str,
 ) -> str:
-    cols_preview = (
-        ", ".join(available_columns[:25]) if available_columns else "not provided"
-    )
+    cols_preview = ", ".join(available_columns[:25]) if available_columns else "not provided"
 
-    return f"""You are the Intent Engine for DataSage AI — a data analytics assistant.
+    return f"""You are the Intent Engine for Signal — a data analytics assistant.
 A user has submitted a query. Your job: understand the REAL business question
 behind their words, detect what is missing or wrong, and produce an enriched
 version that will get them a genuinely useful answer.
@@ -298,7 +365,7 @@ This sentence is shown to the user as a confirmation card before answering.
   ✓ States WHAT you will show AND WHY it answers their real question
   ✓ If you fixed a vocabulary gap: mention it naturally
   ✓ Maximum 2 sentences
-  ✗ NEVER start with "I" or "DataSage"
+  ✗ NEVER start with "I" or "Signal"
   ✗ NEVER be robotic ("Processing your request to display...")
 
   GOOD: "Showing median price by fuel type — median is more reliable than average
@@ -322,8 +389,15 @@ OUTPUT FORMAT — return ONLY valid JSON
                      For Explorer: rewrite substantially. For Expert: minimal changes.",
   "what_i_understood": "1-2 plain English sentences shown to user. States what will
                         be shown and why it answers their real question.",
-  "archetype_confirmed": "explorer | analyst | expert"
-}}"""
+  "archetype_confirmed": "explorer | analyst | expert",
+  "routing": "sql | metadata | conversational"
+}}
+
+routing values:
+  "sql"           → needs actual data retrieval (query, aggregate, filter, chart, trend)
+  "metadata"      → about dataset structure (column names, schema, data types, what fields)
+  "conversational"→ off-topic, chitchat, greetings — nothing to do with the data
+"""
 
 
 def _build_enrichment_only_prompt(query: str, dataset_context: str) -> str:
@@ -359,7 +433,9 @@ def _post_validate(original: str, rewritten: str) -> str:
     original_clean = original.strip()
 
     # Check if rewritten is SQL instead of natural language — reject
-    sql_pattern = re.compile(r'\b(SELECT|FROM|WHERE|GROUP BY|ORDER BY|INSERT|UPDATE|DELETE)\b', re.IGNORECASE)
+    sql_pattern = re.compile(
+        r"\b(SELECT|FROM|WHERE|GROUP BY|ORDER BY|INSERT|UPDATE|DELETE)\b", re.IGNORECASE
+    )
     if sql_pattern.search(rewritten_clean):
         logger.warning(
             f"Rewrite validation: rewriter produced SQL instead of natural language. "
@@ -427,8 +503,7 @@ def _post_validate(original: str, rewritten: str) -> str:
         return original
 
     logger.info(
-        f"Rewrite validation: SUCCESS - "
-        f"'{original_clean[:30]}...' -> '{rewritten_clean[:30]}...'"
+        f"Rewrite validation: SUCCESS - '{original_clean[:30]}...' -> '{rewritten_clean[:30]}...'"
     )
     return rewritten_clean
 
@@ -477,9 +552,7 @@ async def understand_query(
     archetype = _fast_archetype(query)
     is_vague = _is_vague(query)
     vocab_gap = _has_vocabulary_gap(query, cols)
-    failure_mode = (
-        "underspecified" if is_vague else "vocabulary_gap" if vocab_gap else None
-    )
+    failure_mode = "underspecified" if is_vague else "vocabulary_gap" if vocab_gap else None
 
     use_fast_path = (
         not force_full_intent
@@ -491,6 +564,7 @@ async def understand_query(
     if use_fast_path:
         logger.debug(f"understand_query: fast path — archetype={archetype}")
         enriched = await _run_enrichment_only(query, dataset_context)
+        routing = _fast_routing(query)  # vocabulary-based, no LLM
         return QueryUnderstanding(
             original_query=query,
             enriched_query=enriched,
@@ -499,6 +573,7 @@ async def understand_query(
             needs_clarification=False,
             archetype=archetype,
             was_enriched=(enriched.lower() != query.lower()),
+            routing=routing,
         )
 
     logger.debug(
@@ -506,9 +581,7 @@ async def understand_query(
         f"vague={is_vague}, vocab_gap={vocab_gap}"
     )
 
-    intent_prompt = _build_intent_detection_prompt(
-        query, dataset_context, cols, archetype
-    )
+    intent_prompt = _build_intent_detection_prompt(query, dataset_context, cols, archetype)
 
     try:
         import json
@@ -546,6 +619,10 @@ async def understand_query(
     needs_clarification = intent.get("needs_clarification", is_vague)
     archetype_confirmed = intent.get("archetype_confirmed", archetype)
     decision_at_stake = intent.get("decision_at_stake", "")
+    # Routing: trust LLM, but fall back to vocabulary-based check
+    routing = intent.get("routing", "")
+    if routing not in ("sql", "metadata", "conversational"):
+        routing = _fast_routing(query)  # vocabulary fallback
 
     enriched_query = _post_validate(query, enriched_query)
 
@@ -554,6 +631,7 @@ async def understand_query(
 
     logger.info(
         f"understand_query: "
+        f"routing={routing}, "
         f"archetype={archetype_confirmed}, "
         f"failure={detected_failure}, "
         f"clarification={needs_clarification}, "
@@ -569,6 +647,7 @@ async def understand_query(
         archetype=archetype_confirmed,
         decision_at_stake=decision_at_stake,
         was_enriched=(enriched_query.lower() != query.lower()),
+        routing=routing,
     )
 
 
@@ -582,11 +661,7 @@ async def _run_enrichment_only(query: str, dataset_context: str) -> str:
             expect_json=False,
         )
         if isinstance(result, dict):
-            result = (
-                result.get("response")
-                or result.get("text")
-                or result.get("content", "")
-            )
+            result = result.get("response") or result.get("text") or result.get("content", "")
         return _post_validate(query, str(result).strip()) if result else query
     except Exception as e:
         logger.warning(f"Enrichment only failed: {e} — using original")

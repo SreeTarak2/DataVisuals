@@ -9,7 +9,7 @@ Intelligently detects dataset domain using hybrid approach:
 Supported domains:
 - automotive, healthcare, ecommerce, sales, finance, hr, sports, general
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 1.0
 """
 

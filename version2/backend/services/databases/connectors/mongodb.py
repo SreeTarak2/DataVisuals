@@ -6,6 +6,7 @@ Implements DatabaseConnector for MongoDB databases with full security
 from typing import Optional, Any, List, Dict
 from .base import DatabaseConnector, SecurityValidator
 from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
 import time
 import logging
 
@@ -22,8 +23,18 @@ class MongoDBConnector(DatabaseConnector):
         self._connection_string: Optional[str] = None
 
     def _build_connection_string(self) -> str:
-        """Build MongoDB connection string from config"""
+        """Build MongoDB connection string from config
+
+        Priority:
+        1. Use ``connection_url`` directly if provided
+        2. Build from individual fields (host, port, username, password, database)
+        """
         config = self.config
+
+        # Use full connection URL if provided (e.g., from Atlas connection string)
+        connection_url = config.get('connection_url')
+        if connection_url:
+            return connection_url
 
         user = config.get('username', '')
         password = config.get('password', '')
@@ -66,43 +77,58 @@ class MongoDBConnector(DatabaseConnector):
         return conn_string
 
     async def connect(self) -> bool:
-        """Connect to MongoDB database"""
+        """Connect to MongoDB database with retry logic"""
         start_time = self._log_operation_start("connect", {"host": self.config.get('host')})
 
-        try:
-            if self._client is not None:
-                # Test if client is still alive
+        if self._client is not None:
+            # Test if client is still alive
+            try:
                 await self._client.admin.command('ping')
                 return True
+            except Exception:
+                # Stale connection — reconnect below
+                await self.disconnect()
 
-            self._connection_string = self._build_connection_string()
+        self._connection_string = self._build_connection_string()
+        last_error = None
 
-            # Create MongoDB client with security settings
-            self._client = AsyncIOMotorClient(
-                self._connection_string,
-                maxPoolSize=self._pool_size,
-                minPoolSize=1,
-                maxIdleTimeMS=300000,
-                serverSelectionTimeoutMS=self._connection_timeout * 1000,
-                connectTimeoutMS=self._connection_timeout * 1000,
-            )
+        for attempt in range(self._max_retries):
+            try:
+                self._client = AsyncIOMotorClient(
+                    self._connection_string,
+                    maxPoolSize=self._pool_size,
+                    minPoolSize=1,
+                    maxIdleTimeMS=300000,
+                    serverSelectionTimeoutMS=self._connection_timeout * 1000,
+                    connectTimeoutMS=self._connection_timeout * 1000,
+                )
 
-            # Get database reference
-            database_name = self.config.get('database', 'admin')
-            self._database = self._client[database_name]
+                database_name = self.config.get('database', 'admin')
+                self._database = self._client[database_name]
 
-            # Test the connection by pinging
-            await self._client.admin.command('ping')
+                await self._client.admin.command('ping')
 
-            self._connected_at = time.time()
-            self._log_operation_end("connect", {"host": self.config.get('host')}, start_time, True)
-            return True
+                self._connected_at = time.time()
+                self._log_operation_end("connect", {"host": self.config.get('host')}, start_time, True)
+                return True
 
-        except Exception as e:
-            error_msg = f"MongoDB connection error: {str(e)}"
-            logger.error(error_msg)
-            self._log_operation_end("connect", {"host": self.config.get('host')}, start_time, False, error_msg)
-            return False
+            except Exception as e:
+                last_error = e
+                self._client = None
+                self._database = None
+                if attempt < self._max_retries - 1:
+                    delay = self._retry_delay_seconds * (2 ** attempt)
+                    logger.warning(
+                        f"MongoDB connection attempt {attempt + 1}/{self._max_retries} "
+                        f"failed: {e}. Retrying in {delay:.1f}s..."
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    error_msg = f"MongoDB connection error after {self._max_retries} attempts: {last_error}"
+                    logger.error(error_msg)
+
+        self._log_operation_end("connect", {"host": self.config.get('host')}, start_time, False, str(last_error))
+        return False
 
     async def disconnect(self) -> None:
         """Disconnect from MongoDB database"""
@@ -182,6 +208,22 @@ class MongoDBConnector(DatabaseConnector):
             logger.error(error_msg)
             self._log_operation_end("get_tables", {"database": self.config.get('database')}, start_time, False, error_msg)
             raise
+
+    async def get_foreign_keys(self) -> List[Dict[str, Any]]:
+        """
+        Get foreign key constraints in MongoDB.
+
+        MongoDB does not have native foreign key constraints.
+        Relationships are typically embedded documents or manual
+        references stored as fields. Returns an empty list.
+
+        Returns:
+            Empty list
+        """
+        # MongoDB has no native FK constraints, so return empty.
+        # Cross-collection relationship discovery (Tier 2+ with value
+        # overlap analysis) will detect these later from extracted data.
+        return []
 
     async def get_table_schema(self, table_name: str) -> List[Dict[str, Any]]:
         """Get schema for MongoDB collection by sampling documents"""

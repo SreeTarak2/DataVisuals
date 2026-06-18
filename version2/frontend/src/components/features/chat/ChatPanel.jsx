@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
-import { Send, Sparkles, Loader2, RefreshCw, X, History, ChevronDown, ChevronUp, Copy, Check, Edit, ArrowRight, ChevronRight, Plus, WifiOff, Square, TrendingUp, BarChart3, Lightbulb, MessageSquare, Table2 } from 'lucide-react';
+import { Send, Sparkles, Loader2, RefreshCw, X, History, ChevronDown, ChevronUp, Copy, Check, Edit, ArrowRight, ChevronRight, Plus, WifiOff, Square, TrendingUp, BarChart3, Lightbulb, MessageSquare, Table2, LayoutGrid } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-hot-toast';
 import { cn } from '@/lib/utils';
@@ -11,10 +11,100 @@ import useChatStore from '@/store/chatStore';
 import useDatasetStore from '@/store/datasetStore';
 import useWebSocket from '@/hooks/useWebSocket';
 import InsightFeedback from '@/components/features/feedback/InsightFeedback';
+import CorrectionCapture from '@/components/features/chat/CorrectionCapture';
 import ChatHistoryModal from '@/components/features/observatory/ChatHistoryModal';
 import './ChatPanel.css';
 
 const RATE_LIMIT_TOTAL = 30;
+
+/* ─── Intent Detection for Dashboard Component Addition ─── */
+const COMPONENT_INTENT_PATTERNS = [
+    // KPI patterns
+    { type: 'kpi', regex: /^(show|add|display|create|put|give me)\s+(me\s+)?(a\s+)?(kpi|metric|card|number|total|sum|average|avg|count)\s+(of|for|on)\s+(.+)/i },
+    { type: 'kpi', regex: /^(what'?s?\s+)?(the\s+)?(total|sum|average|avg|count|mean|median)\s+(of\s+)?(.+)/i },
+    // Chart patterns
+    { type: 'chart', regex: /^(show|add|display|create|plot|draw|make)\s+(me\s+)?(a\s+)?(chart|graph|visualization|viz|plot)\s+(of|for|on)\s+(.+)/i },
+    { type: 'chart', regex: /^(show|plot|chart|graph)\s+(me\s+)?(.+)\s+(by|across|vs|versus|against)\s+(.+)/i },
+    { type: 'chart', regex: /^(bar|line|pie|scatter|area|histogram)\s+(chart|graph|plot|of|for)\s+(.+)/i },
+];
+
+const AGGREGATION_MAP = {
+    'total': 'sum', 'sum': 'sum',
+    'average': 'mean', 'avg': 'mean', 'mean': 'mean',
+    'median': 'median',
+    'count': 'count', 'number of': 'count',
+    'max': 'max', 'highest': 'max', 'peak': 'max',
+    'min': 'min', 'lowest': 'min',
+};
+
+const CHART_TYPE_MAP = {
+    'bar': 'bar', 'bar chart': 'bar',
+    'line': 'line', 'line chart': 'line', 'trend': 'line',
+    'pie': 'pie', 'pie chart': 'pie',
+    'scatter': 'scatter', 'scatter plot': 'scatter',
+    'area': 'area', 'area chart': 'area',
+    'histogram': 'histogram', 'hist': 'histogram', 'distribution': 'histogram',
+};
+
+const detectComponentIntent = (message, columnNames = []) => {
+    const trimmed = message.trim();
+
+    for (const pattern of COMPONENT_INTENT_PATTERNS) {
+        const match = trimmed.match(pattern.regex);
+        if (!match) continue;
+
+        const intent = { type: pattern.type, raw: trimmed };
+
+        if (pattern.type === 'kpi') {
+            // Extract aggregation and column
+            const aggWord = match[1] || match[3] || '';
+            const colPart = match[4] || match[5] || '';
+            intent.aggregation = AGGREGATION_MAP[aggWord.toLowerCase()] || 'sum';
+            intent.column = findBestColumnMatch(colPart, columnNames);
+            intent.title = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+        } else if (pattern.type === 'chart') {
+            // Extract chart type and columns
+            const chartWord = match[1] || match[3] || '';
+            const colPart = match[4] || match[5] || match[3] || '';
+            const groupPart = match[5] || match[4] || '';
+            intent.chart_type = CHART_TYPE_MAP[chartWord.toLowerCase()] || 'bar';
+            intent.column = findBestColumnMatch(colPart, columnNames);
+            intent.group_by = findBestColumnMatch(groupPart, columnNames);
+            intent.aggregation = 'sum';
+            intent.title = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+        }
+
+        if (intent.column) return intent;
+    }
+
+    return null;
+};
+
+const findBestColumnMatch = (text, columnNames) => {
+    if (!text || !columnNames.length) return null;
+    const normalized = text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+    const words = normalized.split(/\s+/).filter(w => w.length > 1);
+
+    // Exact match
+    for (const col of columnNames) {
+        if (col.toLowerCase() === normalized) return col;
+    }
+
+    // Contains match
+    for (const col of columnNames) {
+        const colLower = col.toLowerCase();
+        if (words.some(w => colLower.includes(w)) || colLower.includes(normalized)) return col;
+    }
+
+    // Fuzzy: first word match
+    if (words.length > 0) {
+        for (const col of columnNames) {
+            if (col.toLowerCase().includes(words[0])) return col;
+        }
+    }
+
+    return null;
+};
 
 /* ─── Helpers ─── */
 const formatTime = (ts) => {
@@ -140,13 +230,32 @@ const ChatMessage = memo(({ msg, index, isUser, toggleTechnicalDetails, expanded
             ? (msg.follow_up_suggestions || [])
             : [];
 
+    // Attempt to parse JSON content gracefully if backend returned raw JSON string
+    let displayContent = msg.content || '';
+    try {
+        let cleanStr = displayContent.trim();
+        if (cleanStr.startsWith('```json')) cleanStr = cleanStr.substring(7);
+        else if (cleanStr.startsWith('```')) cleanStr = cleanStr.substring(3);
+        if (cleanStr.endsWith('```')) cleanStr = cleanStr.substring(0, cleanStr.length - 3);
+        cleanStr = cleanStr.trim();
+        
+        if (cleanStr.startsWith('{') && cleanStr.endsWith('}')) {
+            const parsed = JSON.parse(cleanStr);
+            if (parsed.response_text) displayContent = parsed.response_text;
+            else if (parsed.response) displayContent = parsed.response;
+            else if (parsed.message) displayContent = parsed.message;
+        }
+    } catch (e) {
+        // Not valid JSON, ignore and use raw string
+    }
+
     // AI message
     return (
         <motion.div className="chat-message--ai" variants={msgVariants} initial="hidden" animate="visible">
             <div className="chat-ai-row">
                 {/* AI Avatar */}
                 <div className="chat-ai-avatar">
-                    <Sparkles size={14} />
+                    <Sparkles size={14} className="text-ocean" />
                 </div>
 
                 <div className="chat-ai-body">
@@ -207,7 +316,7 @@ const ChatMessage = memo(({ msg, index, isUser, toggleTechnicalDetails, expanded
                                 table: ({ node, ...props }) => <div className="chat-table-wrapper"><table {...props} /></div>,
                             }}
                         >
-                            {msg.content}
+                            {displayContent}
                         </ReactMarkdown>
                     </div>
 
@@ -354,6 +463,7 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
     const [rateLimitCountdown, setRateLimitCountdown] = useState(null);
     const [followUpMap, setFollowUpMap] = useState({}); // { [msgId]: string[] }
     const [msgMetaMap, setMsgMetaMap] = useState({}); // { [msgId]: { sql_fallback, column_corrections, chart_error } }
+    const [pendingBelief, setPendingBelief] = useState(null);
     const streamingMetaRef = useRef({ sql_fallback: false, column_corrections: {}, chart_error: false });
     const lastStreamingMsgIdRef = useRef(null);
 
@@ -427,18 +537,33 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
         onCancelAck: useCallback(() => {
             currentClientMessageIdRef.current = null;
         }, []),
+        onBeliefSaved: useCallback((belief) => {
+            setPendingBelief(belief);
+        }, [setPendingBelief]),
     });
 
-    // Connect when panel opens, disconnect when it closes
+    // Connect when panel opens, disconnect when it closes — use a ref to
+    // prevent reconnection loops triggered by isConnected state changes
+    // (failed connections fire onerror → setIsConnecting(false) → re-render
+    // → effect re-runs with isConnected still false → connect() called again).
+    const panelConnectedRef = useRef(false);
     useEffect(() => {
-        if (isOpen && selectedDataset?.id) {
-            if (!isConnected) connect();
+        if (isOpen && selectedDataset?.id && !panelConnectedRef.current) {
+            panelConnectedRef.current = true;
+            connect();
         }
-        return () => {
-            // Disconnect when panel closes or unmounts
-            if (!isOpen) disconnect();
-        };
-    }, [isOpen, selectedDataset?.id, isConnected, connect, disconnect]);
+        if (!isOpen) {
+            panelConnectedRef.current = false;
+            disconnect();
+        }
+    }, [isOpen, selectedDataset?.id, connect, disconnect]);
+
+    // Sync ref when connection actually establishes
+    useEffect(() => {
+        if (isConnected) {
+            panelConnectedRef.current = true;
+        }
+    }, [isConnected]);
 
     // Auto-scroll
     useEffect(() => {
@@ -493,10 +618,101 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
         currentClientMessageIdRef.current = null;
     }, [sendCancel, cancelStreaming]);
 
+    // ─── Handle component addition via chatbot intent ───
+    const handleAddComponent = useCallback(async (intent) => {
+        const datasetId = selectedDataset?.id;
+        if (!datasetId) return;
+
+        const token = localStorage.getItem('token');
+        try {
+            const body = {
+                type: intent.type,
+                column: intent.column,
+                aggregation: intent.aggregation || 'sum',
+                title: intent.title,
+            };
+            if (intent.chart_type) body.chart_type = intent.chart_type;
+            if (intent.group_by) body.group_by = intent.group_by;
+
+            const res = await fetch(`/api/datasets/${datasetId}/components/add`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(body),
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                toast.success(`Added "${data.component?.title || intent.title}" to dashboard`);
+                // Dispatch event to notify dashboard of new component
+                window.dispatchEvent(new CustomEvent('dashboard-component-added', {
+                    detail: { type: data.type, component: data.component },
+                }));
+            } else {
+                const err = await res.json().catch(() => ({}));
+                toast.error(err.detail || 'Failed to add component');
+            }
+        } catch (e) {
+            toast.error('Failed to add component');
+        }
+    }, [selectedDataset]);
+
     const handleSendMessage = async (msgOverride = null) => {
         const rawMsg = msgOverride || inputMessage.trim();
         if (!rawMsg || isAITyping || !selectedDataset?.id) return;
+
+        // Check for component addition intent BEFORE sending to AI
+        const columnNames = selectedDataset.column_names || selectedDataset.columns || [];
+        const intent = detectComponentIntent(rawMsg, columnNames);
+
+        if (intent) {
+            setInputMessage('');
+            if (textareaRef.current) textareaRef.current.style.height = 'auto';
+
+            // Add user message to chat
+            let convId = currentConversationId;
+            if (!convId) convId = startNewConversation(selectedDataset.id);
+
+            useChatStore.setState(state => ({
+                conversations: {
+                    ...state.conversations,
+                    [convId]: {
+                        ...state.conversations[convId],
+                        messages: [...(state.conversations[convId]?.messages || []), {
+                            id: `msg_${Date.now()}_user`, role: 'user', content: rawMsg, timestamp: new Date().toISOString()
+                        }]
+                    }
+                }
+            }));
+
+            // Add AI confirmation message
+            const aiMsgId = `msg_${Date.now()}_ai`;
+            const actionLabel = intent.type === 'kpi' ? 'KPI card' : `${intent.chart_type || 'bar'} chart`;
+            useChatStore.setState(state => ({
+                conversations: {
+                    ...state.conversations,
+                    [convId]: {
+                        ...state.conversations[convId],
+                        messages: [...(state.conversations[convId]?.messages || []), {
+                            id: aiMsgId,
+                            role: 'assistant',
+                            content: `Added ${actionLabel} for **${intent.column}** to your dashboard. You can drag and resize it in the dashboard view.`,
+                            timestamp: new Date().toISOString(),
+                        }]
+                    }
+                }
+            }));
+
+            // Actually add the component
+            await handleAddComponent(intent);
+            return;
+        }
+
+        // No intent detected — send to AI as normal
         setInputMessage('');
+        setPendingBelief(null);
 
         // Enrich short chip suggestions with chart context for the AI
         let msg = rawMsg;
@@ -598,7 +814,7 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
                     <span className="text-[18px] font-bold text-header tracking-tight">AI Assistant</span>
                     {/* Connection status dot */}
                     {isConnected ? (
-                        <span title="Connected" className="w-1.5 h-1.5 rounded-full bg-green-600 inline-block" />
+                        <span title="Connected" className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
                     ) : (
                         <span title="Disconnected" className="flex items-center gap-1 text-[10px] text-muted">
                             <WifiOff size={11} />
@@ -705,18 +921,46 @@ const ChatPanel = ({ isOpen, onClose, className, chartContext, onClearChartConte
                                     followUpOverride={followUpMap[msg.id] || null}
                                     msgMeta={msgMetaMap[msg.id] || null}
                                 />
+                                {msg.role === 'assistant' && pendingBelief && i === messages.length - 1 && (
+                                    <CorrectionCapture
+                                        belief={pendingBelief}
+                                        datasetId={selectedDataset?.id}
+                                        onDismiss={() => setPendingBelief(null)}
+                                    />
+                                )}
                             </React.Fragment>
                         ))}
                         {isAITyping && (
                             <motion.div className="chat-message--ai" variants={msgVariants} initial="hidden" animate="visible">
                                 <div className="chat-ai-row">
                                     <div className="chat-ai-avatar chat-ai-avatar--thinking">
-                                        <Sparkles size={14} />
+                                        <Sparkles size={14} className="text-ocean" />
                                     </div>
                                     <div className="chat-ai-body">
                                         <div className="chat-ai-content">
                                             {streamingContent ? (
-                                                <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                                                <ReactMarkdown
+                                                    remarkPlugins={[remarkGfm]}
+                                                >
+                                                    {(() => {
+                                                        let sc = streamingContent;
+                                                        try {
+                                                            let cleanStr = sc.trim();
+                                                            if (cleanStr.startsWith('```json')) cleanStr = cleanStr.substring(7);
+                                                            else if (cleanStr.startsWith('```')) cleanStr = cleanStr.substring(3);
+                                                            if (cleanStr.endsWith('```')) cleanStr = cleanStr.substring(0, cleanStr.length - 3);
+                                                            cleanStr = cleanStr.trim();
+                                                            
+                                                            if (cleanStr.startsWith('{') && cleanStr.endsWith('}')) {
+                                                                const parsed = JSON.parse(cleanStr);
+                                                                if (parsed.response_text) sc = parsed.response_text;
+                                                                else if (parsed.response) sc = parsed.response;
+                                                                else if (parsed.message) sc = parsed.message;
+                                                            }
+                                                        } catch (e) {}
+                                                        return sc;
+                                                    })()}
+                                                </ReactMarkdown>
                                             ) : (
                                                 <div className="chat-thinking">
                                                     <div className="chat-typing">

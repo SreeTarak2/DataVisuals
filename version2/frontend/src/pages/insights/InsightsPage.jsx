@@ -6,7 +6,7 @@ import {
     FileText, Calendar, ShieldCheck, TrendingUp,
     ArrowRight, Zap, AlertTriangle, Layers,
     Cpu, Shield, Users, Link2, ChevronDown, ChevronUp, Info, Sparkles,
-    BarChart3, Target, Eye, BookOpen, Download, Loader2,
+    BarChart3, Target, Eye, BookOpen, Download, Loader2, Upload,
 } from 'lucide-react';
 import { reportsAPI, getAuthToken } from '../../services/api';
 import useDatasetStore from '../../store/datasetStore';
@@ -36,7 +36,7 @@ const CHART_COLORS = {
     emerald: '#34D399',
     amber: '#FBBF24',
     red: '#F87171',
-    purple: '#A78BFA',
+    purple: '#E85002',
 };
 
 const toScatter = (arr = []) =>
@@ -63,23 +63,146 @@ const stripMarkdown = (text) => {
 // ═══════════════════════════════════════════════════════════
 
 const EmptyState = ({ onUpload }) => (
-    <div className="insights-editorial-page min-h-[70vh] flex items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
-        <div className="text-center max-w-md mx-auto px-6">
-            <div className="relative w-20 h-20 mx-auto mb-6">
-                <div className="absolute inset-0 rounded-3xl bg-blue-500/10 animate-pulse" />
-                <div className="relative w-full h-full rounded-3xl flex items-center justify-center border border-blue-500/20 bg-slate-900">
-                    <Database className="w-10 h-10 text-blue-400" />
+    <div className="insights-editorial-page min-h-[85vh] flex items-center justify-center p-6 relative overflow-hidden">
+        {/* Deep Ambient Background */}
+        <div className="absolute inset-0 bg-[#020617]" />
+        
+        {/* Dynamic Background Gradients */}
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-blue-600/10 blur-[120px] animate-pulse" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-indigo-600/10 blur-[120px] animate-pulse" style={{ animationDelay: '1s' }} />
+
+        <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 w-full max-w-5xl"
+        >
+            <div className="grid lg:grid-cols-2 gap-16 items-center">
+                {/* Left Side: Editorial Content */}
+                <div className="text-left space-y-10">
+                    <motion.div
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: 0.3 }}
+                        className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-bold uppercase tracking-[0.2em]"
+                    >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        Analysis Engine Ready
+                    </motion.div>
+                    
+                    <div className="space-y-6">
+                        <h1 className="text-5xl lg:text-7xl font-light tracking-tight text-white leading-[1.05]">
+                            The Narrative is <br />
+                            <span className="font-bold bg-gradient-to-r from-blue-400 via-indigo-400 to-cyan-400 bg-clip-text text-transparent italic">Hidden in Data.</span>
+                        </h1>
+                        <p className="text-lg text-slate-400 font-light leading-relaxed max-w-lg">
+                            Connect your dataset to unlock narrative intelligence, identify strategic patterns, and generate high-fidelity executive summaries.
+                        </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-6 pt-4">
+                        <motion.button 
+                            whileHover={{ scale: 1.02, translateY: -2 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={onUpload}
+                            className="group relative px-10 py-4 rounded-2xl bg-white text-slate-950 font-extrabold transition-all duration-300 shadow-[0_20px_50px_-10px_rgba(255,255,255,0.2)] overflow-hidden"
+                        >
+                            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-black/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
+                            <div className="flex items-center gap-3 relative z-10">
+                                <Database className="w-5 h-5" />
+                                <span>Initialize Engine</span>
+                            </div>
+                        </motion.button>
+                        
+                        <div className="h-12 w-px bg-slate-800 mx-2 hidden sm:block" />
+                        
+                        <div className="text-slate-500 text-sm font-medium">
+                            Supported Formats: <br />
+                            <span className="text-slate-300 font-bold">CSV, JSON, XLSX</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Right Side: Visual Element (Glass Card) */}
+                <div className="relative group">
+                    <motion.div
+                        initial={{ opacity: 0, rotateY: 20 }}
+                        animate={{ opacity: 1, rotateY: 0 }}
+                        transition={{ delay: 0.5, duration: 1 }}
+                        className="relative z-10 p-1.5 rounded-[3rem] bg-gradient-to-b from-white/10 to-transparent border border-white/10 backdrop-blur-3xl shadow-2xl overflow-hidden aspect-square flex items-center justify-center"
+                    >
+                        {/* Animated Grid Lines */}
+                        <div className="absolute inset-0 opacity-[0.03]" 
+                             style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)', backgroundSize: '40px 40px' }} />
+                        
+                        <div className="relative text-center space-y-8">
+                            <div className="relative w-40 h-40 mx-auto">
+                                <motion.div 
+                                    animate={{ scale: [1, 1.1, 1], opacity: [0.2, 0.4, 0.2] }}
+                                    transition={{ duration: 4, repeat: Infinity }}
+                                    className="absolute inset-0 bg-blue-500/30 blur-[50px] rounded-full" 
+                                />
+                                <div className="relative w-full h-full rounded-[2.5rem] bg-slate-950/80 border border-white/5 flex items-center justify-center shadow-inner overflow-hidden">
+                                    <Cpu className="w-20 h-20 text-blue-500 drop-shadow-[0_0_25px_rgba(59,130,246,0.6)]" />
+                                    <motion.div 
+                                        animate={{ x: ['-100%', '200%'] }}
+                                        transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent skew-x-[-20deg]"
+                                    />
+                                </div>
+                            </div>
+                            
+                            <div className="space-y-2">
+                                <div className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-400/60">System ID: DS-AI-NARRATIVE</div>
+                                <div className="text-sm font-medium text-slate-400 flex items-center justify-center gap-2">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                                    Awaiting Data Signal...
+                                </div>
+                            </div>
+                        </div>
+                    </motion.div>
+
+                    {/* Decorative Data Nodes */}
+                    <motion.div 
+                        animate={{ y: [0, -15, 0] }} 
+                        transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
+                        className="absolute -top-8 -right-8 w-24 h-24 rounded-3xl bg-slate-900/90 border border-white/10 backdrop-blur-2xl flex flex-col items-center justify-center shadow-2xl z-20"
+                    >
+                        <TrendingUp className="w-8 h-8 text-emerald-400 mb-1" />
+                        <span className="text-[9px] font-black text-slate-500 uppercase tracking-tighter">Insights</span>
+                    </motion.div>
+                    
+                    <motion.div 
+                        animate={{ y: [0, 15, 0] }} 
+                        transition={{ duration: 6, repeat: Infinity, delay: 0.5, ease: "easeInOut" }}
+                        className="absolute -bottom-8 -left-8 w-28 h-28 rounded-3xl bg-slate-900/90 border border-white/10 backdrop-blur-2xl flex flex-col items-center justify-center shadow-2xl z-20"
+                    >
+                        <ShieldCheck className="w-10 h-10 text-indigo-400 mb-1" />
+                        <span className="text-[9px] font-black text-slate-500 uppercase tracking-tighter">Verified</span>
+                    </motion.div>
                 </div>
             </div>
-            <h2 className="text-2xl font-bold mb-3 text-slate-100">No Dataset Selected</h2>
-            <p className="text-sm leading-relaxed mb-8 text-slate-400">
-                Select a dataset to generate the narrative intelligence report.
-            </p>
-            <button onClick={onUpload}
-                className="inline-flex items-center gap-2 px-5 py-2.5 text-white text-sm font-medium rounded-xl transition-all bg-blue-600 hover:bg-blue-500">
-                <Database className="w-4 h-4" /> Upload a Dataset
-            </button>
-        </div>
+
+            {/* Bottom Meta Row */}
+            <div className="mt-24 pt-10 border-t border-white/5 grid grid-cols-2 md:grid-cols-4 gap-12 opacity-30 group-hover:opacity-100 transition-opacity duration-700">
+                <div className="space-y-2">
+                    <div className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">Precision</div>
+                    <div className="text-sm font-bold text-slate-300">Statistical Engine</div>
+                </div>
+                <div className="space-y-2">
+                    <div className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">Narrative</div>
+                    <div className="text-sm font-bold text-slate-300">Editorial Logic</div>
+                </div>
+                <div className="space-y-2">
+                    <div className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">Compliance</div>
+                    <div className="text-sm font-bold text-slate-300">Zero-Trust Security</div>
+                </div>
+                <div className="space-y-2">
+                    <div className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">Intelligence</div>
+                    <div className="text-sm font-bold text-slate-300">Generative Synthesis</div>
+                </div>
+            </div>
+        </motion.div>
     </div>
 );
 
@@ -113,7 +236,7 @@ const ErrorState = ({ error, onRetry }) => (
     <div className="insights-editorial-page min-h-[50vh] flex items-center justify-center">
         <div className="text-center max-w-md px-6">
             <div className="w-14 h-14 mx-auto mb-4 rounded-2xl flex items-center justify-center"
-                 style={{ background: 'var(--red-bg)', border: '1px solid rgba(248,113,113,0.2)' }}>
+                style={{ background: 'var(--red-bg)', border: '1px solid rgba(248,113,113,0.2)' }}>
                 <AlertCircle className="w-7 h-7 text-red-400" />
             </div>
             <h3 className="text-lg font-semibold mb-2">Analysis Failed</h3>
@@ -231,7 +354,7 @@ const ReportHeader = ({ datasetName, reportId, headline, summary, qualityScore, 
                     </div>
                     {typeof qualityScore === 'number' && (
                         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full"
-                             style={{ background: 'var(--emerald-bg)', border: '1px solid rgba(52,211,153,0.15)' }}>
+                            style={{ background: 'var(--emerald-bg)', border: '1px solid rgba(52,211,153,0.15)' }}>
                             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
                             <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
                                 {qualityScore}% Data Quality
@@ -319,7 +442,7 @@ const DataTrustBar = ({ quality, counts }) => {
     const items = [
         { icon: Shield, label: 'Health', value: `${quality.health_score || 0}%`, color: (quality.health_score || 0) >= 80 ? 'text-emerald-400' : 'text-amber-400' },
         { icon: Zap, label: 'Findings', value: counts.key_findings || 0, color: 'text-blue-400' },
-        { icon: Link2, label: 'Correlations', value: counts.correlations || 0, color: 'text-purple-400' },
+        { icon: Link2, label: 'Correlations', value: counts.correlations || 0, color: 'text-orange-400' },
         { icon: AlertTriangle, label: 'Anomalies', value: counts.anomalies || 0, color: counts.anomalies > 0 ? 'text-red-400' : 'text-slate-500' },
         { icon: TrendingUp, label: 'Trends', value: counts.trends || 0, color: 'text-emerald-400' },
         { icon: Layers, label: 'Segments', value: counts.segments || 0, color: 'text-amber-400' },
@@ -462,7 +585,7 @@ const InsightCard = ({ insight, onInvestigate, investigateContext = {} }) => {
                                     <YAxis type="number" dataKey="y" tick={{ fill: '#64748B', fontSize: 10 }} axisLine={false} tickLine={false} />
                                     <ZAxis type="number" range={[40, 180]} />
                                     <Tooltip contentStyle={{ background: '#1E293B', border: '1px solid rgba(148,163,184,0.14)', borderRadius: '12px', color: '#F1F5F9' }}
-                                             cursor={{ stroke: 'rgba(148,163,184,0.2)', strokeDasharray: '3 3' }} />
+                                        cursor={{ stroke: 'rgba(148,163,184,0.2)', strokeDasharray: '3 3' }} />
                                     <Scatter data={insight.data} fill={CHART_COLORS.purple} fillOpacity={0.6} />
                                 </ScatterChart>
                             </ResponsiveContainer>
@@ -484,7 +607,7 @@ const InsightCard = ({ insight, onInvestigate, investigateContext = {} }) => {
                         </div>
                     ) : (
                         <div className="h-56 w-full flex items-center justify-center rounded-2xl"
-                             style={{ background: 'var(--surface-1)', border: '1px dashed var(--border-vis)' }}>
+                            style={{ background: 'var(--surface-1)', border: '1px dashed var(--border-vis)' }}>
                             <div className="text-center space-y-2">
                                 <BookOpen className="w-7 h-7 mx-auto" style={{ color: 'var(--surface-3)' }} />
                                 <p className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: 'var(--ink-dim)' }}>Narrative Finding</p>
@@ -515,7 +638,7 @@ const InsightCard = ({ insight, onInvestigate, investigateContext = {} }) => {
                             <div className="label-caps" style={{ fontSize: '9px' }}>Evidence Tier</div>
                             <div className={cn('font-bold',
                                 insight.context.evidenceTier === 'strong' ? 'text-emerald-400' :
-                                insight.context.evidenceTier === 'moderate' ? 'text-amber-400' : 'text-slate-400')}>
+                                    insight.context.evidenceTier === 'moderate' ? 'text-amber-400' : 'text-slate-400')}>
                                 {(insight.context.evidenceTier || 'assessed').toUpperCase()}
                             </div>
                         </div>
@@ -537,7 +660,7 @@ const ActionPlan = ({ recommendations, onInvestigate, investigateContext = {} })
             <div className="grid lg:grid-cols-12 gap-16">
                 <div className="lg:col-span-4 space-y-6">
                     <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
-                         style={{ background: 'var(--accent)', boxShadow: '0 0 40px rgba(59,130,246,0.2)' }}>
+                        style={{ background: 'var(--accent)', boxShadow: '0 0 40px rgba(59,130,246,0.2)' }}>
                         <Target className="w-6 h-6 text-white" />
                     </div>
                     <div className="space-y-4">
@@ -565,7 +688,7 @@ const ActionPlan = ({ recommendations, onInvestigate, investigateContext = {} })
                                 className="rec-card group">
                                 <div className="flex items-start gap-5">
                                     <div className="flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center mt-0.5"
-                                         style={{ background: 'var(--accent-glow)', border: '1px solid rgba(59,130,246,0.2)' }}>
+                                        style={{ background: 'var(--accent-glow)', border: '1px solid rgba(59,130,246,0.2)' }}>
                                         <span className="text-sm font-bold" style={{ color: 'var(--accent)' }}>{index + 1}</span>
                                     </div>
                                     <div className="flex-grow space-y-3">
@@ -667,7 +790,7 @@ const DownloadReportButton = ({ datasetId, datasetName }) => {
             onClick={handleDownload}
             disabled={downloading || !datasetId}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff' }}
+            style={{ background: 'linear-gradient(135deg,#6366f1,#E85002)', color: '#fff' }}
         >
             {downloading ? (
                 <><Loader2 className="w-4 h-4 animate-spin" /> Generating…</>
@@ -827,7 +950,7 @@ const InsightsPage = () => {
         const kpis = [
             { label: 'Data Health', value: `${health}%`, badge: q.health_label || 'Assessed', badgeTone: health >= 80 ? 'text-emerald-400' : health >= 65 ? 'text-amber-400' : 'text-red-400', description: `Completeness ${q.completeness || 0}% · Uniqueness ${q.uniqueness || 0}%` },
             { label: 'Rows Analysed', value: Number(q.total_rows || 0).toLocaleString(), badge: `${q.total_columns || 0} cols`, badgeTone: 'text-blue-400', description: data.applied_filters ? `Filtered subset across ${Object.keys(data.applied_filters).length} condition(s).` : 'Full dataset included in this report.' },
-            { label: 'Strong Signals', value: `${totalFindings + totalCorrs}`, badge: `${totalCorrs} relationships`, badgeTone: 'text-purple-400', description: 'Findings and relationships with enough evidence to shape decisions.' },
+            { label: 'Strong Signals', value: `${totalFindings + totalCorrs}`, badge: `${totalCorrs} relationships`, badgeTone: 'text-orange-400', description: 'Findings and relationships with enough evidence to shape decisions.' },
             { label: 'Action Items', value: `${(data.recommendations || []).length}`, badge: `${totalAnoms} risk flags`, badgeTone: totalAnoms > 0 ? 'text-red-400' : 'text-emerald-400', description: 'Prioritized actions derived from the strongest patterns and risks.' },
         ];
 
@@ -857,7 +980,7 @@ const InsightsPage = () => {
             {/* Scroll progress bar */}
             <motion.div
                 className="fixed top-0 left-0 right-0 h-0.5 z-50 origin-left"
-                style={{ scaleX, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)' }}
+                style={{ scaleX, background: 'linear-gradient(90deg,#6366f1,#E85002)' }}
             />
 
             <ArtifactBanner

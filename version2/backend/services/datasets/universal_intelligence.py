@@ -8,7 +8,7 @@ Universal analysis for ANY dataset type:
 3. Semantic Column Detection - What do columns mean?
 4. Universal Pattern Selection - Best dashboard pattern for this data
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 1.0
 """
 

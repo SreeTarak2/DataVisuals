@@ -9,7 +9,7 @@ Features:
 3. Chart Quality Scoring - Is this the best visualization?
 4. Alternative Suggestions - Better chart types if needed
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 1.0
 """
 

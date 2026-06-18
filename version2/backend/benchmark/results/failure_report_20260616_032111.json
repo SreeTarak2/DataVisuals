@@ -1,0 +1,183 @@
+{
+  "timestamp": "20260616_032111",
+  "total_datasets": 72,
+  "failure_count": 14,
+  "failures": [
+    {
+      "dataset": "clean_invoices.csv",
+      "category": "primary_object",
+      "expected_primary": "invoice",
+      "predicted_primary": "customer",
+      "expected_participants": [
+        "customer"
+      ],
+      "predicted_participants": [
+        "invoice"
+      ],
+      "reason": "Expected primary 'invoice', got 'customer'"
+    },
+    {
+      "dataset": "clean_shipments.csv",
+      "category": "primary_object",
+      "expected_primary": "shipment",
+      "predicted_primary": "order",
+      "expected_participants": [
+        "order",
+        "supplier"
+      ],
+      "predicted_participants": [],
+      "reason": "Expected primary 'shipment', got 'order'"
+    },
+    {
+      "dataset": "clean_transactions.csv",
+      "category": "primary_object",
+      "expected_primary": "transaction",
+      "predicted_primary": "order",
+      "expected_participants": [
+        "account"
+      ],
+      "predicted_participants": [
+        "account"
+      ],
+      "reason": "Expected primary 'transaction', got 'order'"
+    },
+    {
+      "dataset": "denorm_camel_case.csv",
+      "category": "participation_recall",
+      "expected_primary": "employee",
+      "predicted_primary": "employee",
+      "expected_participants": [
+        "department"
+      ],
+      "predicted_participants": [],
+      "reason": "Missing participants: {'department'}"
+    },
+    {
+      "dataset": "denorm_mixed_case.csv",
+      "category": "participation_recall",
+      "expected_primary": "patient",
+      "predicted_primary": "patient",
+      "expected_participants": [
+        "doctor"
+      ],
+      "predicted_participants": [],
+      "reason": "Missing participants: {'doctor'}"
+    },
+    {
+      "dataset": "denorm_timestamp_variants.csv",
+      "category": "primary_object",
+      "expected_primary": "transaction",
+      "predicted_primary": null,
+      "expected_participants": [
+        "merchant"
+      ],
+      "predicted_participants": [],
+      "reason": "Expected primary 'transaction', got 'None'"
+    },
+    {
+      "dataset": "denorm_underscore_heavy.csv",
+      "category": "participation_recall",
+      "expected_primary": "shipment",
+      "predicted_primary": "shipment",
+      "expected_participants": [
+        "warehouse"
+      ],
+      "predicted_participants": [],
+      "reason": "Missing participants: {'warehouse'}"
+    },
+    {
+      "dataset": "denorm_url_columns.csv",
+      "category": "participation_recall",
+      "expected_primary": "product",
+      "predicted_primary": "product",
+      "expected_participants": [
+        "supplier"
+      ],
+      "predicted_participants": [],
+      "reason": "Missing participants: {'supplier'}"
+    },
+    {
+      "dataset": "multi_course_enrollments.csv",
+      "category": "primary_object",
+      "expected_primary": "enrollment",
+      "predicted_primary": "student",
+      "expected_participants": [
+        "course",
+        "student"
+      ],
+      "predicted_participants": [],
+      "reason": "Expected primary 'enrollment', got 'student'"
+    },
+    {
+      "dataset": "multi_hospital_visits.csv",
+      "category": "primary_object",
+      "expected_primary": "visit",
+      "predicted_primary": "patient",
+      "expected_participants": [
+        "doctor",
+        "hospital",
+        "patient"
+      ],
+      "predicted_participants": [],
+      "reason": "Expected primary 'visit', got 'patient'"
+    },
+    {
+      "dataset": "multi_order_details.csv",
+      "category": "participation_recall",
+      "expected_primary": "order",
+      "predicted_primary": "order",
+      "expected_participants": [
+        "customer",
+        "product",
+        "supplier"
+      ],
+      "predicted_participants": [
+        "customer",
+        "product"
+      ],
+      "reason": "Missing participants: {'supplier'}"
+    },
+    {
+      "dataset": "multi_project_tasks.csv",
+      "category": "primary_object",
+      "expected_primary": "task",
+      "predicted_primary": null,
+      "expected_participants": [
+        "assignee",
+        "project",
+        "reviewer"
+      ],
+      "predicted_participants": [],
+      "reason": "Expected primary 'task', got 'None'"
+    },
+    {
+      "dataset": "multi_support_tickets.csv",
+      "category": "primary_object",
+      "expected_primary": "ticket",
+      "predicted_primary": "customer",
+      "expected_participants": [
+        "agent",
+        "customer",
+        "product"
+      ],
+      "predicted_participants": [
+        "product"
+      ],
+      "reason": "Expected primary 'ticket', got 'customer'"
+    },
+    {
+      "dataset": "noent_quiz_scores.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "student",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'student'"
+    }
+  ],
+  "failure_categories": {
+    "primary_object": 8,
+    "participation_recall": 5,
+    "abstention": 1
+  }
+}

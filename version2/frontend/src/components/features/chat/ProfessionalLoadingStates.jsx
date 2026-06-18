@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 export const PremiumGlassmorphismLoader = ({ stage = 'analyzing', className }) => {
   const stages = {
     analyzing: { label: 'Analyzing your question', icon: Brain, color: 'from-blue-400 to-cyan-400' },
-    processing: { label: 'Processing data', icon: Zap, color: 'from-purple-400 to-pink-400' },
+    processing: { label: 'Processing data', icon: Zap, color: 'from-orange-400 to-pink-400' },
     generating: { label: 'Generating insights', icon: Sparkles, color: 'from-amber-400 to-orange-400' },
     reanalyzing: { label: 'Refining results', icon: Brain, color: 'from-emerald-400 to-teal-400' }
   };
@@ -198,7 +198,7 @@ export const MinimalistLineLoader = ({ stage = 'analyzing', className }) => {
 export const AnimatedParticleLoader = ({ stage = 'analyzing', className }) => {
   const stages = {
     analyzing: { label: 'Analyzing your question', gradient: 'from-blue-400 via-blue-500 to-cyan-400' },
-    processing: { label: 'Processing data', gradient: 'from-purple-400 via-pink-500 to-red-400' },
+    processing: { label: 'Processing data', gradient: 'from-orange-400 via-pink-500 to-red-400' },
     generating: { label: 'Generating insights', gradient: 'from-amber-300 via-orange-400 to-red-500' },
     reanalyzing: { label: 'Refining results', gradient: 'from-emerald-400 via-teal-500 to-cyan-400' }
   };
@@ -333,8 +333,8 @@ export const HybridSmartLoader = ({ stage = 'analyzing', showProgress = true, cl
       label: 'Processing data', 
       icon: Zap,
       color: 'purple',
-      bgGradient: 'from-purple-500/10 to-pink-500/10',
-      borderColor: 'border-purple-400/30'
+      bgGradient: 'from-orange-500/10 to-pink-500/10',
+      borderColor: 'border-orange-400/30'
     },
     generating: { 
       label: 'Generating insights', 
@@ -356,13 +356,13 @@ export const HybridSmartLoader = ({ stage = 'analyzing', showProgress = true, cl
   const IconComponent = config.icon;
   const colorMap = {
     blue: 'text-blue-400',
-    purple: 'text-purple-400',
+    purple: 'text-orange-400',
     amber: 'text-amber-400',
     emerald: 'text-emerald-400'
   };
   const progressColorMap = {
     blue: 'from-blue-500 to-cyan-500',
-    purple: 'from-purple-500 to-pink-500',
+    purple: 'from-orange-500 to-pink-500',
     amber: 'from-amber-500 to-orange-500',
     emerald: 'from-emerald-500 to-teal-500'
   };

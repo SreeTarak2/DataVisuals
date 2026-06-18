@@ -28,7 +28,7 @@ Usage in charts.py:
             # fall back to heuristic helpers
             ...
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 1.0
 """
 

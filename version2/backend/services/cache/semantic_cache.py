@@ -9,7 +9,7 @@ Features:
 - Per-dataset chart config caching
 - Cost-effective caching strategy
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 1.0
 """
 
@@ -51,18 +51,21 @@ class SemanticCache:
         self._initialize_embedding_model()
 
     def _initialize_embedding_model(self):
-        """Initialize the embedding model for semantic similarity."""
-        try:
-            from sentence_transformers import SentenceTransformer
+        """Initialize the embedding model for semantic similarity.
 
-            self._embedding_model = SentenceTransformer(self.embedding_model_name)
-            self._use_embeddings = True
-            logger.info(f"Semantic cache using embeddings: {self.embedding_model_name}")
-        except ImportError:
-            logger.warning(
-                "sentence-transformers not available, using word overlap matching"
-            )
-            self._use_embeddings = False
+        Uses the shared embedding singleton to avoid loading the
+        133 MB model twice (ResponseCache also uses bge-small).
+        """
+        try:
+            from services.embeddings import get_bge_small_embedding
+
+            self._embedding_model = get_bge_small_embedding(self.embedding_model_name)
+            if self._embedding_model:
+                self._use_embeddings = True
+                logger.info(f"Semantic cache using shared embeddings: {self.embedding_model_name}")
+            else:
+                logger.warning("Shared embedding model unavailable, using word overlap matching")
+                self._use_embeddings = False
         except Exception as e:
             logger.warning(
                 f"Failed to load embedding model: {e}, using word overlap matching"

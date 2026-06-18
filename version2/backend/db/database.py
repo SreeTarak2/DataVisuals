@@ -1,10 +1,15 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient
 import os
+from pathlib import Path
 from typing import Optional
 import logging
 
+from dotenv import load_dotenv
+
 logger = logging.getLogger(__name__)
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 class Database:
@@ -21,7 +26,7 @@ async def connect_to_mongo():
     try:
         # MongoDB connection string
         mongo_url = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
-        database_name = os.getenv("DATABASE_NAME", "datasage_ai")
+        database_name = os.getenv("DATABASE_NAME", "signal_ai")
 
         # Create async client
         db.client = AsyncIOMotorClient(mongo_url)
@@ -29,7 +34,7 @@ async def connect_to_mongo():
 
         # Test the connection
         await db.client.admin.command("ping")
-        logger.info(f"Connected to MongoDB at {mongo_url}")
+        logger.info(f"Connected to MongoDB")
         logger.info(f"Using database: {database_name}")
 
         # Create indexes for better performance
@@ -117,6 +122,16 @@ async def create_indexes():
         await db.database.reports.create_index(
             [("user_id", 1), ("generated_at", -1)], name="idx_user_reports_generated"
         )
+
+        # ============================================================
+        # DB Relationships Collection (cross-table FK cache)
+        # ============================================================
+        await db.database.db_relationships.create_index(
+            [("connection_id", 1), ("user_id", 1)],
+            unique=True,
+            name="idx_connection_user_relationship",
+        )
+        await db.database.db_relationships.create_index("discovered_at")
 
         # ============================================================
         # Charts Collection

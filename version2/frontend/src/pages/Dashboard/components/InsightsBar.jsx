@@ -35,7 +35,7 @@ const ACCENTS = {
     success: { primary: '#34d399', bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.22)', leftBorder: '#34d399' },
     info: { primary: '#60a5fa', bg: 'rgba(96,165,250,0.08)', border: 'rgba(96,165,250,0.22)', leftBorder: '#60a5fa' },
     warning: { primary: '#fbbf24', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.22)', leftBorder: '#fbbf24' },
-    trend: { primary: '#a78bfa', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.22)', leftBorder: '#a78bfa' },
+    trend: { primary: '#E85002', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.22)', leftBorder: '#E85002' },
     default: { primary: '#94a3b8', bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.20)', leftBorder: '#94a3b8' },
 };
 

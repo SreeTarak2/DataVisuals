@@ -3,14 +3,17 @@ Multi-Agent Orchestrator for Dashboard AI Pipeline
 ---------------------------------------------------
 Coordinates multiple specialized LLMs for:
 1. Chart Recommendation (Qwen3-235B)
-2. KPI Suggestion (Hermes 3 405B)
-3. Chart Explanation (Hermes 3 405B)
-4. Insight Generation (Qwen3-235B / DeepSeek)
+2. Chart Explanation (Hermes 3 405B)
+3. Insight Generation (Qwen3-235B / DeepSeek)
 
 Architecture:
-- Parallel execution: Chart Recommendation + KPI Suggestion
+- Chart Recommendation runs first
 - Sequential execution: Chart Explanation → Insight Generation
 - Draft/Review/Refine pattern: Small model drafts, large model refines
+
+Note: KPI generation is delegated to the IntelligentKPIGenerator which
+uses deterministic statistical profiling (no LLM calls). This keeps
+LLM inference focused on chart design and insights only.
 """
 
 import asyncio
@@ -29,7 +32,6 @@ from core.prompts import (
 )
 from core.prompt_templates import (
     get_chart_recommendation_prompt,
-    get_kpi_suggestion_prompt,
     get_chart_explanation_prompt,
     get_insight_generation_prompt,
     get_deep_reasoning_prompt,
@@ -62,9 +64,13 @@ class MultiAgentOrchestrator:
         Generate a complete dashboard design using multiple specialized agents.
 
         Pipeline:
-        1. [Parallel] Chart Recommendation + KPI Suggestion
+        1. Chart Recommendation (LLM)
         2. [Sequential] Chart Explanation
         3. [Sequential] Insight Generation
+
+        KPI cards are generated separately by the IntelligentKPIGenerator
+        (deterministic, no LLM calls). This orchestrator only handles
+        chart design and narrative insights.
 
         Args:
             dataset_context: String representation of dataset metadata
@@ -150,20 +156,17 @@ class MultiAgentOrchestrator:
                     "✓ Stage 0 output correctly enriched into chart_rec context"
                 )
 
-            # Stage 1: Parallel execution for independent tasks
-            logger.info(
-                "📊 Stage 1: Running Chart Recommendation + KPI Suggestion in parallel"
-            )
-            chart_recommendations, kpi_suggestions = await self._stage_1_parallel(
-                enriched_context, metadata
+            # Stage 1: Chart Recommendation (the only LLM-dependent stage for charts)
+            logger.info("📊 Stage 1: Running Chart Recommendation")
+            chart_recommendations = await self._agent_chart_recommendation(
+                enriched_context, user_query=None, metadata=metadata
             )
 
             has_charts = bool(chart_recommendations.get("charts"))
-            has_kpis = bool(kpi_suggestions.get("kpis"))
 
-            if not has_charts and not has_kpis:
+            if not has_charts:
                 logger.warning(
-                    "⚠️ Stage 1 produced no charts or KPIs; skipping stages 2 and 3"
+                    "⚠️ Stage 1 produced no charts; skipping stages 2 and 3"
                 )
                 chart_explanations = []
                 insights = {"insights": [], "summary": ""}
@@ -173,15 +176,15 @@ class MultiAgentOrchestrator:
                 chart_explanations = []
 
                 # Stage 3: Insight Generation (synthesize everything)
-                logger.info("💡 Stage 3: Generating insights from analysis")
+                logger.info("💡 Stage 3: Generating insights from chart analysis")
                 insights = await self._stage_3_insights(
-                    chart_recommendations, kpi_suggestions, dataset_context, metadata
+                    chart_recommendations, dataset_context, metadata
                 )
 
             # Combine results into final dashboard blueprint
+            # (KPI cards are generated separately by IntelligentKPIGenerator)
             blueprint = await self._assemble_dashboard(
                 chart_recommendations,
-                kpi_suggestions,
                 chart_explanations,
                 insights,
                 metadata,
@@ -210,9 +213,8 @@ class MultiAgentOrchestrator:
                 "metadata": {
                     "pipeline_duration_seconds": duration,
                     "chart_count": len(chart_recommendations.get("charts", [])),
-                    "kpi_count": len(kpi_suggestions.get("kpis", [])),
                     "insight_count": len(insights.get("insights", [])),
-                    "agents_used": ["qwen_235b", "hermes_405b"],
+                    "agents_used": ["chart_recommendation", "insight_generation"],
                 },
             }
 
@@ -274,41 +276,6 @@ class MultiAgentOrchestrator:
             raise
 
     # -----------------------------------------------------------
-    # STAGE 1: PARALLEL EXECUTION (Chart Recommendation + KPI)
-    # -----------------------------------------------------------
-
-    async def _stage_1_parallel(
-        self, dataset_context: str, metadata: Dict[str, Any]
-    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """
-        Run Chart Recommendation and KPI Suggestion in parallel.
-
-        Returns:
-            Tuple of (chart_recommendations, kpi_suggestions)
-        """
-        # Run both tasks concurrently
-        results = await asyncio.gather(
-            self._agent_chart_recommendation(dataset_context, metadata=metadata),
-            self._agent_kpi_suggestion(dataset_context, metadata),
-            return_exceptions=True,  # Don't fail if one agent fails
-        )
-
-        # Unpack results with error handling
-        chart_recommendations = (
-            results[0]
-            if not isinstance(results[0], Exception)
-            else {"error": str(results[0]), "charts": []}
-        )
-
-        kpi_suggestions = (
-            results[1]
-            if not isinstance(results[1], Exception)
-            else {"error": str(results[1]), "kpis": []}
-        )
-
-        return chart_recommendations, kpi_suggestions
-
-    # -----------------------------------------------------------
     # STAGE 2: CHART EXPLANATION (Sequential)
     # -----------------------------------------------------------
 
@@ -357,22 +324,21 @@ class MultiAgentOrchestrator:
     async def _stage_3_insights(
         self,
         chart_recommendations: Dict[str, Any],
-        kpi_suggestions: Dict[str, Any],
         dataset_context: str,
         metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Generate high-level insights based on all previous analysis.
+        Generate high-level insights based on chart analysis.
 
         Returns:
             Insights dict with key findings
         """
-        if not chart_recommendations.get("charts") and not kpi_suggestions.get("kpis"):
-            logger.warning("No charts or KPIs available for insight generation")
+        if not chart_recommendations.get("charts"):
+            logger.warning("No charts available for insight generation")
             return {"insights": [], "summary": ""}
 
         return await self._agent_insight_generation(
-            chart_recommendations, kpi_suggestions, dataset_context, metadata
+            chart_recommendations, dataset_context, metadata
         )
 
     # -----------------------------------------------------------
@@ -458,11 +424,13 @@ class MultiAgentOrchestrator:
         for c in raw_charts:
             if not isinstance(c, dict):
                 continue
-            
+
             has_type = "type" in c
             has_x = "x" in c
-            has_y_variant = any(key in c for key in ["y", "y_columns", "metrics", "values"])
-            
+            has_y_variant = any(
+                key in c for key in ["y", "y_columns", "metrics", "values"]
+            )
+
             if has_type and has_x and has_y_variant:
                 valid.append(c)
 
@@ -481,58 +449,6 @@ class MultiAgentOrchestrator:
             "dashboard_story": data.get("dashboard_story", ""),
             "chart_order_rationale": data.get("chart_order_rationale", ""),
         }
-
-    async def _agent_kpi_suggestion(
-        self, dataset_context: str, metadata: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        KPI Suggestion Agent (Hermes 3 405B)
-
-        Identifies key performance indicators from the data.
-        Uses domain intelligence and data profile for smarter KPI selection.
-        """
-        # Build extra domain context for KPI-specific intelligence
-        domain_intel = metadata.get("domain_intelligence", {})
-        data_profile = metadata.get("data_profile", {})
-
-        kpi_hints = []
-        if domain_intel.get("key_metrics"):
-            kpi_hints.append(
-                f"Domain-identified key metrics: {', '.join(domain_intel['key_metrics'][:6])}"
-            )
-        if domain_intel.get("measures"):
-            kpi_hints.append(
-                f"Numeric columns suitable for aggregation: {', '.join(domain_intel['measures'][:8])}"
-            )
-        if data_profile.get("id_columns"):
-            kpi_hints.append(
-                f"ID columns (DO NOT use for KPIs): {', '.join(data_profile['id_columns'][:6])}"
-            )
-
-        kpi_context = "\n".join(kpi_hints) if kpi_hints else ""
-
-        prompt = get_kpi_suggestion_prompt(
-            dataset_context, kpi_context, include_context=False
-        )
-
-        try:
-            response = await self.llm_router.call(
-                prompt=prompt,
-                model_role="kpi_suggestion",
-                expect_json=True,
-                temperature=0.3,  # Lower temperature for structured output
-                max_tokens=1200,
-                context=dataset_context,
-            )
-
-            logger.info(
-                f"✓ KPI suggestions generated: {len(response.get('kpis', []))} KPIs"
-            )
-            return response
-
-        except Exception as e:
-            logger.error(f"KPI suggestion agent failed: {e}")
-            return {"error": str(e), "kpis": []}
 
     async def _agent_chart_explanation(
         self,
@@ -652,14 +568,13 @@ class MultiAgentOrchestrator:
     async def _agent_insight_generation(
         self,
         chart_recommendations: Dict[str, Any],
-        kpi_suggestions: Dict[str, Any],
         dataset_context: str,
         metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Insight Generation Agent (Qwen3-235B)
 
-        Synthesizes deep, actionable insights from all analysis.
+        Synthesizes deep, actionable insights from chart analysis.
         Uses structured summaries instead of raw dict dumps to save tokens.
         """
         # Build compact structured summaries instead of dumping raw dicts
@@ -675,15 +590,6 @@ class MultiAgentOrchestrator:
             else "No charts recommended"
         )
 
-        kpi_summary_lines = []
-        for k in kpi_suggestions.get("kpis", [])[:6]:
-            kpi_summary_lines.append(
-                f"  • {k.get('title', '')}: {k.get('aggregation', 'sum')}({k.get('column', '')})"
-            )
-        kpis_text = (
-            "\n".join(kpi_summary_lines) if kpi_summary_lines else "No KPIs suggested"
-        )
-
         # Pull executive summary from metadata if available
         deep_analysis = metadata.get("deep_analysis", {})
         exec_summary = deep_analysis.get("executive_summary", "")
@@ -697,7 +603,7 @@ class MultiAgentOrchestrator:
             exec_text = f"\nPRE-COMPUTED EXECUTIVE SUMMARY:\n{truncated}"
 
         prompt = get_insight_generation_prompt(
-            dataset_context, charts_text, kpis_text, exec_text, include_context=False
+            dataset_context, charts_text, "", exec_text, include_dataset_context=False
         )
 
         try:
@@ -786,94 +692,20 @@ class MultiAgentOrchestrator:
     async def _assemble_dashboard(
         self,
         chart_recommendations: Dict[str, Any],
-        kpi_suggestions: Dict[str, Any],
         chart_explanations: List[Dict[str, Any]],
         insights: Dict[str, Any],
         metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Assemble all agent outputs into a cohesive dashboard blueprint.
+        Assemble chart recommendations + insights into a cohesive dashboard blueprint.
+
+        KPI cards are NOT generated here — the IntelligentKPIGenerator handles that
+        separately with deterministic statistical profiling (no LLM calls).
 
         Returns:
             Complete dashboard blueprint ready for frontend rendering
         """
         components = []
-
-        # Pre-build a column → stats lookup from metadata so KPI enrichment is O(1)
-        data_profile = metadata.get("data_profile", {})
-        summary_stats = data_profile.get("summary_statistics", {})
-
-        AGG_TO_STAT = {
-            "mean": "mean",
-            "avg": "mean",
-            "average": "mean",
-            "median": "median",
-            "sum": "sum",
-            "min": "min",
-            "max": "max",
-            "count": "count",
-        }
-
-        def _kpi_benchmark(column: str, aggregation: str) -> dict:
-            """Compute value from summary_stats and enrich with median comparison + range."""
-            col_stats = summary_stats.get(column, {})
-            if not col_stats:
-                return {}
-            stat_key = AGG_TO_STAT.get(aggregation.lower(), "mean")
-            value = col_stats.get(stat_key)
-            median = col_stats.get("median") or col_stats.get("50%")
-            col_min = col_stats.get("min")
-            col_max = col_stats.get("max")
-            if value is None or median is None:
-                return {}
-            try:
-                value_f = float(value)
-                median_f = float(median)
-                delta_pct = (
-                    round(((value_f - median_f) / abs(median_f)) * 100, 1)
-                    if median_f != 0
-                    else None
-                )
-                direction = "above" if value_f >= median_f else "below"
-                benchmark = f"{direction} dataset median of {median_f:,.1f}"
-                if col_min is not None and col_max is not None:
-                    benchmark += (
-                        f"  ·  range {float(col_min):,.1f}–{float(col_max):,.1f}"
-                    )
-                return {
-                    "value": value_f,
-                    "comparison_value": median_f,
-                    "comparison_label": "vs dataset median",
-                    "delta_percent": delta_pct,
-                    "delta_direction": "up"
-                    if (delta_pct or 0) > 0
-                    else "down"
-                    if (delta_pct or 0) < 0
-                    else "neutral",
-                    "benchmarkText": benchmark,
-                }
-            except (TypeError, ValueError):
-                return {}
-
-        # Add KPIs first
-        for kpi in kpi_suggestions.get("kpis", [])[:8]:  # Max 8 KPIs
-            col = kpi.get("column")
-            agg = kpi.get("aggregation", "mean")
-            enrichment = _kpi_benchmark(col, agg) if col else {}
-            components.append(
-                {
-                    "type": "kpi",
-                    "title": kpi.get("title", "KPI"),
-                    "span": 1,
-                    "value": enrichment.get("value"),
-                    "config": {
-                        "column": col,
-                        "aggregation": kpi.get("aggregation", "sum"),
-                    },
-                    "metadata": {"reasoning": kpi.get("reasoning", "")},
-                    **enrichment,
-                }
-            )
 
         # Deduplicate charts by diversity_role and by (type, x, y) to prevent identical charts.
         # The LLM is instructed to enforce uniqueness but often ignores it.
@@ -973,23 +805,35 @@ class MultiAgentOrchestrator:
             y_val = chart.get("y")
             y_list = y_val if isinstance(y_val, list) else [y_val] if y_val else []
             columns = [x_val] + y_list if x_val else y_list
-            
+
+            # Advanced BI Components mapping
+            chart_type = chart.get("type", "bar")
+            comp_type = "chart"
+            if chart_type in ["pivot_table", "anomaly_feed"]:
+                comp_type = chart_type
+
             components.append(
                 {
-                    "type": "chart",
+                    "type": comp_type,
                     "title": raw_title,
-                    "span": 2,
+                    "span": chart.get("span", 2),
                     "config": {
-                        "chart_type": chart.get("type", "bar"),
+                        "chart_type": chart_type,
                         "x": x_val,
                         "y": y_val,  # preserve original (list or string)
                         "columns": columns,  # properly flattened
+                        "aggregation": chart.get("aggregation", "sum"),
+                        "group_by": chart.get("group_by"),
+                        "limit": chart.get("limit", 15),
+                        "sort_by": chart.get("sort_by", "value_desc"),
                     },
                     "metadata": {
                         "reasoning": chart.get("reasoning", ""),
                         "explanation": explanation.get("explanation", ""),
                         "key_insights": explanation.get("key_insights", []),
                         "reading_guide": explanation.get("reading_guide", ""),
+                        "diversity_role": chart.get("diversity_role"),
+                        "badge_type": chart.get("badge_type"),
                     },
                 }
             )
@@ -1015,8 +859,6 @@ class MultiAgentOrchestrator:
             "generated_by": "multi_agent_pipeline",
             "agents": {
                 "chart_recommendation": "deepseek_v32",
-                "kpi_suggestion": "deepseek_v32",
-                "chart_explanation": "qwen_2.5_72b",
                 "insight_generation": "deepseek_v32",
             },
         }
@@ -1135,9 +977,13 @@ class MultiAgentOrchestrator:
             effect_str = f"effect={effect:.3f} ({effect_interp})" if effect else ""
             stat_str = " · ".join(filter(None, [p_str, effect_str]))
 
-            business_sentence = insight_interpreter.interpret_quis_finding_business(
-                finding
-            )
+            try:
+                business_sentence = insight_interpreter.interpret_quis_finding_business(
+                    finding
+                )
+            except Exception as e:
+                logger.warning(f"Failed to interpret finding business meaning: {e}")
+                business_sentence = description
 
             lines.append(
                 f"  [{i}] {label} | columns: {cols_str} | {stat_str}\n"

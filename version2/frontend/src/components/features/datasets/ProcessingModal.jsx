@@ -3,9 +3,11 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 
 import useDatasetStore from '../../../store/datasetStore';
+import { datasetAPI } from '../../../services/api';
 import { toast } from 'react-hot-toast';
 
-const STEPS = [
+// ── Fallback steps (used when /stages endpoint returns no data yet) ──────────
+const FALLBACK_STEPS = [
   { key: 'uploaded', label: 'Upload Complete' },
   { key: 'loading', label: 'Loading Dataset' },
   { key: 'cleaning', label: 'Cleaning Data' },
@@ -21,7 +23,7 @@ const STEPS = [
   { key: 'vector_indexing', label: 'Indexing' },
 ];
 
-const STAGE_PROGRESS_MAP = [
+const FALLBACK_PROGRESS_MAP = [
   { max: 5, key: 'loading' },
   { max: 15, key: 'cleaning' },
   { max: 25, key: 'domain_detection' },
@@ -36,9 +38,15 @@ const STAGE_PROGRESS_MAP = [
   { max: 100, key: 'vector_indexing' },
 ];
 
+// Max progress to show during fallback mode (before real /stages data arrives).
+// Prevents the bar from jumping to 99% before any stages are visible.
+const FALLBACK_MAX_PROGRESS = 50;
+
+// ── Icons ────────────────────────────────────────────────────────────────────
+
 const CheckIcon = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" fill="none" strokeWidth="1.8" xmlns="http://www.w3.org/2000/svg">
-    <path d="M2 7.5l3.5 3.5 6.5-7" strokeLinecap="round" strokeLinejoin="round"/>
+    <path d="M2 7.5l3.5 3.5 6.5-7" strokeLinecap="round" strokeLinejoin="round" stroke="currentColor"/>
   </svg>
 );
 
@@ -49,11 +57,20 @@ const SpinnerIcon = () => (
   </svg>
 );
 
-const CloseIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 14 14" fill="none" strokeWidth="1.5" xmlns="http://www.w3.org/2000/svg">
-    <path d="M1 1l12 12M13 1L1 13"/>
+const ErrorIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" strokeWidth="1.5" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="7" cy="7" r="5.5" stroke="currentColor"/>
+    <path d="M5 5l4 4M9 5l-4 4" stroke="currentColor" strokeLinecap="round"/>
   </svg>
 );
+
+const CloseIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 14 14" fill="none" strokeWidth="1.5" xmlns="http://www.w3.org/2000/svg">
+    <path d="M1 1l12 12M13 1L1 13" stroke="currentColor"/>
+  </svg>
+);
+
+// ── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = `
   .pm-backdrop {
@@ -67,7 +84,7 @@ const styles = `
   }
 
   .pm-modal {
-    width: 480px;
+    width: 520px;
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -220,6 +237,10 @@ const styles = `
     background: var(--accent-primary-light);
   }
 
+  .pm-step.failed {
+    background: rgba(239, 68, 68, 0.08);
+  }
+
   .pm-step-icon {
     width: 16px;
     height: 16px;
@@ -236,6 +257,10 @@ const styles = `
   .pm-step-icon.active {
     color: var(--accent-primary);
     animation: pm-spin 0.7s linear infinite;
+  }
+
+  .pm-step-icon.failed {
+    color: var(--accent-error);
   }
 
   @keyframes pm-spin {
@@ -271,6 +296,10 @@ const styles = `
     color: var(--text-header);
   }
 
+  .pm-step.failed .pm-step-label {
+    color: var(--accent-error);
+  }
+
   .pm-step.pending .pm-step-label {
     color: var(--text-muted);
   }
@@ -280,6 +309,7 @@ const styles = `
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-muted);
+    white-space: nowrap;
   }
 
   .pm-step.done .pm-step-time {
@@ -289,6 +319,22 @@ const styles = `
 
   .pm-step.active .pm-step-time {
     color: var(--accent-primary);
+  }
+
+  .pm-step.failed .pm-step-time {
+    color: var(--accent-error);
+  }
+
+  .pm-step-error {
+    font-size: 10px;
+    color: var(--accent-error);
+    font-family: var(--font-mono);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 300px;
+    opacity: 0.8;
   }
 
   .pm-footer {
@@ -346,6 +392,16 @@ const styles = `
     color: var(--accent-primary);
   }
 
+  .pm-btn-danger {
+    background: rgba(239,68,68,0.1);
+    border-color: var(--accent-error);
+    color: var(--accent-error);
+  }
+
+  .pm-btn-danger:hover {
+    background: rgba(239,68,68,0.2);
+  }
+
   .pm-complete-icon {
     width: 48px;
     height: 48px;
@@ -360,41 +416,109 @@ const styles = `
   .pm-complete-icon svg {
     color: var(--accent-success);
   }
+
+  .pm-stage-error-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    margin-bottom: 12px;
+    background: rgba(239,68,68,0.06);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-radius: 2px;
+    font-size: 11px;
+    color: var(--accent-error);
+    font-family: var(--font-mono);
+  }
 `;
+
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatDuration(ms) {
+  if (ms == null) return '—';
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  const min = Math.floor(ms / 60000);
+  const sec = Math.floor((ms % 60000) / 1000);
+  return `${min}m ${sec}s`;
+}
+
+function getFallbackStageFromProgress(progressValue, processingStatus) {
+  if (processingStatus === 'completed' || processingStatus === 'success') {
+    return { key: 'completed', progress: 100 };
+  }
+  for (const stage of FALLBACK_PROGRESS_MAP) {
+    if (progressValue <= stage.max) {
+      return { key: stage.key, progress: progressValue };
+    }
+  }
+  return { key: 'artifact_generation', progress: progressValue };
+}
+
+function getFallbackStepState(stepKey, currentKey, isComplete) {
+  if (isComplete || currentKey === 'completed') return 'done';
+  const currentIdx = FALLBACK_STEPS.findIndex(s => s.key === currentKey);
+  const stepIdx = FALLBACK_STEPS.findIndex(s => s.key === stepKey);
+  if (stepIdx === -1 || currentIdx === -1) return 'pending';
+  if (stepIdx < currentIdx) return 'done';
+  if (stepIdx === currentIdx) return 'active';
+  return 'pending';
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
 
 const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
   const navigate = useNavigate();
-  const { fetchDatasets, clearProcessingState } = useDatasetStore();
-  
-  const [stage, setStage] = useState('uploaded');
-  const [progress, setProgress] = useState(0);
+  const { fetchDatasets, clearProcessingState, reprocessDataset } = useDatasetStore();
+
+  // Real stage data from /stages endpoint
+  const [stages, setStages] = useState([]);
+  const [stagesLoaded, setStagesLoaded] = useState(false);
+
+  // Fallback state (when stages endpoint returns empty)
+  const [fallbackStage, setFallbackStage] = useState('uploaded');
+  const [fallbackProgress, setFallbackProgress] = useState(0);
+
   const [isComplete, setIsComplete] = useState(false);
-  
-  const pollRef = useRef(null);
+  const [hasError, setHasError] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
+
+  const datasetPollRef = useRef(null);
+  const stagesPollRef = useRef(null);
   const navigateRef = useRef(false);
+  const highestProgressRef = useRef(0);
 
-  const getStageFromProgress = (progressValue, processingStatus) => {
-    if (processingStatus === 'completed' || processingStatus === 'success') {
-      return { key: 'completed', progress: 100 };
-    }
-    
-    for (const stage of STAGE_PROGRESS_MAP) {
-      if (progressValue <= stage.max) {
-        return { key: stage.key, progress: progressValue };
-      }
-    }
-    return { key: 'artifact_generation', progress: progressValue };
-  };
+  // ── Determine effective state ──────────────────────────────────────────────
+  const useRealStages = stagesLoaded && stages.length > 0;
 
-  const getStepState = (stepKey) => {
-    const currentStageIndex = STEPS.findIndex(s => s.key === stage);
-    const stepIndex = STEPS.findIndex(s => s.key === stepKey);
-    
-    if (isComplete || stage === 'completed') return 'done';
-    if (stepIndex < currentStageIndex) return 'done';
-    if (stepIndex === currentStageIndex) return 'active';
-    return 'pending';
-  };
+  // Current running stage label (for progress bar header)
+  const currentStageLabel = useRealStages
+    ? (() => {
+        const running = stages.find(s => s.status === 'running');
+        const failed = stages.find(s => s.status === 'failed');
+        const lastDone = [...stages].reverse().find(s => s.status === 'done');
+        return running?.label || failed?.label || lastDone?.label || '';
+      })()
+    : FALLBACK_STEPS.find(s => s.key === fallbackStage)?.label || '';
+
+  // Compute raw progress, then clamp it so it never visually regresses.
+  const rawProgress = useRealStages
+    ? (() => {
+        const done = stages.filter(s => s.status === 'done').length;
+        const total = stages.length || 15;
+        return Math.min(Math.round((done / total) * 100), 99);
+      })()
+    : Math.min(fallbackProgress, FALLBACK_MAX_PROGRESS);
+
+  // Mutate ref during render (not effect) so the progress never
+  // flickers backward on the next paint when switching fallback→real stages.
+  if (rawProgress > highestProgressRef.current) {
+    highestProgressRef.current = rawProgress;
+  }
+  const currentProgress = highestProgressRef.current;
+
+  // ── Polling ────────────────────────────────────────────────────────────────
 
   const checkProcessingStatus = async () => {
     if (!datasetId || navigateRef.current) return;
@@ -402,62 +526,129 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
     try {
       const datasets = await fetchDatasets(true);
       const dataset = datasets.find(d => d.id === datasetId || d._id === datasetId);
-      
+
       if (!dataset) return;
 
-      const currentProgress = dataset.processing_progress || 0;
-      const currentStatus = dataset.processing_status || '';
-      const { key, progress: stageProgress } = getStageFromProgress(currentProgress, currentStatus);
-      
-      setStage(key);
-      setProgress(stageProgress);
-
+      const dsProgress = dataset.processing_progress || 0;
+      const dsStatus = dataset.processing_status || '';
       const artifactStatus = dataset.artifact_status || {};
       const isProcessed = dataset.is_processed;
+
+      // Update fallback state (cap progress during fallback to avoid misleading 99%)
+      const cappedProgress = Math.min(dsProgress, FALLBACK_MAX_PROGRESS);
+      const { key, progress } = getFallbackStageFromProgress(cappedProgress, dsStatus);
+      setFallbackStage(key);
+      setFallbackProgress(progress);
+
+      // Check completion
       const dashboardReady = artifactStatus.dashboard_design === 'ready';
       const insightsReady = artifactStatus.insights_report === 'ready';
 
       if (isProcessed && dashboardReady && insightsReady) {
         setIsComplete(true);
-        setStage('completed');
-        setProgress(100);
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
+        setHasError(false);
+        if (datasetPollRef.current) clearInterval(datasetPollRef.current);
+        if (stagesPollRef.current) clearInterval(stagesPollRef.current);
+        datasetPollRef.current = null;
+        stagesPollRef.current = null;
         toast.success('Processing complete!', { id: 'processing-complete' });
-      } else if (isProcessed && !dashboardReady) {
-        setStage('artifact_generation');
+      } else if (dataset.processing_status === 'failed') {
+        setHasError(true);
       }
     } catch (err) {
       console.error('Error checking processing status:', err);
     }
   };
 
+  const fetchStagesData = async () => {
+    if (!datasetId || navigateRef.current) return;
+
+    try {
+      const response = await datasetAPI.getDatasetStages(datasetId);
+      const fetched = response.data?.stages || [];
+      
+      // Deduplicate stages by name or label, keeping the latest state 
+      // but preserving original sequence order.
+      const uniqueStagesMap = new Map();
+      fetched.forEach(stage => {
+        const key = stage.name || stage.label;
+        if (key) {
+          uniqueStagesMap.set(key, stage);
+        }
+      });
+      const deduplicatedStages = Array.from(uniqueStagesMap.values());
+      
+      setStages(deduplicatedStages);
+      if (!stagesLoaded && deduplicatedStages.length > 0) {
+        setStagesLoaded(true);
+      }
+      // If stages are empty but we've been polling for a while, mark as loaded
+      // so the UI doesn't wait forever for the first stage to appear
+      if (!stagesLoaded && stagesPollRef.current) {
+        // After 10 seconds, give up waiting for stages and use fallback
+      }
+    } catch {
+      // Silently ignore — stages endpoint may not exist for legacy datasets
+    }
+  };
+
   useEffect(() => {
     if (!isOpen || !datasetId) return;
-    
-    setStage('uploaded');
-    setProgress(0);
-    setIsComplete(false);
-    navigateRef.current = false;
 
+    // Reset state
+    setStages([]);
+    setStagesLoaded(false);
+    setFallbackStage('uploaded');
+    setFallbackProgress(0);
+    setIsComplete(false);
+    setHasError(false);
+    navigateRef.current = false;
+    highestProgressRef.current = 0;
+
+    // Initial fetch
     checkProcessingStatus();
-    pollRef.current = setInterval(checkProcessingStatus, 5000);
+    fetchStagesData();
+
+    datasetPollRef.current = setInterval(checkProcessingStatus, 5000);
+    stagesPollRef.current = setInterval(fetchStagesData, 5000);
+
+    // Fallback: if no stages appear after 10s, use progress-based display
+    const fallbackTimer = setTimeout(() => {
+      if (stages.length === 0) {
+        setStagesLoaded(true); // signals "use fallback since no stages available"
+      }
+    }, 10000);
 
     return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
+      if (datasetPollRef.current) clearInterval(datasetPollRef.current);
+      if (stagesPollRef.current) clearInterval(stagesPollRef.current);
+      clearTimeout(fallbackTimer);
+      datasetPollRef.current = null;
+      stagesPollRef.current = null;
     };
-  }, [isOpen, datasetId]);
+  }, [isOpen, datasetId, retryKey]);
+
+  // Once fallback timer fires, check if we got stages
+  useEffect(() => {
+    if (stages.length > 0 && !stagesLoaded) {
+      setStagesLoaded(true);
+    }
+  }, [stages]);
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handleGoToDashboard = () => {
     navigateRef.current = true;
     clearProcessingState();
     if (onClose) onClose();
     navigate('/app/dashboard');
+  };
+
+  const handleGoToProfile = () => {
+    navigateRef.current = true;
+    clearProcessingState();
+    if (onClose) onClose();
+    navigate(`/app/datasets/${datasetId}/profile`);
   };
 
   const handleGoToDatasets = () => {
@@ -467,104 +658,197 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
     navigate('/app/datasets');
   };
 
+  const handleRetry = async () => {
+    setHasError(false);
+    setStages([]);
+    setStagesLoaded(false);
+    setFallbackStage('uploaded');
+    setFallbackProgress(0);
+    setIsComplete(false);
+    setRetryKey(k => k + 1);
+
+    const result = await reprocessDataset(datasetId);
+    if (!result?.success) {
+      setHasError(true);
+    }
+  };
+
   const handleClose = () => {
     clearProcessingState();
     if (onClose) onClose();
   };
 
-  const currentStageInfo = STEPS.find(s => s.key === stage) || STEPS[0];
-
   if (!isOpen) return null;
 
-  const renderStepIcon = (state) => {
-    switch (state) {
-      case 'done':
-        return <span className="pm-step-icon done"><CheckIcon /></span>;
-      case 'active':
-        return <span className="pm-step-icon active"><SpinnerIcon /></span>;
-      default:
-        return <span className="pm-step-icon pending" />;
-    }
+  // ── Stage rendering ────────────────────────────────────────────────────────
+
+  const renderRealStages = () => {
+    // Determine which step is active (the first "running" stage)
+    const activeIdx = stages.findIndex(s => s.status === 'running');
+    const failedIdx = stages.findIndex(s => s.status === 'failed');
+    const hasAnyFailed = failedIdx !== -1;
+
+    const getState = (index) => {
+      if (index < activeIdx || (hasAnyFailed && index < failedIdx)) return 'done';
+      if (index === activeIdx) return 'active';
+      if (index === failedIdx) return 'failed';
+      return 'pending';
+    };
+
+    return stages.map((stage, idx) => (
+      <li key={stage.name || idx} className={`pm-step ${getState(idx)}`}>
+        <span className={`pm-step-icon ${getState(idx)}`}>
+          {getState(idx) === 'done' && <CheckIcon />}
+          {getState(idx) === 'active' && <SpinnerIcon />}
+          {getState(idx) === 'failed' && <ErrorIcon />}
+          {getState(idx) === 'pending' && null}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <span className="pm-step-label">{stage.label || stage.name}</span>
+          {stage.error && (
+            <div className="pm-step-error" title={stage.error}>
+              {stage.error}
+            </div>
+          )}
+        </div>
+        <span className="pm-step-time">
+          {getState(idx) === 'done' && formatDuration(stage.duration_ms)}
+          {getState(idx) === 'active' && '...'}
+          {getState(idx) === 'failed' && formatDuration(stage.duration_ms)}
+          {getState(idx) === 'pending' && '—'}
+        </span>
+      </li>
+    ));
   };
+
+  const renderFallbackStages = () => {
+    return FALLBACK_STEPS.map((step) => {
+      const state = getFallbackStepState(step.key, fallbackStage, isComplete);
+      return (
+        <li key={step.key} className={`pm-step ${state}`}>
+          <span className={`pm-step-icon ${state}`}>
+            {state === 'done' && <CheckIcon />}
+            {state === 'active' && <SpinnerIcon />}
+            {state === 'pending' && null}
+          </span>
+          <span className="pm-step-label">{step.label}</span>
+          <span className="pm-step-time">
+            {state === 'done' ? 'done' : state === 'active' ? '...' : '—'}
+          </span>
+        </li>
+      );
+    });
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return createPortal(
     <>
       <style>{styles}</style>
       <div className="pm-backdrop">
         <div className="pm-modal">
-            <div className="pm-header">
-              <span className="pm-header-dot" />
-              <span className="pm-header-label">Pipeline Execution</span>
-              <span className="pm-header-badge">AI GENERATION</span>
+          <div className="pm-header">
+            <span className="pm-header-dot" />
+            <span className="pm-header-label">Pipeline Execution</span>
+            <span className="pm-header-badge">
+              {hasError ? 'FAILED' : isComplete ? 'COMPLETE' : 'IN PROGRESS'}
+            </span>
+          </div>
+
+          <div className="pm-body">
+            <div className="pm-title-block">
+              <h2>
+                {hasError
+                  ? 'Processing Failed'
+                  : isComplete
+                    ? 'Processing Complete'
+                    : 'Processing Dataset'}
+              </h2>
+              <p>
+                {hasError
+                  ? 'An error occurred during processing. You can retry or view your datasets.'
+                  : isComplete
+                    ? 'Your data profile is ready — explore column details, statistics, and patterns'
+                    : 'Running analysis pipeline — please wait or check back later'}
+              </p>
             </div>
 
-            <div className="pm-body">
-              <div className="pm-title-block">
-                <h2>{isComplete ? 'Processing Complete' : 'Processing Dataset'}</h2>
-                <p>
-                  {isComplete 
-                    ? 'Your dashboard is ready with AI-generated insights'
-                    : 'Running analysis pipeline — please wait or check back later'
-                  }
-                </p>
+            {hasError && (
+              <div className="pm-stage-error-banner">
+                <ErrorIcon />
+                One or more pipeline stages failed. The dataset may have partial results.
               </div>
+            )}
 
-              {!isComplete && (
-                <div className="pm-progress-section">
-                  <div className="pm-progress-meta">
-                    <span className="pm-progress-stage">{currentStageInfo.label}</span>
-                    <span className="pm-progress-pct">{progress}%</span>
-                  </div>
-                  <div className="pm-progress-track">
-                    <div className="pm-progress-fill" style={{ width: `${progress}%` }} />
-                  </div>
-                  <div className="pm-progress-sub">Processing: {currentStageInfo.label.toLowerCase()}</div>
+            {!isComplete && !hasError && (
+              <div className="pm-progress-section">
+                <div className="pm-progress-meta">
+                  <span className="pm-progress-stage">
+                    {currentStageLabel || 'Processing'}
+                  </span>
+                  <span className="pm-progress-pct">{currentProgress}%</span>
                 </div>
-              )}
-
-              {isComplete && (
-                <div className="pm-complete-icon">
-                  <CheckIcon />
+                <div className="pm-progress-track">
+                  <div className="pm-progress-fill" style={{ width: `${currentProgress}%` }} />
                 </div>
-              )}
+                <div className="pm-progress-sub">
+                  {currentStageLabel
+                    ? `Processing: ${currentStageLabel.toLowerCase()}`
+                    : 'Starting pipeline...'}
+                </div>
+              </div>
+            )}
 
-              <ul className="pm-steps">
-                {STEPS.map((step) => {
-                  const state = getStepState(step.key);
-                  return (
-                    <li key={step.key} className={`pm-step ${state}`}>
-                      {renderStepIcon(state)}
-                      <span className="pm-step-label">{step.label}</span>
-                      <span className="pm-step-time">
-                        {state === 'done' ? 'done' : state === 'active' ? '...' : '—'}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+            {isComplete && (
+              <div className="pm-complete-icon">
+                <svg width="28" height="28" viewBox="0 0 14 14" fill="none" strokeWidth="1.8" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M2 7.5l3.5 3.5 6.5-7" strokeLinecap="round" strokeLinejoin="round" stroke="currentColor"/>
+                </svg>
+              </div>
+            )}
 
-            <div className="pm-footer">
-              <span className="pm-footer-info">
-                {isComplete ? 'Ready to explore' : `ETA ~${Math.max(1, Math.ceil((100 - progress) / 10))}s`}
-              </span>
-              <div className="pm-footer-actions">
-                {isComplete ? (
-                  <>
-                    <button className="pm-btn pm-btn-primary" onClick={handleGoToDashboard}>
-                      Go to Dashboard
-                    </button>
-                    <button className="pm-btn" onClick={handleGoToDatasets}>
-                      View Datasets
-                    </button>
-                  </>
-                ) : (
-                  <button className="pm-btn" onClick={handleClose}>
-                    <CloseIcon />
-                    Close & Check Later
+            <ul className="pm-steps">
+              {useRealStages ? renderRealStages() : renderFallbackStages()}
+            </ul>
+          </div>
+
+          <div className="pm-footer">
+            <span className="pm-footer-info">
+              {hasError
+                ? 'Partial results available'
+                : isComplete
+                  ? 'Ready to explore'
+                  : `ETA ~${Math.max(1, Math.ceil((100 - currentProgress) / 10))}s`}
+            </span>
+            <div className="pm-footer-actions">
+              {isComplete ? (
+                <>
+                  <button className="pm-btn pm-btn-primary" onClick={handleGoToProfile}>
+                    View Profile
                   </button>
-                )}
-              </div>
+                  <button className="pm-btn" onClick={handleGoToDashboard}>
+                    Go to Dashboard
+                  </button>
+                </>
+              ) : hasError ? (
+                <>
+                  <button className="pm-btn pm-btn-danger" onClick={handleRetry}>
+                    <svg width="12" height="12" viewBox="0 0 14 14" fill="none" strokeWidth="1.5" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M1 7a6 6 0 0 1 10.5-4M13 1v4.5H8.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    Retry Processing
+                  </button>
+                  <button className="pm-btn" onClick={handleGoToDatasets}>
+                    View Datasets
+                  </button>
+                </>
+              ) : (
+                <button className="pm-btn" onClick={handleClose}>
+                  <CloseIcon />
+                  Close & Check Later
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

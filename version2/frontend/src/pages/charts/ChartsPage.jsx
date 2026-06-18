@@ -140,7 +140,7 @@ const ChartsStudio = () => {
             showLegend: true,
             showLabels: false,
             showGrid: false,
-            colorPalette: ['#7C3AED', '#0891B2', '#F59E0B', '#EF4444', '#8B5CF6'],
+            colorPalette: ['#E85002', '#0891B2', '#F59E0B', '#EF4444', '#E85002'],
         },
     });
 

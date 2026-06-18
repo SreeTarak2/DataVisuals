@@ -1,15 +1,13 @@
 /**
- * DataPreviewTable Component — Modern Data Grid Edition
- *
- * Enterprise-grade data table with:
- *  • Column type detection (number, date, boolean, string)
- *  • Smart sorting (numeric and text)
- *  • Global search across all columns
- *  • Per-column text filters
- *  • Client-side pagination (25 / 50 / 100 rows)
- *  • CSV export of filtered view
- *  • Smart value formatting
- *  • Light/Dark mode support
+ * DataPreviewTable Component — Professional SaaS Edition
+ * 
+ * Features:
+ *  • Precision Column Type Detection
+ *  • Smart Value Formatting (Currency, Date, Boolean, Numeric)
+ *  • Global search & Per-column filters
+ *  • Responsive horizontal scroll with sticky headers
+ *  • Enterprise pagination controls
+ *  • Theme-aware styling (Light/Dark)
  */
 
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
@@ -23,6 +21,7 @@ import {
   ChevronsRight,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   X,
   Filter,
   ArrowUpDown,
@@ -34,50 +33,57 @@ import {
   Type,
   Check,
   XCircle,
+  MoreVertical,
+  Copy,
+  Table as TableIcon
 } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 
-const PAGE_SIZE_OPTIONS = [25, 50, 100];
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const formatCell = (val) => {
+const formatCell = (val, type) => {
   if (val === null || val === undefined) return { display: '—', type: 'null' };
 
-  if (typeof val === 'boolean') {
+  if (type === 'boolean' || typeof val === 'boolean') {
     return {
-      display: val,
+      display: !!val,
       type: 'boolean',
     };
   }
 
-  if (typeof val === 'number') {
+  if (type === 'number' || typeof val === 'number') {
+    const num = typeof val === 'number' ? val : Number(val);
+    if (isNaN(num)) return { display: String(val), type: 'string' };
+    
+    // Smart formatting for numbers
+    if (Math.abs(num) > 1000000) {
+      return {
+        display: (num / 1000000).toLocaleString(undefined, { maximumFractionDigits: 2 }) + 'M',
+        type: 'number'
+      };
+    }
+    
     return {
-      display: Number.isInteger(val) ? val.toLocaleString() : val.toLocaleString(undefined, { maximumFractionDigits: 4 }),
+      display: Number.isInteger(num) ? num.toLocaleString() : num.toLocaleString(undefined, { maximumFractionDigits: 4 }),
       type: 'number',
     };
   }
 
   const s = String(val);
 
-  // Check for date patterns
-  const datePatterns = [
-    /^\d{4}-\d{2}-\d{2}$/,
-    /^\d{2}\/\d{2}\/\d{4}$/,
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
-  ];
-  for (const pattern of datePatterns) {
-    if (pattern.test(s)) {
-      try {
-        const date = new Date(val);
-        if (!isNaN(date.getTime())) {
-          return {
-            display: date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
-            type: 'date',
-          };
-        }
-      } catch {
-        // Not a valid date
+  if (type === 'date') {
+    try {
+      const date = new Date(val);
+      if (!isNaN(date.getTime())) {
+        return {
+          display: date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
+          type: 'date',
+        };
       }
+    } catch {
+      // Fallback to string
     }
   }
 
@@ -94,17 +100,19 @@ const numericCoerce = (v) => {
 };
 
 const detectColumnType = (columnName, rows) => {
-  const values = rows.map((r) => r[columnName]).filter((v) => v !== null && v !== undefined);
+  const sampleSize = Math.min(rows.length, 50);
+  const values = rows.slice(0, sampleSize).map((r) => r[columnName]).filter((v) => v !== null && v !== undefined);
+  
   if (values.length === 0) return 'string';
 
-  // Check for numbers
-  const numCount = values.filter((v) => typeof v === 'number' || numericCoerce(v) !== null).length;
-  if (numCount / values.length > 0.8) return 'number';
-
   // Check for booleans
-  const boolValues = ['true', 'false', 'True', 'False', 'TRUE', 'FALSE', true, false, 'yes', 'no', 'Yes', 'No'];
+  const boolValues = ['true', 'false', 'True', 'False', 'TRUE', 'FALSE', true, false];
   const boolCount = values.filter((v) => boolValues.includes(v)).length;
   if (boolCount / values.length > 0.8) return 'boolean';
+
+  // Check for numbers
+  const numCount = values.filter((v) => typeof v === 'number' || (!isNaN(parseFloat(v)) && isFinite(v))).length;
+  if (numCount / values.length > 0.8) return 'number';
 
   // Check for dates
   const datePatterns = [
@@ -144,10 +152,12 @@ const DataPreviewTable = ({ dataPreview, loading, onReload, totalRows }) => {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
   const [showFilters, setShowFilters] = useState(false);
+  const [isPageSizeOpen, setIsPageSizeOpen] = useState(false);
 
   const searchRef = useRef(null);
+  const dropdownRef = useRef(null);
 
-  // Ctrl+F / Cmd+F to focus search
+  // Keyboard shortcuts
   useEffect(() => {
     const handler = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
@@ -159,12 +169,21 @@ const DataPreviewTable = ({ dataPreview, loading, onReload, totalRows }) => {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsPageSizeOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // Reset page when filters change
   useEffect(() => {
     setPage(0);
   }, [globalSearch, columnFilters, sortCol, sortDir, pageSize]);
-
-  // ─── Column Type Detection ────────────────────────────────────────────────
 
   const columns = useMemo(
     () => Object.keys((dataPreview && dataPreview[0]) || {}),
@@ -180,8 +199,7 @@ const DataPreviewTable = ({ dataPreview, loading, onReload, totalRows }) => {
     return types;
   }, [columns, dataPreview]);
 
-  // ─── Derived Data ──────────────────────────────────────────────────────────
-
+  // Process data
   const processedData = useMemo(() => {
     if (!dataPreview || dataPreview.length === 0) return [];
 
@@ -226,7 +244,7 @@ const DataPreviewTable = ({ dataPreview, loading, onReload, totalRows }) => {
         if (colType === 'number' && aNum !== null && bNum !== null) {
           cmp = aNum - bNum;
         } else {
-          cmp = String(aVal).localeCompare(String(bVal), undefined, { sensitivity: 'base' });
+          cmp = String(aVal).localeCompare(String(bVal), undefined, { numeric: true, sensitivity: 'base' });
         }
         return sortDir === 'desc' ? -cmp : cmp;
       });
@@ -241,8 +259,6 @@ const DataPreviewTable = ({ dataPreview, loading, onReload, totalRows }) => {
     () => processedData.slice(page * pageSize, (page + 1) * pageSize),
     [processedData, page, pageSize]
   );
-
-  // ─── Handlers ─────────────────────────────────────────────────────────────
 
   const handleSort = useCallback(
     (col) => {
@@ -260,16 +276,10 @@ const DataPreviewTable = ({ dataPreview, loading, onReload, totalRows }) => {
     [sortCol, sortDir]
   );
 
-  const handleColumnFilter = useCallback((col, val) => {
-    setColumnFilters((prev) => ({ ...prev, [col]: val }));
-  }, []);
-
-  const clearAllFilters = useCallback(() => {
-    setGlobalSearch('');
-    setColumnFilters({});
-    setSortCol(null);
-    setSortDir('asc');
-  }, []);
+  const handleCopyCell = (text) => {
+    navigator.clipboard.writeText(text);
+    toast.success('Value copied', { duration: 1500, style: { fontSize: '12px' } });
+  };
 
   const exportCSV = useCallback(() => {
     if (processedData.length === 0) return;
@@ -296,390 +306,327 @@ const DataPreviewTable = ({ dataPreview, loading, onReload, totalRows }) => {
     a.download = `data_export_${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a);
     a.click();
-    try {
-      if (a.parentNode === document.body) {
-        document.body.removeChild(a);
-      }
-    } catch (err) {
-      console.error('Failed to remove temporary export element', err);
-    }
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    toast.success('CSV Exported');
   }, [processedData, columns]);
-
-  // ─── Sort Icon ─────────────────────────────────────────────────────────────
 
   const SortIcon = ({ col }) => {
     if (sortCol !== col)
       return <ArrowUpDown className="w-3.5 h-3.5 opacity-0 group-hover/th:opacity-50 transition-opacity" />;
-    if (sortDir === 'asc') return <ArrowUp className="w-3.5 h-3.5" style={{ color: 'var(--accent-primary)' }} />;
-    return <ArrowDown className="w-3.5 h-3.5" style={{ color: 'var(--accent-primary)' }} />;
+    if (sortDir === 'asc') return <ArrowUp className="w-3.5 h-3.5 text-accent-primary" />;
+    return <ArrowDown className="w-3.5 h-3.5 text-accent-primary" />;
   };
-
-  // ─── Loading ───────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-        <div className="data-table-container">
-          <div className="data-table-toolbar">
-            <div className="data-table-title">
-              <div className="data-table-title-icon">
-                <BarChart3 className="w-5 h-5" />
-              </div>
-              <div className="data-table-title-text">
-                <h2>Data Preview</h2>
-                <p>Loading your data...</p>
-              </div>
-            </div>
-          </div>
-          <div className="data-table-skeleton">
-            {[...Array(5)].map((_, i) => (
-              <div key={i} className="data-table-skeleton-row">
-                {[...Array(6)].map((_, j) => (
-                  <div
-                    key={j}
-                    className="data-table-skeleton-cell"
-                    style={{ width: `${80 + Math.random() * 100}px`, animationDelay: `${i * 0.1}s` }}
-                  />
-                ))}
-              </div>
-            ))}
-          </div>
+      <div className="data-table-container min-h-[400px] flex flex-col">
+        <div className="data-table-toolbar animate-pulse">
+           <div className="h-10 w-48 bg-white/5 rounded-lg" />
+           <div className="h-10 w-64 bg-white/5 rounded-lg" />
         </div>
-      </motion.div>
+        <div className="flex-grow p-4 space-y-4">
+          {[...Array(8)].map((_, i) => (
+            <div key={i} className="h-10 w-full bg-white/5 rounded-md animate-pulse" style={{ opacity: 1 - i*0.1 }} />
+          ))}
+        </div>
+      </div>
     );
   }
-
-  // ─── Empty ─────────────────────────────────────────────────────────────────
 
   if (!dataPreview || dataPreview.length === 0) {
     return (
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-        <div className="data-table-container">
-          <div className="data-table-toolbar">
-            <div className="data-table-title">
-              <div className="data-table-title-icon">
-                <BarChart3 className="w-5 h-5" />
-              </div>
-              <div className="data-table-title-text">
-                <h2>Data Preview</h2>
-                <p>No data to display</p>
-              </div>
-            </div>
-            {onReload && (
-              <button className="data-table-btn" onClick={onReload} title="Reload">
-                <RefreshCw className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-          <div className="data-table-empty">
-            <div className="data-table-empty-icon">
-              <BarChart3 className="w-6 h-6" />
-            </div>
-            <h3>No data available</h3>
-            <p>Upload a dataset to see your data here</p>
-          </div>
+      <div className="data-table-container min-h-[300px] flex flex-col items-center justify-center p-10 text-center">
+        <div className="p-4 rounded-2xl bg-white/5 mb-4">
+           <TableIcon className="w-8 h-8 text-muted" />
         </div>
-      </motion.div>
+        <h3 className="text-lg font-semibold text-header mb-1">No data available</h3>
+        <p className="text-sm text-muted max-w-xs mb-6">Connect a dataset or upload a file to begin analyzing your data.</p>
+        {onReload && (
+           <button className="btn-primary" onClick={onReload}>
+             <RefreshCw className="w-4 h-4 mr-2" />
+             Reload Dataset
+           </button>
+        )}
+      </div>
     );
   }
 
-  const activeFilterCount =
-    (globalSearch.trim() ? 1 : 0) + Object.values(columnFilters).filter((v) => v.trim()).length;
-
-  // ─── Main ──────────────────────────────────────────────────────────────────
+  const activeFilterCount = (globalSearch.trim() ? 1 : 0) + Object.values(columnFilters).filter((v) => v.trim()).length;
 
   return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-      <div className="data-table-container">
-        {/* ── Toolbar ── */}
-        <div className="data-table-toolbar">
-          <div className="data-table-title">
-            <div className="data-table-title-icon">
-              <BarChart3 className="w-5 h-5" />
-            </div>
-            <div className="data-table-title-text">
-              <h2>Data Preview</h2>
-              <p>
-                {totalFilteredRows != null && dataPreview != null && dataPreview.length > 0
-                  ? (totalFilteredRows !== dataPreview.length
-                    ? `${totalFilteredRows.toLocaleString()} of ${dataPreview.length.toLocaleString()} rows`
-                    : `${dataPreview.length.toLocaleString()} rows`)
-                  : 'Loading...'}
-                {totalRows ? ` (${totalRows.toLocaleString()} total)` : ''}
-              </p>
-            </div>
+    <motion.div 
+      initial={{ opacity: 0, y: 10 }} 
+      animate={{ opacity: 1, y: 0 }}
+      className="data-table-container flex flex-col shadow-2xl"
+    >
+      {/* ── Toolbar ── */}
+      <div className="data-table-toolbar glass-modern sticky top-0 z-30">
+        <div className="flex items-center gap-4">
+          <div className="data-table-title-icon hidden sm:flex">
+            <TableIcon className="w-4 h-4" />
+          </div>
+          <div className="data-table-title-text">
+            <h2>Data Preview</h2>
+            <p className="text-micro">
+              {totalFilteredRows.toLocaleString()} rows visible 
+              {totalRows ? ` • ${totalRows.toLocaleString()} total` : ''}
+            </p>
+          </div>
+        </div>
+
+        <div className="data-table-actions">
+          <div className="data-table-search group">
+            <Search className="data-table-search-icon w-3.5 h-3.5 group-focus-within:text-accent-primary transition-colors" />
+            <input
+              ref={searchRef}
+              type="text"
+              placeholder="Quick search... (Ctrl+F)"
+              value={globalSearch}
+              onChange={(e) => setGlobalSearch(e.target.value)}
+              className="data-table-search-input"
+            />
+            {globalSearch && (
+              <button onClick={() => setGlobalSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 hover:text-header transition-colors">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
-          <div className="data-table-actions">
-            {/* Search */}
-            <div className="data-table-search">
-              <Search className="data-table-search-icon w-4 h-4" />
-              <input
-                ref={searchRef}
-                type="text"
-                placeholder="Search... (Ctrl+F)"
-                value={globalSearch}
-                onChange={(e) => setGlobalSearch(e.target.value)}
-                className="data-table-search-input"
-              />
-              {globalSearch && (
-                <button
-                  onClick={() => setGlobalSearch('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-
-            {/* Filter toggle */}
+          <div className="flex items-center gap-1.5 ml-2 border-l border-white/10 pl-3">
             <button
               onClick={() => setShowFilters(!showFilters)}
               className={`data-table-btn ${showFilters || activeFilterCount > 0 ? 'active' : ''}`}
-              title="Toggle column filters"
+              title="Filter columns"
             >
               <Filter className="w-4 h-4" />
               {activeFilterCount > 0 && <span className="data-table-badge">{activeFilterCount}</span>}
             </button>
 
-            {/* Clear all */}
-            {activeFilterCount > 0 && (
-              <button onClick={clearAllFilters} className="data-table-btn" title="Clear all filters">
-                <X className="w-4 h-4" />
-              </button>
-            )}
-
-            {/* CSV Export */}
-            <button
-              onClick={exportCSV}
-              disabled={processedData.length === 0}
-              className="data-table-btn"
-              title="Export as CSV"
-            >
+            <button onClick={exportCSV} className="data-table-btn" title="Export CSV">
               <Download className="w-4 h-4" />
             </button>
 
-            {/* Reload */}
             {onReload && (
-              <button onClick={onReload} className="data-table-btn" title="Reload data">
+              <button onClick={onReload} className="data-table-btn" title="Refresh">
                 <RefreshCw className="w-4 h-4" />
               </button>
             )}
           </div>
         </div>
+      </div>
 
-        {/* ── Table ── */}
-        <div style={{ overflowX: 'auto', maxHeight: '600px', overflowY: 'auto' }}>
-          <table className="data-table">
-            <thead>
-              <tr>
-                {columns.map((col) => (
-                  <th
-                    key={col}
-                    onClick={() => handleSort(col)}
-                    className={`sortable ${sortCol === col ? 'sorted' : ''}`}
-                  >
-                    <div className="data-table-th-content">
-                      <span
-                        className="col-type-icon"
-                        style={{
-                          backgroundColor:
-                            columnTypes[col] === 'number'
-                              ? 'rgba(47, 128, 237, 0.15)'
-                              : columnTypes[col] === 'date'
-                              ? 'rgba(242, 153, 74, 0.15)'
-                              : columnTypes[col] === 'boolean'
-                              ? 'rgba(187, 107, 217, 0.15)'
-                              : 'var(--bg-surface)',
-                          color:
-                            columnTypes[col] === 'number'
-                              ? 'var(--accent-primary)'
-                              : columnTypes[col] === 'date'
-                              ? 'var(--accent-warning)'
-                              : columnTypes[col] === 'boolean'
-                              ? 'var(--accent-purple)'
-                              : 'var(--text-muted)',
-                        }}
-                      >
+      {/* ── Table Grid ── */}
+      <div className="flex-grow overflow-auto relative studio-scrollbar">
+        <table className="data-table w-full border-separate border-spacing-0">
+          <thead className="sticky top-0 z-20">
+            <tr>
+              {columns.map((col) => (
+                <th
+                  key={col}
+                  onClick={() => handleSort(col)}
+                  className={`group/th sortable border-b border-border py-4 px-6 ${sortCol === col ? 'bg-white/[0.03]' : ''}`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 overflow-hidden">
+                      <div className={`p-1 rounded-md ${
+                        columnTypes[col] === 'number' ? 'bg-blue-500/10 text-blue-400' :
+                        columnTypes[col] === 'date' ? 'bg-amber-500/10 text-amber-400' :
+                        columnTypes[col] === 'boolean' ? 'bg-emerald-500/10 text-emerald-400' :
+                        'bg-white/5 text-muted'
+                      }`}>
                         {getColumnTypeIcon(columnTypes[col])}
-                      </span>
-                      <span className="data-table-th-label">{col}</span>
-                      <span className="data-table-th-icon">
-                        <SortIcon col={col} />
-                      </span>
+                      </div>
+                      <span className="font-semibold text-[13px] tracking-tight truncate text-header">{col}</span>
                     </div>
-                  </th>
-                ))}
-              </tr>
+                    <SortIcon col={col} />
+                  </div>
+                </th>
+              ))}
+            </tr>
 
-              {/* Per-column filters */}
+            {/* Filter Row */}
+            <AnimatePresence>
+              {showFilters && (
+                <motion.tr
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="bg-surface/80 backdrop-blur-md"
+                >
+                  {columns.map((col) => (
+                    <th key={`filter-${col}`} className="px-4 py-2 border-b border-border">
+                      <input
+                        type="text"
+                        placeholder={`Filter ${col}...`}
+                        value={columnFilters[col] || ''}
+                        onChange={(e) => setColumnFilters(prev => ({ ...prev, [col]: e.target.value }))}
+                        className="w-full bg-white/5 border border-white/10 rounded-md py-1.5 px-3 text-[12px] focus:border-accent-primary outline-none transition-all placeholder:text-muted/50"
+                      />
+                    </th>
+                  ))}
+                </motion.tr>
+              )}
+            </AnimatePresence>
+          </thead>
+
+          <tbody className="divide-y divide-white/[0.04]">
+            {pagedData.length > 0 ? (
+              pagedData.map((row, idx) => (
+                <tr key={idx} className="hover:bg-white/[0.02] transition-colors group/tr">
+                  {columns.map((col) => {
+                    const { display, type } = formatCell(row[col], columnTypes[col]);
+                    return (
+                      <td
+                        key={col}
+                        className={`py-3.5 px-6 whitespace-nowrap text-[13px] relative ${
+                          type === 'number' ? 'text-right font-mono' : ''
+                        }`}
+                        onDoubleClick={() => handleCopyCell(String(row[col]))}
+                      >
+                        {type === 'boolean' ? (
+                          <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border ${
+                            row[col] 
+                              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                              : 'bg-red-500/10 border-red-500/20 text-red-400'
+                          }`}>
+                            {row[col] ? <Check className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                            {String(row[col])}
+                          </div>
+                        ) : type === 'null' ? (
+                          <span className="text-muted/40 italic">null</span>
+                        ) : (
+                          <span className={`${type === 'number' ? 'text-blue-400/80' : 'text-secondary'} group-hover/tr:text-header transition-colors`}>
+                            {display}
+                          </span>
+                        )}
+                        
+                        <button 
+                          onClick={() => handleCopyCell(String(row[col]))}
+                          className="absolute right-1 top-1/2 -translate-y-1/2 p-1 opacity-0 group-hover:opacity-100 hover:bg-white/10 rounded-md transition-all z-10"
+                        >
+                          <Copy className="w-3 h-3 text-muted" />
+                        </button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={columns.length} className="py-20 text-center text-muted text-sm italic">
+                  No matches found for your current filters
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* ── Pagination Footer ── */}
+      <div className="data-table-footer glass-modern border-t border-border px-6 py-4">
+        <div className="flex items-center gap-6 text-[12px] text-muted font-medium">
+          <div className="flex items-center gap-3">
+            <span className="opacity-70">Show</span>
+            <div className="relative" ref={dropdownRef}>
+              <button 
+                onClick={() => setIsPageSizeOpen(!isPageSizeOpen)}
+                className="flex items-center gap-4 bg-white/5 border border-white/10 hover:border-accent-primary/50 rounded-lg py-1.5 px-3 transition-all duration-200 group min-w-[70px] justify-between"
+              >
+                <span className="text-[12px] font-bold text-header">{pageSize}</span>
+                <ChevronDown className={`w-3 h-3 text-muted group-hover:text-header transition-transform duration-300 ${isPageSizeOpen ? 'rotate-180' : ''}`} />
+              </button>
+              
               <AnimatePresence>
-                {showFilters && (
-                  <motion.tr
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="data-table-filter-row"
+                {isPageSizeOpen && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: -4, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute bottom-full left-0 mb-2 min-w-[80px] glass-modern border border-white/10 rounded-xl overflow-hidden z-50 shadow-2xl"
                   >
-                    {columns.map((col) => (
-                      <th key={`filter-${col}`}>
-                        <input
-                          type="text"
-                          placeholder="Filter..."
-                          value={columnFilters[col] || ''}
-                          onChange={(e) => handleColumnFilter(col, e.target.value)}
-                          className="data-table-filter-input"
-                        />
-                      </th>
+                    {PAGE_SIZE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt}
+                        onClick={() => {
+                          setPageSize(opt);
+                          setIsPageSizeOpen(false);
+                        }}
+                        className={`w-full text-left px-4 py-2 text-[12px] transition-colors ${
+                          pageSize === opt 
+                            ? 'bg-accent-primary text-white' 
+                            : 'hover:bg-white/10 text-muted hover:text-header'
+                        }`}
+                      >
+                        {opt}
+                      </button>
                     ))}
-                  </motion.tr>
+                  </motion.div>
                 )}
               </AnimatePresence>
-            </thead>
-
-            <tbody>
-              {pagedData.length > 0 ? (
-                pagedData.map((row, idx) => (
-                  <tr key={idx}>
-                    {columns.map((col) => {
-                      const { display, type } = formatCell(row[col], columnTypes[col]);
-                      return (
-                        <td
-                          key={col}
-                          className={
-                            type === 'number'
-                              ? 'data-table-cell--number'
-                              : type === 'date'
-                              ? 'data-table-cell--date'
-                              : type === 'null'
-                              ? 'data-table-cell--null'
-                              : ''
-                          }
-                          title={String(row[col] ?? '')}
-                        >
-                          {type === 'boolean' ? (
-                            <span
-                              className={`boolean-badge ${row[col] ? 'boolean-badge--true' : 'boolean-badge--false'}`}
-                            >
-                              {row[col] ? (
-                                <>
-                                  <Check className="w-3 h-3" /> True
-                                </>
-                              ) : (
-                                <>
-                                  <XCircle className="w-3 h-3" /> False
-                                </>
-                              )}
-                            </span>
-                          ) : (
-                            display
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td
-                    colSpan={columns.length}
-                    style={{
-                      textAlign: 'center',
-                      padding: '40px 20px',
-                      color: 'var(--text-muted)',
-                    }}
-                  >
-                    No rows match your filters
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+            </div>
+            <span className="opacity-70 whitespace-nowrap">rows per page</span>
+          </div>
+          <div className="h-4 w-[1px] bg-white/10 hidden sm:block" />
+          <span className="hidden sm:block opacity-60">
+             Showing {Math.min(totalFilteredRows, page * pageSize + 1)}-{Math.min(totalFilteredRows, (page + 1) * pageSize)} of {totalFilteredRows.toLocaleString()}
+          </span>
         </div>
 
-        {/* ── Pagination Footer ── */}
-        <div className="data-table-footer">
-          <div className="data-table-footer-info">
-            <span>Show</span>
-            <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
-              {PAGE_SIZE_OPTIONS.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
-            <span>rows per page</span>
-          </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setPage(0)}
+            disabled={page === 0}
+            className="data-table-page-btn"
+          >
+            <ChevronsLeft className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setPage(p => Math.max(0, p - 1))}
+            disabled={page === 0}
+            className="data-table-page-btn"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
 
-          <div className="data-table-pagination">
-            <span
-              style={{
-                fontSize: '12px',
-                color: 'var(--text-secondary)',
-                marginRight: '8px',
-              }}
-            >
-              Page {page + 1} of {totalPages}
-            </span>
-            <button
-              onClick={() => setPage(0)}
-              disabled={page === 0}
-              className="data-table-page-btn"
-              title="First page"
-            >
-              <ChevronsLeft className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={page === 0}
-              className="data-table-page-btn"
-              title="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-
-            {/* Page numbers */}
+          <div className="flex items-center gap-1 mx-2">
             {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
               let pageNum;
-              if (totalPages <= 5) {
-                pageNum = i;
-              } else if (page < 3) {
-                pageNum = i;
-              } else if (page > totalPages - 4) {
-                pageNum = totalPages - 5 + i;
-              } else {
-                pageNum = page - 2 + i;
-              }
+              if (totalPages <= 5) pageNum = i;
+              else if (page < 3) pageNum = i;
+              else if (page > totalPages - 4) pageNum = totalPages - 5 + i;
+              else pageNum = page - 2 + i;
+              
               return (
                 <button
                   key={pageNum}
                   onClick={() => setPage(pageNum)}
-                  className={`data-table-page-btn ${page === pageNum ? 'active' : ''}`}
+                  className={`min-w-[32px] h-8 rounded-lg text-[12px] font-semibold transition-all ${
+                    page === pageNum 
+                      ? 'bg-accent-primary text-white shadow-lg shadow-accent-primary/20' 
+                      : 'hover:bg-white/5 text-muted hover:text-header'
+                  }`}
                 >
                   {pageNum + 1}
                 </button>
               );
             })}
-
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={page >= totalPages - 1}
-              className="data-table-page-btn"
-              title="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setPage(totalPages - 1)}
-              disabled={page >= totalPages - 1}
-              className="data-table-page-btn"
-              title="Last page"
-            >
-              <ChevronsRight className="w-4 h-4" />
-            </button>
           </div>
+
+          <button
+            onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1}
+            className="data-table-page-btn"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setPage(totalPages - 1)}
+            disabled={page >= totalPages - 1}
+            className="data-table-page-btn"
+          >
+            <ChevronsRight className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </motion.div>

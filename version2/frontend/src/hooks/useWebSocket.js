@@ -8,7 +8,7 @@ const isBackendConversationId = (value) =>
  */
 const getAuthToken = () => {
     try {
-        const stored = localStorage.getItem('datasage-auth') || sessionStorage.getItem('datasage-auth');
+        const stored = localStorage.getItem('signal-auth') || sessionStorage.getItem('signal-auth');
         if (stored) {
             const parsed = JSON.parse(stored);
             return parsed?.state?.token || null;
@@ -93,6 +93,8 @@ export const useWebSocket = ({
     onError,
     onStatus,
     onThinkingStep,
+    onRenderIntent,
+    onBeliefSaved,
     onCancelAck,
     autoConnect = false
 } = {}) => {
@@ -104,11 +106,24 @@ export const useWebSocket = ({
     const maxReconnectAttempts = 5;
     const pendingMessagesRef = useRef(new Map()); // Track pending message callbacks
     const intentionalCloseSocketsRef = useRef(new WeakSet());
+    const heartbeatIntervalRef = useRef(null);
+    const lastPongRef = useRef(null);
+
+    const connectionTimeoutRef = useRef(null);
+    const WS_CONNECT_TIMEOUT = 15000;
 
     const cleanup = useCallback(() => {
+        if (connectionTimeoutRef.current) {
+            clearTimeout(connectionTimeoutRef.current);
+            connectionTimeoutRef.current = null;
+        }
         if (reconnectTimeoutRef.current) {
             clearTimeout(reconnectTimeoutRef.current);
             reconnectTimeoutRef.current = null;
+        }
+        if (heartbeatIntervalRef.current) {
+            clearInterval(heartbeatIntervalRef.current);
+            heartbeatIntervalRef.current = null;
         }
         if (wsRef.current) {
             intentionalCloseSocketsRef.current.add(wsRef.current);
@@ -118,41 +133,86 @@ export const useWebSocket = ({
         pendingMessagesRef.current.clear();
     }, []);
 
-    const connect = useCallback(() => {
+    const connect = useCallback(async () => {
         if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
             return;
         }
 
-        const token = getAuthToken();
+        let token = getAuthToken();
         if (!token) {
             onError?.({ type: 'auth', detail: 'Not authenticated' });
             return;
         }
 
+        if (!isTokenValid(token)) {
+            console.log('Token invalid or expired, attempting to refresh...');
+            const newToken = await refreshAccessToken();
+            if (newToken) {
+                token = newToken;
+            } else {
+                onError?.({ type: 'auth', detail: 'Failed to refresh authentication token' });
+                return;
+            }
+        }
+
         setIsConnecting(true);
-        cleanup();
+        // Do not run full cleanup here; calling cleanup would intentionally
+        // close any existing socket and can race with concurrent connect()
+        // calls, causing the client to close sockets while the server is
+        // streaming. Only create a new socket when none exists.
 
         const wsUrl = WS_URL;
 
-        const ws = new WebSocket(wsUrl);
+        // If there's an existing socket in CLOSING state, wait briefly and retry
+        if (wsRef.current && wsRef.current.readyState === WebSocket.CLOSING) {
+            const retryDelay = 500;
+            reconnectTimeoutRef.current = setTimeout(() => connect(), retryDelay);
+            return;
+        }
+
+        const urlObj = new URL(wsUrl);
+        urlObj.searchParams.append("token", token);
+        const ws = new WebSocket(urlObj.toString());
         wsRef.current = ws;
 
-        ws.onopen = async () => {
-            // Send auth token immediately upon connecting
-            // Check if token is still valid, refresh if needed
-            let token = getAuthToken();
-            if (!isTokenValid(token)) {
-                console.log('Token invalid or expired, attempting to refresh...');
-                const newToken = await refreshAccessToken();
-                if (newToken) {
-                    token = newToken;
-                } else {
-                    // Token refresh failed, notify error
-                    onError?.({ type: 'auth', detail: 'Failed to refresh authentication token' });
-                    return;
-                }
+        // Connection timeout: if onopen doesn't fire within 15s, abort
+        connectionTimeoutRef.current = setTimeout(() => {
+            if (wsRef.current === ws && ws.readyState === WebSocket.CONNECTING) {
+                console.warn('WebSocket connection timed out after', WS_CONNECT_TIMEOUT, 'ms');
+                intentionalCloseSocketsRef.current.add(ws);
+                ws.close(4000, 'connection timeout');
+                setIsConnecting(false);
+                onError?.({ type: 'timeout', detail: 'Connection timed out. Check your network or try again.' });
             }
+        }, WS_CONNECT_TIMEOUT);
+
+        ws.onopen = async () => {
+            // Connection established — clear the connect timeout
+            if (connectionTimeoutRef.current) {
+                clearTimeout(connectionTimeoutRef.current);
+                connectionTimeoutRef.current = null;
+            }
+            // Send auth token immediately upon connecting for backwards compatibility
             ws.send(JSON.stringify({ type: "auth", token }));
+
+            // Start application-level heartbeat to keep proxies alive and detect dead peers.
+            if (heartbeatIntervalRef.current) {
+                clearInterval(heartbeatIntervalRef.current);
+            }
+            lastPongRef.current = Date.now();
+            heartbeatIntervalRef.current = setInterval(() => {
+                try {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                    ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+                    // If we haven't received a pong in 60s, assume connection is dead and close to trigger reconnect
+                    if (lastPongRef.current && Date.now() - lastPongRef.current > 60000) {
+                        console.warn('No pong received in 60s — forcing close to trigger reconnect');
+                        try { ws.close(4000, 'heartbeat timeout'); } catch (e) { /* ignore */ }
+                    }
+                } catch (e) {
+                    console.warn('Heartbeat send failed', e);
+                }
+            }, 25000);
         };
 
         ws.onmessage = (event) => {
@@ -166,6 +226,23 @@ export const useWebSocket = ({
                 }
 
                 const data = JSON.parse(event.data);
+                // Handle application-level pong
+                if (data && data.type === 'pong') {
+                    lastPongRef.current = Date.now();
+                    return;
+                }
+                // Handle server-initiated ping (server heartbeat)
+                if (data && data.type === 'server_ping') {
+                    try {
+                        ws.send(JSON.stringify({
+                            type: 'server_pong',
+                            timestamp: data.timestamp
+                        }));
+                    } catch (e) {
+                        console.warn('Failed to send server_pong', e);
+                    }
+                    return;
+                }
                 const { type, clientMessageId } = data;
                 const conversationId = data.conversationId ?? data.conversation_id ?? null;
                 const chartConfig = data.chartConfig ?? data.chart_config ?? null;
@@ -182,6 +259,7 @@ export const useWebSocket = ({
                     setIsConnected(true);
                     setIsConnecting(false);
                     reconnectAttemptsRef.current = 0; // Reset backoff on successful auth
+                    lastReconnectAttemptRef.current = 0; // Reset cooldown so focus handler can retry immediately if connection drops
                     return;
                 }
 
@@ -219,6 +297,14 @@ export const useWebSocket = ({
                                 case 'thinking_step':
                                     onThinkingStep?.(data.chunk.label, data.chunk.step);
                                     break;
+                                case 'render_intent':
+                                    onRenderIntent?.({
+                                        show_chart: data.chunk.show_chart,
+                                        show_table: data.chunk.show_table,
+                                        show_sql:   data.chunk.show_sql,
+                                        response_mode: data.chunk.response_mode,
+                                    });
+                                    break;
                                 case 'error':
                                     onError?.(data.chunk);
                                     break;
@@ -235,6 +321,7 @@ export const useWebSocket = ({
                                         rate_limit_remaining: data.chunk.rate_limit_remaining ?? null,
                                         sql_fallback: data.chunk.sql_fallback ?? false,
                                         column_corrections: data.chunk.column_corrections ?? {},
+                                        render_intent: data.chunk.render_intent ?? null,
                                         clientMessageId
                                     });
                                     pendingMessagesRef.current.delete(clientMessageId);
@@ -265,7 +352,7 @@ export const useWebSocket = ({
                         break;
 
                     case 'done':
-                        // Entire processing complete (sql set when backend used SQL execution path)
+                        // Entire processing complete
                         onDone?.({
                             conversationId,
                             chartConfig,
@@ -278,6 +365,7 @@ export const useWebSocket = ({
                             rate_limit_remaining: rateLimitRemaining,
                             sql_fallback: sqlFallback,
                             column_corrections: columnCorrections,
+                            render_intent: data.render_intent ?? null,
                             clientMessageId
                         });
                         pendingMessagesRef.current.delete(clientMessageId);
@@ -315,6 +403,11 @@ export const useWebSocket = ({
                         pendingMessagesRef.current.delete(clientMessageId);
                         break;
 
+                    case 'belief_saved':
+                        console.log('Belief saved from correction:', data.belief?.content);
+                        onBeliefSaved?.(data.belief, clientMessageId);
+                        break;
+
                     case 'cancel_ack':
                         console.log('Cancel acknowledged:', clientMessageId);
                         onCancelAck?.(clientMessageId);
@@ -337,6 +430,11 @@ export const useWebSocket = ({
 
         ws.onclose = (event) => {
             console.log('WebSocket closed:', event.code, event.reason);
+            // Clear connection timeout if it fired before onclose
+            if (connectionTimeoutRef.current) {
+                clearTimeout(connectionTimeoutRef.current);
+                connectionTimeoutRef.current = null;
+            }
             const wasIntentionalClose = intentionalCloseSocketsRef.current.has(ws);
             if (wasIntentionalClose) {
                 intentionalCloseSocketsRef.current.delete(ws);
@@ -372,15 +470,10 @@ export const useWebSocket = ({
                 });
                 return; // Stop — do not reconnect
             }
-
-            // Normal close — no reconnect needed
-            if (event.code === 1000 || event.code === 1001) {
-                return;
-            }
-
-            // Abnormal close — reconnect with exponential backoff
+            // Attempt reconnect for non-policy closes (including normal closes like 1000/1001)
+            // unless we've explicitly closed the socket intentionally.
             if (reconnectAttemptsRef.current < maxReconnectAttempts) {
-                const delay = Math.min(3000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+                const delay = Math.min(1500 * Math.pow(2, reconnectAttemptsRef.current), 30000);
                 reconnectAttemptsRef.current += 1;
                 console.log(`Scheduling reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})...`);
                 reconnectTimeoutRef.current = setTimeout(() => {
@@ -391,7 +484,7 @@ export const useWebSocket = ({
                 onError?.({ type: 'connection', detail: 'Unable to connect. Please refresh the page.' });
             }
         };
-    }, [cleanup, onToken, onResponseComplete, onChart, onDone, onError, onStatus, onChartError, onThinkingStep, onCancelAck]);
+    }, [cleanup, onToken, onResponseComplete, onChart, onDone, onError, onStatus, onChartError, onThinkingStep, onRenderIntent, onBeliefSaved, onCancelAck]);
 
     const disconnect = useCallback(() => {
         reconnectAttemptsRef.current = 0;
@@ -453,6 +546,43 @@ export const useWebSocket = ({
             connect();
         }
     }, [autoConnect, connect]);
+
+    // Reconnect when the tab becomes visible or window regains focus.
+    // Uses a cooldown ref (not state) to prevent rapid reconnection loops
+    // when multiple focus events fire or the internal retry backoff races
+    // with these handlers. Reconnects at most once per 5s regardless of
+    // how many times the user alt-tabs or clicks back.
+    const lastReconnectAttemptRef = useRef(0);
+    const MIN_RECONNECT_INTERVAL = 5000;
+
+    useEffect(() => {
+        const onVisibility = () => {
+            if (document.visibilityState === 'visible' && !isConnected) {
+                const now = Date.now();
+                if (now - lastReconnectAttemptRef.current > MIN_RECONNECT_INTERVAL) {
+                    lastReconnectAttemptRef.current = now;
+                    console.debug('Tab became visible — attempting WS reconnect');
+                    connect();
+                }
+            }
+        };
+        const onFocus = () => {
+            if (!isConnected) {
+                const now = Date.now();
+                if (now - lastReconnectAttemptRef.current > MIN_RECONNECT_INTERVAL) {
+                    lastReconnectAttemptRef.current = now;
+                    console.debug('Window focused — attempting WS reconnect');
+                    connect();
+                }
+            }
+        };
+        document.addEventListener('visibilitychange', onVisibility);
+        window.addEventListener('focus', onFocus);
+        return () => {
+            document.removeEventListener('visibilitychange', onVisibility);
+            window.removeEventListener('focus', onFocus);
+        };
+    }, [isConnected, connect]);
 
     // Always close the socket on unmount, but avoid closing/reopening it on every
     // render when callback identities change during streaming.

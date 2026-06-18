@@ -1,133 +1,168 @@
-import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Database, Menu, X, Sun, Moon } from 'lucide-react';
-import { useTheme } from '@/store/themeStore';
-import TactileButton from '@/components/ui/TactileButton';
+import { 
+  Menu, X, ChevronDown, ArrowRight, Zap, Users, Box, Cpu 
+} from 'lucide-react';
+import Logo from '../common/Logo';
+import '../layout/Navbar/Navbar.css';
 
-const Navbar = () => {
-    const [isScrolled, setIsScrolled] = useState(false);
-    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-    const { theme, toggleTheme } = useTheme();
+const productItems = [
+  { icon: Zap, label: 'Features', desc: 'AI insights & auto dashboards.', href: '/features' },
+  { icon: Cpu, label: 'How it works', desc: 'Upload, ask, and share in 3 steps.', href: '/how-it-works' },
+  { icon: Users, label: 'Use cases', desc: 'For analysts & product teams.', href: '/use-cases' },
+  { icon: Box, label: 'Integrations', desc: 'CSV, Excel, Sheets, & more.', href: '/integrations' }
+];
 
-    useEffect(() => {
-        const handleScroll = () => setIsScrolled(window.scrollY > 20);
-        window.addEventListener('scroll', handleScroll, { passive: true });
-        return () => window.removeEventListener('scroll', handleScroll);
-    }, []);
+export const Navbar = () => {
+  const [isScrolled, setIsScrolled] = useState(false);
+  const [activeDropdown, setActiveDropdown] = useState(null);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  
+  const location = useLocation();
+  const dropdownRef = useRef(null);
+  const productButtonRef = useRef(null);
 
-    const navLinks = [
-        { name: 'Features', href: '#features' },
-        { name: 'Solutions', href: '#solutions' },
-        { name: 'Enterprise', href: '#enterprise' },
-        { name: 'Pricing', href: '#pricing' },
-    ];
+  // Scroll Detection
+  useEffect(() => {
+    const handleScroll = () => setIsScrolled(window.scrollY > 20);
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
-    return (
-        <motion.nav
-            initial={{ y: -100, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-            className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${isScrolled
-                ? 'py-3 bg-slate-ink/80 backdrop-blur-xl border-b border-white/5'
-                : 'py-6 bg-transparent'
-                }`}
-        >
-            <div className="container mx-auto px-6 flex justify-between items-center">
-                {/* Brand Logo */}
-                <Link to="/" className="flex items-center gap-3 group">
-                    <motion.div
-                        whileHover={{ rotate: 5, scale: 1.1 }}
-                        className="w-10 h-10 bg-cloud-white flex items-center justify-center rounded-xl clay-button"
-                    >
-                        <Database className="w-5 h-5 text-slate-ink fill-current" />
-                    </motion.div>
-                    <span className="text-2xl font-black text-cloud-white tracking-tighter font-inter-tight">
-                        Data<span className="text-cloud-white/60">Sage</span>
-                    </span>
-                </Link>
+  // Close mobile menu on route change
+  useEffect(() => {
+    setIsMobileOpen(false);
+  }, [location.pathname]);
 
-                {/* Desktop Navigation */}
-                <div className="hidden lg:flex items-center gap-10">
-                    <div className="flex items-center gap-8">
-                        {navLinks.map((link) => (
-                            <motion.a
-                                key={link.name}
-                                href={link.href}
-                                whileHover={{ y: -2 }}
-                                className="text-sm font-bold text-cloud-white/70 hover:text-cloud-white transition-colors font-inter-tight uppercase tracking-widest"
-                            >
-                                {link.name}
-                            </motion.a>
-                        ))}
-                    </div>
+  // Click outside logic for dropdowns
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target) && 
+          productButtonRef.current && !productButtonRef.current.contains(e.target)) {
+        setActiveDropdown(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
-                    <div className="h-6 w-px bg-white/10 mx-2" />
+  return (
+    <>
+      <header className={`navbar-wrapper ${isScrolled ? 'scrolled' : ''}`}>
+        <div className="navbar-container">
+          {/* Logo Section */}
+          <Link to="/" className="nav-logo">
+            <Logo size={32} showText={true} />
+          </Link>
 
-                    <div className="flex items-center gap-4">
-                        <motion.button
-                            onClick={toggleTheme}
-                            whileTap={{ scale: 0.9 }}
-                            className="p-2.5 rounded-full bg-white/5 text-cloud-white/80 hover:text-cloud-white hover:bg-white/10 transition-all clay-button border border-white/5"
-                            aria-label="Toggle Theme"
-                        >
-                            {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-                        </motion.button>
+          {/* Desktop Links */}
+          <nav className="nav-main-links">
+            <div 
+              className="nav-dropdown-wrapper"
+              onMouseEnter={() => setActiveDropdown('product')}
+              onMouseLeave={() => setActiveDropdown(null)}
+            >
+              <button 
+                ref={productButtonRef}
+                className={`nav-link-item ${activeDropdown === 'product' ? 'active' : ''}`}
+              >
+                Product
+                <ChevronDown size={14} className="nav-chevron" />
+              </button>
 
-                        <Link to="/login" className="text-sm font-bold text-cloud-white/70 hover:text-cloud-white px-4 py-2 font-inter-tight">
-                            Sign In
+              <AnimatePresence>
+                {activeDropdown === 'product' && (
+                  <motion.div
+                    ref={dropdownRef}
+                    initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                    transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
+                    className="dropdown-menu"
+                  >
+                    <div className="mega-menu-inner">
+                      <div className="mega-spotlight">
+                        <div className="spotlight-tag">Platform</div>
+                        <h4 className="spotlight-title">Signal Intelligence</h4>
+                        <p className="spotlight-desc">The first context-aware AI built for serious data teams.</p>
+                        <Link to="/features" className="spotlight-link">
+                          View all features <ArrowRight size={14} />
                         </Link>
+                      </div>
 
-                        <TactileButton variant="primary" size="sm">
-                            Get Started
-                        </TactileButton>
+                      <div className="mega-links">
+                        <div className="dropdown-grid">
+                          {productItems.map(item => (
+                            <Link key={item.label} to={item.href} className="dropdown-item">
+                              <div className="dropdown-icon-wrapper">
+                                <item.icon size={18} />
+                              </div>
+                              <div className="dropdown-content">
+                                <span className="dropdown-label">{item.label}</span>
+                                <span className="dropdown-desc">{item.desc}</span>
+                              </div>
+                            </Link>
+                          ))}
+                        </div>
+                      </div>
                     </div>
-                </div>
-
-                {/* Mobile Menu Toggle */}
-                <button
-                    className="lg:hidden text-cloud-white p-2"
-                    onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                >
-                    {isMobileMenuOpen ? <X size={28} /> : <Menu size={28} />}
-                </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
-            {/* Mobile Menu */}
-            <AnimatePresence>
-                {isMobileMenuOpen && (
-                    <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        className="lg:hidden bg-slate-ink border-b border-white/5 overflow-hidden"
-                    >
-                        <div className="container mx-auto px-6 py-8 flex flex-col gap-6">
-                            {navLinks.map((link) => (
-                                <a
-                                    key={link.name}
-                                    href={link.href}
-                                    className="text-xl font-bold text-cloud-white/80"
-                                    onClick={() => setIsMobileMenuOpen(false)}
-                                >
-                                    {link.name}
-                                </a>
-                            ))}
-                            <div className="h-px bg-white/5 w-full" />
-                            <div className="flex flex-col gap-4">
-                                <Link to="/login" className="text-lg font-bold text-cloud-white/80">
-                                    Sign In
-                                </Link>
-                                <TactileButton variant="primary" className="w-full">
-                                    Get Started
-                                </TactileButton>
-                            </div>
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </motion.nav>
-    );
-};
+            <Link to="/pricing" className="nav-link-item">Pricing</Link>
+            <Link to="/docs" className="nav-link-item">Docs</Link>
+            <Link to="/blog" className="nav-link-item">Blog</Link>
+          </nav>
 
-export default Navbar;
+          {/* Actions */}
+          <div className="nav-actions">
+            <Link to="/login" className="btn-signin">Sign in</Link>
+            <Link to="/register" className="btn-start">
+              Start free
+              <div className="btn-arrow-circle">
+                <ArrowRight size={12} />
+              </div>
+            </Link>
+          </div>
+
+          {/* Mobile Trigger */}
+          <button className="mobile-trigger" onClick={() => setIsMobileOpen(!isMobileOpen)}>
+            {isMobileOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
+        </div>
+      </header>
+
+      {/* Mobile Menu Panel */}
+      <AnimatePresence>
+        {isMobileOpen && (
+          <motion.div
+            initial={{ opacity: 0, x: '100%' }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: '100%' }}
+            transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
+            className="mobile-panel"
+          >
+            <div className="mobile-card">
+              <Link to="/features" className="mobile-nav-item">Features <ArrowRight size={18} /></Link>
+              <Link to="/how-it-works" className="mobile-nav-item">How it works <ArrowRight size={18} /></Link>
+              <Link to="/pricing" className="mobile-nav-item">Pricing <ArrowRight size={18} /></Link>
+              <Link to="/docs" className="mobile-nav-item">Docs <ArrowRight size={18} /></Link>
+            </div>
+
+            <Link to="/register" style={{ textDecoration: 'none' }}>
+              <div className="mobile-card mobile-card-start">
+                <span className="footer-label">Start for free</span>
+                <div className="footer-avatar">
+                  <ArrowRight size={20} />
+                </div>
+              </div>
+            </Link>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+};

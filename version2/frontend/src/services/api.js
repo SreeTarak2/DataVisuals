@@ -1,13 +1,13 @@
 import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-const USER_SCOPED_STORAGE_KEYS = ['dataset-storage', 'datasage-chat-store', 'chat-history-storage'];
+const USER_SCOPED_STORAGE_KEYS = ['dataset-storage', 'signal-chat-store', 'chat-history-storage'];
 
 // Helper to get auth token from Zustand persisted store
 // Checks both localStorage (Remember Me ON) and sessionStorage (Remember Me OFF)
 export const getAuthToken = () => {
   // Try localStorage first, then sessionStorage
-  const authData = localStorage.getItem('datasage-auth') || sessionStorage.getItem('datasage-auth');
+  const authData = localStorage.getItem('signal-auth') || sessionStorage.getItem('signal-auth');
   if (authData) {
     try {
       const parsed = JSON.parse(authData);
@@ -41,20 +41,44 @@ api.interceptors.request.use(
   }
 );
 
+// Track retries per request config to avoid infinite retry loops
+const RETRYABLE_STATUSES = [503, 429, 502, 504];
+const MAX_RETRIES = 3;
+const BASE_RETRY_DELAY = 1000; // 1 second
+
 // Add response interceptor for error handling
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
+  async (error) => {
+    const config = error.config;
+    const status = error.response?.status;
+
+    // Retry on transient server errors (503 Service Unavailable, 429 Too Many Requests, etc.)
+    if (status && RETRYABLE_STATUSES.includes(status) && !config._retryCount) {
+      config._retryCount = 0;
+    }
+
+    if (status && RETRYABLE_STATUSES.includes(status) && config._retryCount < MAX_RETRIES) {
+      config._retryCount = (config._retryCount || 0) + 1;
+      const delay = BASE_RETRY_DELAY * Math.pow(2, config._retryCount - 1); // 1s, 2s, 4s
+      console.warn(
+        `API ${status} on ${config.url} — retrying (${config._retryCount}/${MAX_RETRIES}) after ${delay}ms`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      return api(config);
+    }
+
+    if (status === 401) {
       // Token expired or invalid, clear auth from both storages and redirect
-      localStorage.removeItem('datasage-auth');
-      sessionStorage.removeItem('datasage-auth');
+      localStorage.removeItem('signal-auth');
+      sessionStorage.removeItem('signal-auth');
       USER_SCOPED_STORAGE_KEYS.forEach((key) => {
         localStorage.removeItem(key);
         sessionStorage.removeItem(key);
       });
       window.location.href = '/login';
     }
+
     return Promise.reject(error);
   }
 );
@@ -93,6 +117,17 @@ export const datasetAPI = {
   // Get dataset columns with types
   getDatasetColumns: (id) => api.get(`/datasets/${id}/columns`),
 
+  // Update KPI configuration (persists edited column/aggregation/format/icon)
+  updateKpi: (id, kpiId, updates) =>
+    api.put(`/datasets/${id}/kpis/${kpiId}`, updates),
+
+  // Get persisted KPI overrides for the current user
+  getKpiOverrides: (id) =>
+    api.get(`/datasets/${id}/kpis/overrides`),
+
+  // Get per-stage pipeline execution history
+  getDatasetStages: (id) => api.get(`/datasets/${id}/stages`),
+
   // Reprocess dataset
   reprocessDataset: (id) => {
     if (!id) {
@@ -113,6 +148,18 @@ export const datasetAPI = {
   // refresh=true forces regeneration even when cached
   getKpis: (id, refresh = false) =>
     api.get(`/datasets/${id}/kpis${refresh ? '?refresh=true' : ''}`),
+
+  // Get unified profile + intelligence data for the Data Profile page
+  getProfile: (id) => api.get(`/datasets/${id}/profile`),
+
+  // Get Dataset Understanding Report — primary object, participants, evidence traces, ambiguity
+  getUnderstanding: (id) => api.get(`/datasets/${id}/understanding`),
+
+  // Import Google Sheets by URL
+  importGoogleSheets: (sheetUrl) => api.post('/datasets/import-gsheet', { url: sheetUrl }),
+
+  // Re-import / refresh a Google Sheets dataset in-place
+  reimportGoogleSheets: (datasetId) => api.post(`/datasets/${datasetId}/reimport-gsheet`),
 };
 
 // Database Connection API calls
@@ -128,6 +175,10 @@ export const databaseAPI = {
 
   // List tables inside a saved connection (cached 5 min server-side)
   getTables: (connId) => api.get(`/databases/${connId}/tables`),
+
+  // Get foreign key constraints from a saved connection
+  getForeignKeys: (connId, refresh = false) =>
+    api.get(`/databases/${connId}/foreign-keys${refresh ? '?refresh=true' : ''}`),
 
   // Extract a table → creates a dataset + fires Celery pipeline
   extractTable: (connId, body) => api.post(`/databases/${connId}/extract`, body),
@@ -405,6 +456,14 @@ export const agenticAPI = {
   // Clear all beliefs (reset personalization)
   clearBeliefs: () =>
     api.delete('/agentic/beliefs'),
+};
+
+// Belief/Business Rules API
+export const beliefAPI = {
+  list: (datasetId) => api.get(`/beliefs/${datasetId}`),
+  create: (data) => api.post('/beliefs/', data),
+  update: (beliefId, data) => api.patch(`/beliefs/${beliefId}`, data),
+  delete: (beliefId) => api.delete(`/beliefs/${beliefId}`),
 };
 
 // Privacy API

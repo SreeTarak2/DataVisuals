@@ -136,7 +136,7 @@ class FAISSVectorService:
             # Compute embedding outside the lock (CPU-intensive)
             content = json.dumps(dataset_metadata)
             embedding = np.array(
-                self.embedding_model.embed_documents([content])
+                await asyncio.to_thread(self.embedding_model.embed_documents, [content])
             ).astype("float32")
 
             # Lock for index modification
@@ -169,9 +169,9 @@ class FAISSVectorService:
 
         try:
             # Compute embedding outside the lock (CPU-intensive)
-            embedding = np.array([self.embedding_model.embed_query(query)]).astype(
-                "float32"
-            )
+            embedding = np.array([
+                await asyncio.to_thread(self.embedding_model.embed_query, query)
+            ]).astype("float32")
 
             # Lock for index modification
             self._ensure_locks()
@@ -205,7 +205,7 @@ class FAISSVectorService:
                 self._lazy_rebuild_dataset_index()
 
             query_embedding = np.array(
-                [self.embedding_model.embed_query(query)]
+                [await asyncio.to_thread(self.embedding_model.embed_query, query)]
             ).astype("float32")
 
             distances, indices = self.dataset_index.search(query_embedding, k)
@@ -239,7 +239,7 @@ class FAISSVectorService:
                 self._lazy_rebuild_query_history_index()
 
             query_embedding = np.array(
-                [self.embedding_model.embed_query(query)]
+                [await asyncio.to_thread(self.embedding_model.embed_query, query)]
             ).astype("float32")
 
             distances, indices = self.query_history_index.search(query_embedding, k)
@@ -447,9 +447,9 @@ class FAISSVectorService:
             texts = [chunk.get("content", "") for chunk in chunks]
 
             # Compute embeddings (outside lock for performance)
-            embeddings = np.array(self.embedding_model.embed_documents(texts)).astype(
-                "float32"
-            )
+            embeddings = np.array(
+                await asyncio.to_thread(self.embedding_model.embed_documents, texts)
+            ).astype("float32")
 
             # Lock for index modification
             self._ensure_locks()
@@ -514,7 +514,7 @@ class FAISSVectorService:
 
             # Compute query embedding
             query_embedding = np.array(
-                [self.embedding_model.embed_query(query)]
+                [await asyncio.to_thread(self.embedding_model.embed_query, query)]
             ).astype("float32")
 
             # Search with extra results for filtering

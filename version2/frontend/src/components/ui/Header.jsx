@@ -51,7 +51,7 @@ export function Header() {
                         <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center text-white shadow-[0_0_15px_rgba(59,130,246,0.2)]">
                             <Layers className="size-4" />
                         </div>
-                        <span className="font-bold text-xl tracking-tight text-white">DataSage</span>
+                        <span className="font-bold text-xl tracking-tight text-white">Signal</span>
                     </a>
                     <nav className="hidden md:flex items-center gap-8">
                         <a href="/#features" className="text-[11px] uppercase tracking-widest font-bold text-white/60 hover:text-white transition-colors">Features</a>

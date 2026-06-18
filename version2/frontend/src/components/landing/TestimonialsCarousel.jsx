@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Quote } from 'lucide-react';
 
 const testimonials = [
     {
-        quote: "DataSage eliminated our need for a dedicated BI developer. The AI generates exactly what we need in seconds.",
+        quote: "Signal eliminated our need for a dedicated BI developer. The AI generates exactly what we need in seconds.",
         name: "Sarah Jenkins",
         role: "Head of Growth",
         company: "Acme Corp"

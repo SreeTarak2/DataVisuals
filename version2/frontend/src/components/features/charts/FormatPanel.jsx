@@ -164,12 +164,14 @@ const CHART_ICONS = {
 };
 
 const COLOR_PALETTES = [
-    { id: 'ocean', colors: ['#5B88B2', '#4a7a9e', '#3a6c8a', '#2a5e76', '#1a5062'] },
-    { id: 'emerald', colors: ['#10b981', '#0d9668', '#0a7d56', '#086343', '#064a31'] },
-    { id: 'violet', colors: ['#a78bfa', '#8b5cf6', '#7c3aed', '#6d28d9', '#5b21b6'] },
-    { id: 'amber', colors: ['#f59e0b', '#d97706', '#b45309', '#92400e', '#78350f'] },
-    { id: 'mixed', colors: ['#5B88B2', '#10b981', '#f59e0b', '#ef4444', '#a78bfa'] },
+    { id: "ocean", colors: ["#5B88B2", "#4a7a9e", "#3a6c8a", "#2a5e76", "#1a5062"] },
+    { id: "emerald", colors: ["#10b981", "#0d9668", "#0a7d56", "#086343", "#064a31"] },
+    { id: "orange", colors: ["#E85002", "#F97316", "#FB923C", "#FDBA74", "#FFEDD5"] },
+    { id: "amber", colors: ["#f59e0b", "#d97706", "#b45309", "#92400e", "#78350f"] },
+    { id: "mixed", colors: ["#E85002", "#10b981", "#f59e0b", "#ef4444", "#0891B2"] },
 ];
+
+
 
 const FormatPanel = ({ format, onUpdateFormat, chartType, chartTypes, onUpdateChartType }) => {
     const Section = ({ title, icon: Icon, children }) => (

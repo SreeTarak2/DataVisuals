@@ -47,7 +47,7 @@ const hasSameDatasetSnapshot = (a, b) => {
 
 const parsePersistedAuth = (storage) => {
   try {
-    const raw = storage.getItem('datasage-auth');
+    const raw = storage.getItem('signal-auth');
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return parsed?.state || null;
@@ -231,7 +231,7 @@ const useDatasetStore = create(
       },
 
       // Enhanced upload with duplicate detection
-      uploadDataset: async (file, name = '', description = '') => {
+      uploadDataset: async (file, name = '', description = '', intent = '') => {
         const uploadToast = toast.loading('Uploading...');
         set({
           isUploading: true,
@@ -248,6 +248,7 @@ const useDatasetStore = create(
           formData.append('file', file);
           if (name) formData.append('name', name);
           if (description) formData.append('description', description);
+          if (intent) formData.append('analysis_intent', intent);
 
           const response = await datasetAPI.uploadDataset(formData, (progress) => {
             set((state) => ({

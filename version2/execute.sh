@@ -3,53 +3,40 @@
 # Function to kill processes on exit
 cleanup() {
     echo "Stopping servers..."
-    # Check if variables are set before killing
-    if [ -n "$FRONTEND_PID" ]; then kill $FRONTEND_PID; fi
-    if [ -n "$BACKEND_PID" ]; then kill $BACKEND_PID; fi
-    if [ -n "$CELERY_PID" ]; then kill $CELERY_PID; fi
+    if [ -n "$FRONTEND_PID" ]; then kill $FRONTEND_PID 2>/dev/null; fi
+    if [ -n "$BACKEND_PID" ]; then kill $BACKEND_PID 2>/dev/null; fi
     exit
 }
 
 trap cleanup SIGINT SIGTERM
 
-
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 BACKEND_DIR="$SCRIPT_DIR/backend"
+FRONTEND_DIR="$SCRIPT_DIR/frontend"
 
-echo "Starting Backend..."
+echo "================================================"
+echo "  Signal — Starting Dev Environment"
+echo "================================================"
 
-
-# Create or recreate .venv if needed
+# ── Python virtual environment ────────────────────────────────────────────────
 if [ ! -d "$BACKEND_DIR/.venv" ] || [ ! -f "$BACKEND_DIR/.venv/bin/python" ]; then
     echo "Creating virtual environment..."
     python3 -m venv "$BACKEND_DIR/.venv"
 fi
 
+# ── Dependencies (uv sync) ───────────────────────────────────────────────────
+echo "Installing backend dependencies..."
+(
+    cd "$BACKEND_DIR"
+    source .venv/bin/activate
+    uv sync
+    # sentence-transformers pulls GPU torch by default — override to CPU-only
+    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu --force-reinstall
+)
+echo "Dependencies installed."
 
-# Check if dependencies need to be installed using uv
-REQUIREMENTS_FILE="$BACKEND_DIR/requirements.txt"
-CHECKSUM_FILE="$BACKEND_DIR/.requirements_checksum"
-CURRENT_CHECKSUM=$(md5sum "$REQUIREMENTS_FILE" 2>/dev/null | cut -d' ' -f1)
-
-if [ ! -f "$CHECKSUM_FILE" ] || [ "$(cat "$CHECKSUM_FILE" 2>/dev/null)" != "$CURRENT_CHECKSUM" ]; then
-    echo "Dependencies changed or not installed. Installing with uv..."
-    (
-        cd "$BACKEND_DIR"
-        source .venv/bin/activate
-        uv pip install -r requirements.txt
-        # Install torch (CPU) + sentence-transformers separately to save disk
-        uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        uv pip install sentence-transformers --no-cache-dir
-    )
-    # Save the checksum after successful installation
-    echo "$CURRENT_CHECKSUM" > "$CHECKSUM_FILE"
-    echo "Dependencies installed successfully."
-else
-    echo "Dependencies already up to date. Skipping installation."
-fi
-
-
-# Start backend with auto-reload
+# ── Start Backend (FastAPI with auto-reload) ──────────────────────────────────
+echo "Starting Backend..."
 (
     cd "$BACKEND_DIR"
     source .venv/bin/activate
@@ -57,22 +44,22 @@ fi
 ) &
 BACKEND_PID=$!
 
-echo "Starting Celery Worker..."
-
-(
-    cd "$BACKEND_DIR"
-    source .venv/bin/activate
-    watchmedo auto-restart --directory=./ --pattern="*.py" --recursive -- \
-    celery -A workers.celery_app:celery_app worker --loglevel=info --concurrency=2
-) &
-CELERY_PID=$!
-
+# ── Start Frontend (Vite dev server) ──────────────────────────────────────────
 echo "Starting Frontend..."
-
-cd frontend
-pnpm dev &
+(
+    cd "$FRONTEND_DIR"
+    pnpm dev
+) &
 FRONTEND_PID=$!
-cd ..
 
-echo "Servers started. Logs will appear below. Press Ctrl+C to stop."
+echo ""
+echo "================================================"
+echo "  Servers starting..."
+echo "  Backend:  http://localhost:8000"
+echo "  Frontend: http://localhost:5173"
+echo "  Press Ctrl+C to stop all"
+echo "================================================"
+echo ""
+
+# Wait for any child to exit (or Ctrl+C)
 wait

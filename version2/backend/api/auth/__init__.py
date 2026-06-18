@@ -1,4 +1,5 @@
 from api.auth.routes import router as auth_router
+from services.auth_service import get_current_user
 from api.auth.schemas import (
     User,
     UserCreate,
@@ -10,6 +11,7 @@ from api.auth.schemas import (
 
 __all__ = [
     "auth_router",
+    "get_current_user",
     "User",
     "UserCreate",
     "UserUpdate",

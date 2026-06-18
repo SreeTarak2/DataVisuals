@@ -19,7 +19,7 @@ import InsightFeedback from '@/components/features/feedback/InsightFeedback';
 // --- Thinking Animation Component ---
 const ThinkingState = ({ onComplete }) => {
     const steps = [
-        { id: 'planner', label: 'PLANNER: Scanning dataset schema & generating hypotheses...', icon: BrainCircuit, color: 'text-purple-400' },
+        { id: 'planner', label: 'PLANNER: Scanning dataset schema & generating hypotheses...', icon: BrainCircuit, color: 'text-orange-400' },
         { id: 'analyst', label: 'ANALYST: Running statistical regression & correlation checks...', icon: Search, color: 'text-blue-400' },
         { id: 'critic', label: 'CRITIC: Validating P-values & Effect Sizes...', icon: AlertCircle, color: 'text-amber-400' },
         { id: 'novelty', label: 'NOVELTY FILTER: Checking Long-Term Memory for known facts...', icon: Sparkles, color: 'text-pink-400' },
@@ -219,7 +219,7 @@ const DeepAnalysisStory = ({ analysisResult, isLoading }) => {
                                 </div>
                                 <div>
                                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Novelty Score</div>
-                                    <div className="text-xl font-mono text-purple-400">
+                                    <div className="text-xl font-mono text-orange-400">
                                         {analysisResult.insights?.[0]?.novelty_score?.toFixed(2) || 'N/A'}
                                     </div>
                                 </div>

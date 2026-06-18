@@ -23,7 +23,7 @@ const StoryPlaceholder = () => {
                     initial={{ scale: 0.8, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
                     transition={{ delay: 0.2 }}
-                    className="inline-flex items-center gap-3 px-6 py-3 rounded-full bg-gradient-to-r from-indigo-500/10 via-violet-500/10 to-purple-500/10 border border-indigo-500/20 mb-6"
+                    className="inline-flex items-center gap-3 px-6 py-3 rounded-full bg-gradient-to-r from-indigo-500/10 via-orange-500/10 to-orange-500/10 border border-indigo-500/20 mb-6"
                 >
                     <Sparkles className="w-5 h-5 text-indigo-400 animate-pulse" />
                     <span className="text-sm font-medium text-indigo-300">
@@ -48,7 +48,7 @@ const StoryPlaceholder = () => {
                     transition={{ delay: 0.3 }}
                     className="relative p-6 rounded-2xl bg-slate-800/30 border border-slate-700/30 overflow-hidden"
                 >
-                    <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/5 to-violet-500/5" />
+                    <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/5 to-orange-500/5" />
                     <div className="relative">
                         <div className="flex items-center gap-3 mb-4">
                             <BookOpen className="w-5 h-5 text-indigo-400" />

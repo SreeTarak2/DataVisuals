@@ -1,0 +1,182 @@
+[
+  {
+    "dataset_id": "ds_memory_test",
+    "table_name": "test_memory",
+    "column_name": "cust_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694753",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_test",
+    "table_name": "orders",
+    "column_name": "customer_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694790",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_memory_test",
+    "table_name": "test_memory",
+    "column_name": "cust_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694809",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_test",
+    "table_name": "orders",
+    "column_name": "customer_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694826",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_memory_test",
+    "table_name": "test_memory",
+    "column_name": "cust_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694848",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_test",
+    "table_name": "orders",
+    "column_name": "customer_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694866",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_memory_test",
+    "table_name": "test_memory",
+    "column_name": "cust_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694885",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_test",
+    "table_name": "orders",
+    "column_name": "customer_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694900",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_memory_test",
+    "table_name": "test_memory",
+    "column_name": "cust_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694914",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_test",
+    "table_name": "orders",
+    "column_name": "customer_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694928",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_memory_test",
+    "table_name": "test_memory",
+    "column_name": "cust_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694942",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_test",
+    "table_name": "orders",
+    "column_name": "customer_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694955",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_memory_test",
+    "table_name": "test_memory",
+    "column_name": "cust_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694973",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_test",
+    "table_name": "orders",
+    "column_name": "customer_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.694991",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_memory_test",
+    "table_name": "test_memory",
+    "column_name": "cust_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.695004",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_test",
+    "table_name": "orders",
+    "column_name": "customer_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:23.695017",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_memory_test",
+    "table_name": "test_memory",
+    "column_name": "cust_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:24.765183",
+    "user_id": null
+  },
+  {
+    "dataset_id": "ds_test",
+    "table_name": "orders",
+    "column_name": "customer_id",
+    "original_entity": "GenericReference",
+    "corrected_entity": "Customer",
+    "original_confidence": 1.0,
+    "correction_timestamp": "2026-06-16T01:30:24.771734",
+    "user_id": null
+  }
+]

@@ -40,7 +40,7 @@ const StoryHero = ({ story, datasetName, datasetId, onSwitchToReport }) => {
         risk: { bg: 'bg-amber-500/5', border: 'border-amber-500/20', text: 'text-amber-400' },
         warning: { bg: 'bg-amber-500/5', border: 'border-amber-500/20', text: 'text-amber-400' },
         opportunity: { bg: 'bg-blue-500/5', border: 'border-blue-500/20', text: 'text-blue-400' },
-        exploration: { bg: 'bg-violet-500/5', border: 'border-violet-500/20', text: 'text-violet-400' },
+        exploration: { bg: 'bg-orange-500/5', border: 'border-orange-500/20', text: 'text-orange-400' },
         mixed: { bg: 'bg-slate-500/5', border: 'border-slate-500/20', text: 'text-slate-400' },
     };
 
@@ -76,7 +76,7 @@ const StoryHero = ({ story, datasetName, datasetId, onSwitchToReport }) => {
             <div className="relative max-w-3xl mx-auto">
                 {/* Story icon and dataset */}
                 <div className="flex items-center gap-3 mb-6">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500/20 to-violet-500/20 border border-indigo-500/30 flex items-center justify-center">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500/20 to-orange-500/20 border border-indigo-500/30 flex items-center justify-center">
                         <Sparkles className="w-5 h-5 text-indigo-400" />
                     </div>
                     <div>
@@ -104,7 +104,7 @@ const StoryHero = ({ story, datasetName, datasetId, onSwitchToReport }) => {
                 {/* Opening hook */}
                 {opening.hook && (
                     <div className="relative mb-8">
-                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-indigo-500 to-violet-500 rounded-full" />
+                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-indigo-500 to-orange-500 rounded-full" />
                         <p className="pl-6 text-lg md:text-xl text-slate-200 leading-relaxed font-light italic">
                             "{opening.hook}"
                         </p>

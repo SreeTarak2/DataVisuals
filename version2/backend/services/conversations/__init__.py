@@ -17,6 +17,7 @@ from .conversation_service import (
     get_message_count,
     auto_archive_if_needed,
     archive_old_messages,
+    auto_name_conversation,
 )
 
 
@@ -62,6 +63,9 @@ class ConversationService:
     async def archive_old_messages(self, conv_id, keep_recent=None):
         return await archive_old_messages(conv_id, keep_recent or 100)
 
+    async def auto_name_conversation(self, conv_id, user_id, first_message):
+        return await auto_name_conversation(conv_id, user_id, first_message)
+
 
 # Create singleton instance
 conversation_service = ConversationService()
@@ -75,4 +79,5 @@ __all__ = [
     "delete_conversation",
     "get_conversation",
     "update_title",
+    "auto_name_conversation",
 ]

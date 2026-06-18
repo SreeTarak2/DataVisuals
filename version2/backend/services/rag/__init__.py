@@ -2,7 +2,7 @@
 """
 RAG (Retrieval-Augmented Generation) Pipeline Services
 ======================================================
-Provides intelligent chunking, retrieval, re-ranking, and hybrid search for DataSage.
+Provides intelligent chunking, retrieval, re-ranking, and hybrid search for Signal.
 """
 
 from .chunk_service import ChunkService, chunk_service

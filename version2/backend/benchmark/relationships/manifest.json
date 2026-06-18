@@ -1,0 +1,120 @@
+{
+  "control": {
+    "tables": [
+      "orders",
+      "customers"
+    ],
+    "detection": "required",
+    "min_relationships": 1,
+    "expected_source": "orders",
+    "expected_target": "customers",
+    "min_confidence": 0.85,
+    "description": "Genuine FK: orders.customer_id \u2192 customers.id (exact name match)"
+  },
+  "false_overlap": {
+    "tables": [
+      "orders",
+      "customers"
+    ],
+    "detection": "forbidden",
+    "max_confidence": 0.3,
+    "expected_via": "value_overlap",
+    "description": "False overlap: orders.status \u2194 customers.segment share values but are NOT a relationship \u2014 identifier-likeness should crush confidence"
+  },
+  "shared_codes": {
+    "tables": [
+      "products",
+      "regions"
+    ],
+    "detection": "ambiguous",
+    "max_confidence": 0.75,
+    "description": "Shared codes: products.product_code \u2194 regions.region_code share code values but are NOT a genuine FK relationship"
+  },
+  "wrong_fk": {
+    "tables": [
+      "orders",
+      "customers",
+      "employees"
+    ],
+    "detection": "multiple",
+    "min_relationships": 2,
+    "expected_pairs": [
+      {
+        "source": "orders",
+        "target": "customers"
+      },
+      {
+        "source": "orders",
+        "target": "employees"
+      }
+    ],
+    "description": "Wrong FK guess: orders.customer_id matches both customers.id and employees.id \u2014 engine should detect both"
+  },
+  "multiple_parents": {
+    "tables": [
+      "claims",
+      "policies",
+      "customers",
+      "providers"
+    ],
+    "detection": "multiple",
+    "min_relationships": 3,
+    "expected_pairs": [
+      {
+        "source": "claims",
+        "target": "policies"
+      },
+      {
+        "source": "claims",
+        "target": "customers"
+      },
+      {
+        "source": "claims",
+        "target": "providers"
+      }
+    ],
+    "description": "Multiple parents: claims references policies, customers, and providers \u2014 all should be detected"
+  },
+  "id_overlap": {
+    "tables": [
+      "orders",
+      "customers"
+    ],
+    "detection": "forbidden",
+    "max_confidence": 0.3,
+    "description": "KNOWN LIMITATION: orders.status_id (values 10-60) \u2192 customers.customer_id (values 1-100). Both have _id suffix so identifier-likeness (0.95) can't distinguish \u2014 engine falsely detects the coincidental value overlap at ~0.90 confidence",
+    "expected_behavior": "known_false_positive"
+  },
+  "wrong_parent": {
+    "tables": [
+      "orders",
+      "employees",
+      "customers"
+    ],
+    "detection": "multiple",
+    "min_relationships": 2,
+    "expected_pairs": [
+      {
+        "source": "orders",
+        "target": "employees"
+      },
+      {
+        "source": "orders",
+        "target": "customers"
+      }
+    ],
+    "verify_ordering": [
+      {
+        "higher": {
+          "source": "orders",
+          "target": "employees"
+        },
+        "lower": {
+          "source": "orders",
+          "target": "customers"
+        }
+      }
+    ],
+    "description": "Wrong parent: orders.employee_id matches both employees.id (name_match, 0.95) and customers.id (value_overlap, 0.93) \u2014 name match must rank higher"
+  }
+}

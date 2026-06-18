@@ -1,0 +1,67 @@
+/**
+ * Signal Landing Page - Theme Foundation
+ * Extends the project's existing theme structure defined in `index.css`.
+ */
+
+/* Extend the project's CSS variables to ensure perfect landing page integration */
+:root {
+  /* Ensure landing page uses the project's base colors */
+  --lp-bg: var(--bg-primary);
+  --lp-text: var(--text-primary);
+  --lp-accent: var(--accent-primary);
+  --lp-surface: var(--bg-surface);
+}
+
+.dark {
+  /* Dark Mode Landing Page adjustments */
+}
+
+/* Base Landing Page Layout */
+.lp-container {
+  min-height: 100vh;
+  background-color: var(--lp-bg);
+  color: var(--lp-text);
+  font-family: var(--font-sans);
+}
+
+/* Responsive Wrapper */
+.lp-wrapper {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* Premium Typography for Landing Page */
+.lp-hero-title {
+  font-size: clamp(40px, 8vw, 64px);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--text-header);
+}
+
+.lp-section-title {
+  font-size: clamp(32px, 6vw, 48px);
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-header);
+}
+
+/* Feature Grid */
+.lp-grid {
+  display: grid;
+  grid-template-columns: repeat(1, 1fr);
+  gap: 24px;
+}
+
+@media (min-width: 768px) {
+  .lp-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .lp-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

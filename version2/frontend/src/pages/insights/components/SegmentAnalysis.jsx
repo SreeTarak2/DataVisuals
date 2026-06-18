@@ -24,8 +24,8 @@ const SegmentAnalysis = ({ segments = [], onInvestigate }) => {
         <div className="space-y-4">
             <div className="flex items-center justify-between pb-4 border-b border-[var(--surface-border)]">
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-purple-500/10 border border-purple-500/20 rounded-xl flex items-center justify-center">
-                        <Layers className="w-5 h-5 text-purple-400" />
+                    <div className="w-10 h-10 bg-orange-500/10 border border-orange-500/20 rounded-xl flex items-center justify-center">
+                        <Layers className="w-5 h-5 text-orange-400" />
                     </div>
                     <div>
                         <h3 className="text-lg font-semibold text-[var(--page-text)]">Segment Analysis</h3>

@@ -27,6 +27,7 @@ import polars as pl
 
 from db.database import get_database
 from services.llm_router import llm_router
+from llm.router import _strip_json_wrapper
 from services.datasets.dataset_loader import load_dataset, create_context_string
 from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 from services.datasets.faiss_vector_service import faiss_vector_service
@@ -51,130 +52,42 @@ def _get_model_display_name(model_role: str) -> str:
     """Get human-readable model name from role."""
     model_key = settings.OPENROUTER_ROLE_MAPPING.get(model_role, "gemini_flash_lite")
     model_config = settings.OPENROUTER_MODELS.get(model_key, {})
-    return model_config.get("name", "DataSage AI")
+    return model_config.get("name", "Signal")
 
 
-def _generate_follow_up_suggestions(
-    query: str, response: str, metadata: dict
-) -> list[str]:
+def _generate_follow_up_suggestions_fallback(query: str, metadata: dict) -> list[str]:
     """
-    Generate 3 context-aware follow-up suggestions without an extra LLM call.
-    Uses the query intent + available dataset columns to produce relevant chips.
+    Minimal template-based fallback for follow-up suggestions.
+    Used when LLM generation is unavailable or fails.
     """
-    import re as _re
+    col_names = metadata.get("column_names", [])
+    num_cols = [
+        c
+        for c in col_names
+        if any(
+            kw in c.lower()
+            for kw in ["amount", "price", "revenue", "sales", "count", "total", "value", "rate"]
+        )
+    ]
+    cat_cols = [c for c in col_names if c not in num_cols]
 
-    col_names: list[str] = metadata.get("column_names", [])
-    row_count: int = metadata.get("row_count", 0)
-    q_lower = query.strip().lower()
-
-    def _label(col: str) -> str:
+    def label(col: str) -> str:
         return col.replace("_", " ").title()
 
-    # Identify numeric and categorical columns from column_metadata if available
-    col_meta = metadata.get("column_metadata", [])
-    num_cols = (
-        [
-            c["name"]
-            for c in col_meta
-            if c.get("dtype", "").lower()
-            in ("int64", "float64", "int32", "float32", "double", "numeric")
-        ]
-        if col_meta
-        else []
-    )
-    cat_cols = (
-        [
-            c["name"]
-            for c in col_meta
-            if c.get("dtype", "").lower()
-            in ("utf8", "string", "categorical", "object", "str")
-        ]
-        if col_meta
-        else []
-    )
+    suggestions = []
+    if num_cols:
+        suggestions.append(f"Show me a trend of {label(num_cols[0])} over time")
+    if cat_cols:
+        suggestions.append(f"Break down the data by {label(cat_cols[0])}")
+    if num_cols and cat_cols:
+        suggestions.append(
+            f"Compare {label(num_cols[0])} across different {label(cat_cols[0])} values"
+        )
 
-    # Fallback: just use all column names
-    if not num_cols and not cat_cols:
-        num_cols = [
-            c
-            for c in col_names
-            if any(
-                kw in c.lower()
-                for kw in (
-                    "amount",
-                    "price",
-                    "revenue",
-                    "sales",
-                    "count",
-                    "qty",
-                    "quantity",
-                    "total",
-                    "value",
-                    "rate",
-                    "score",
-                    "age",
-                    "size",
-                )
-            )
-        ]
-        cat_cols = [c for c in col_names if c not in num_cols]
-
-    suggestions: list[str] = []
-
-    # Intent-aware primary suggestion
-    if _re.search(r"\b(trend|over time|monthly|weekly|daily|year|quarter)\b", q_lower):
-        if cat_cols:
-            suggestions.append(f"Break this down by {_label(cat_cols[0])}")
-        if num_cols and len(num_cols) > 1:
-            suggestions.append(
-                f"Compare {_label(num_cols[0])} vs {_label(num_cols[1])}"
-            )
-    elif _re.search(r"\b(top|bottom|rank|best|worst|highest|lowest)\b", q_lower):
-        if cat_cols:
-            suggestions.append(
-                f"Show full distribution across all {_label(cat_cols[0])} values"
-            )
-        if num_cols:
-            suggestions.append(f"What is the average {_label(num_cols[0])}?")
-    elif _re.search(r"\b(average|mean|median|distribution|spread)\b", q_lower):
-        if num_cols:
-            suggestions.append(f"Find outliers in {_label(num_cols[0])}")
-        if cat_cols:
-            suggestions.append(
-                f"Group {_label(num_cols[0] if num_cols else col_names[0] if col_names else 'values')} by {_label(cat_cols[0])}"
-            )
-    elif _re.search(r"\b(correlat|relationship|affect|impact|influenc)\b", q_lower):
-        if len(num_cols) >= 2:
-            suggestions.append(
-                f"Scatter plot of {_label(num_cols[0])} vs {_label(num_cols[1])}"
-            )
-        suggestions.append("Are there any anomalies in these correlations?")
-    elif _re.search(r"\b(summary|overview|describe|insight|tell me about)\b", q_lower):
-        if num_cols:
-            suggestions.append(
-                f"Show trend of {_label(num_cols[0])} over time"
-                if any("date" in c.lower() or "time" in c.lower() for c in col_names)
-                else f"Distribution of {_label(num_cols[0])}"
-            )
-        if cat_cols:
-            suggestions.append(f"Which {_label(cat_cols[0])} has the highest values?")
-    else:
-        # Generic fallbacks using actual column names
-        if num_cols:
-            suggestions.append(f"Show me outliers in {_label(num_cols[0])}")
-        if cat_cols and num_cols:
-            suggestions.append(
-                f"Compare {_label(num_cols[0])} across {_label(cat_cols[0])}"
-            )
-
-    # Universal suggestions to pad to 3
     universal = [
-        f"Visualize this as a chart",
-        "What anomalies or unusual patterns exist?",
-        "Give me an executive summary of these findings",
-        f"How does this compare to the dataset average?"
-        if num_cols
-        else "What are the key takeaways?",
+        "Visualize this as a chart",
+        "What are the key takeaways?",
+        "Are there any unusual patterns?",
     ]
     for u in universal:
         if len(suggestions) >= 3:
@@ -358,81 +271,7 @@ def _extract_relevant_anomalies(metadata: dict, columns_used: list) -> str:
                     )
 
     if anomalies:
-        return "\n\n**Data Quality Notes:**\n" + "\n".join(
-            f"- {a}" for a in anomalies[:2]
-        )
-    return ""
-
-
-def _generate_data_specific_followups(
-    metadata: dict, query: str, result_data: list
-) -> str:
-    """Generate follow-up suggestions based on actual data patterns."""
-    if not metadata:
-        return ""
-
-    suggestions = []
-    findings = metadata.get("statistical_findings", [])
-
-    # Check for correlations
-    correlations = [f for f in findings if f.get("type") == "correlation"]
-    if correlations:
-        for corr in correlations[:1]:
-            c1, c2 = corr.get("columns", ["", ""])
-            r = corr.get("value", 0)
-            strength = corr.get("strength", "")
-            if strength in ["strong", "very_strong"] and r < -0.5:
-                suggestions.append(
-                    f"- **Are there age-based patterns in this {c2}?** (Strong negative correlation: r={r:.2f})"
-                )
-            elif strength in ["strong", "very_strong"] and r > 0.5:
-                suggestions.append(
-                    f"- **Does {c1} drive {c2} changes?** (Strong positive: r={r:.2f})"
-                )
-
-    # Check for distributions
-    distributions = [f for f in findings if f.get("type") == "distribution"]
-    for dist in distributions:
-        col = dist.get("column", "")
-        dtype = dist.get("distribution_type", "")
-        if "skewed" in dtype.lower():
-            suggestions.append(
-                f"- **How does {col} distribution affect my results?** (Data is {dtype})"
-            )
-            break
-
-    # Check for outliers
-    outliers = [f for f in findings if f.get("type") == "outlier"]
-    if outliers:
-        outlier = outliers[0]
-        col = outlier.get("column", "data")
-        count = outlier.get("count", 0)
-        suggestions.append(
-            f"- **Who are the outliers in {col}?** ({count} extreme values)"
-        )
-
-    # Default suggestions based on common patterns
-    if not suggestions:
-        domain = metadata.get("domain_intelligence", {}).get("domain", "")
-        if domain == "general":
-            suggestions.append(
-                "- **How do segments compare?** (Group customers by spending or income)"
-            )
-            suggestions.append(
-                "- **What are the top performers?** (Find highest/lowest values)"
-            )
-        else:
-            suggestions.append(
-                f"- **What are the key drivers?** (Explore what affects your target metric)"
-            )
-            suggestions.append(
-                "- **Are there seasonal patterns?** (Check for time-based trends)"
-            )
-
-    if suggestions:
-        return "\n\n💡 **What else you might want to know:**\n" + "\n".join(
-            suggestions[:3]
-        )
+        return "\n\n**Data Quality Notes:**\n" + "\n".join(f"- {a}" for a in anomalies[:2])
     return ""
 
 
@@ -460,118 +299,86 @@ def _build_result_table_payload(
     display_rows = rows[:max_display_rows]
 
     return {
-        "columns": [
-            {"key": column, "label": _label_from_column(column)} for column in columns
-        ],
+        "columns": [{"key": column, "label": _label_from_column(column)} for column in columns],
         "rows": display_rows,
         "totalRows": result.get("row_count", len(rows)),
         "displayedRows": len(display_rows),
     }
 
 
-def _generate_result_followups(
-    query: str, result: Dict[str, Any], metadata: dict
-) -> list[str]:
-    """Generate follow-ups from actual SQL result shape and query intent."""
-    rows = result.get("data") or []
-    columns = result.get("columns") or _extract_columns_from_result(rows)
-    if not rows or not columns:
-        return _generate_follow_up_suggestions(query, "", metadata)
-
-    sample = rows[0] if isinstance(rows[0], dict) else {}
-    numeric_cols = [
-        col
-        for col in columns
-        if isinstance(sample.get(col), (int, float)) and not isinstance(sample.get(col), bool)
-    ]
-    dimension_cols = [col for col in columns if col not in numeric_cols]
-
-    metric = numeric_cols[0] if numeric_cols else None
-    dimension = dimension_cols[0] if dimension_cols else (columns[0] if columns else None)
-    q_lower = query.lower()
-    suggestions: list[str] = []
-
-    if metric and dimension:
-        metric_label = _label_from_column(metric)
-        dimension_label = _label_from_column(dimension)
-
-        if not re.search(r"\b(chart|plot|graph|visuali[sz]e?)\b", q_lower):
-            suggestions.append(f"Visualize {metric_label} by {dimension_label}")
-
-        if re.search(r"\b(top|highest|leading|rank|largest)\b", q_lower):
-            suggestions.append(f"Show the bottom {dimension_label} values by {metric_label}")
-        elif re.search(r"\b(bottom|lowest|smallest)\b", q_lower):
-            suggestions.append(f"Show the top {dimension_label} values by {metric_label}")
-        else:
-            suggestions.append(f"Show top and bottom {dimension_label} by {metric_label}")
-
-        if len(rows) > 5:
-            suggestions.append(f"Explain the gap between leading and trailing {dimension_label}")
-    elif dimension:
-        dimension_label = _label_from_column(dimension)
-        suggestions.append(f"Summarize the distribution of {dimension_label}")
-        suggestions.append(f"Which {dimension_label} values appear most often?")
-
-    for suggestion in _generate_follow_up_suggestions(query, "", metadata):
-        if len(suggestions) >= 3:
-            break
-        if suggestion not in suggestions:
-            suggestions.append(suggestion)
-
-    return suggestions[:3]
-
-
-def _should_show_followups(
+async def _generate_follow_up_suggestions_llm(
     query: str,
-    response: str,
+    response_text: str,
     metadata: dict,
     result: Optional[Dict[str, Any]] = None,
-    chart_data: Optional[Dict[str, Any]] = None,
-    sql_fallback: bool = False,
-) -> bool:
-    """Decide whether follow-up chips add enough value to render."""
-    q_lower = (query or "").strip().lower()
-    response_lower = (response or "").strip().lower()
-    if not q_lower:
-        return False
+) -> list[str]:
+    """
+    Generate follow-up suggestions using an LLM call.
+    Falls back to _generate_follow_up_suggestions_fallback on failure.
+    """
+    col_names = metadata.get("column_names", [])
 
-    if chart_data or sql_fallback:
-        return True
+    # If we have result data, give the LLM concrete data context
+    if result:
+        rows = result.get("data") or []
+        columns = result.get("columns") or _extract_columns_from_result(rows)
+        row_count = result.get("row_count", len(rows))
+        preview_rows = rows[:3] if len(rows) >= 3 else rows
+        try:
+            result_preview = json.dumps(preview_rows, default=str)[:600]
+        except Exception:
+            result_preview = str(preview_rows)[:600]
 
-    analysis_patterns = (
-        r"\btrend|trends|compare|comparison|break\s*down|distribution|summary|overview\b",
-        r"\binsight|insights|anomal|outlier|correlation|relationship|driver|segment\b",
-        r"\bwhy|explain|investigate|forecast|predict|rank|top|bottom|highest|lowest\b",
-        r"\bchart|plot|graph|visuali[sz]e\b",
-    )
-    if any(re.search(pattern, q_lower) for pattern in analysis_patterns):
-        return True
+        prompt = f"""\
+You are a data analytics assistant helping a user explore their dataset further.
 
-    result_rows = result.get("data") if result else []
-    result_columns = result.get("columns") if result else []
-    row_count = result.get("row_count", len(result_rows or [])) if result else 0
-    is_single_answer = row_count <= 1 or (len(result_rows or []) <= 1 and len(result_columns or []) <= 2)
-    transactional_patterns = (
-        r"^\s*(how many|count|what is the count|total|sum|average|mean|median|min|max)\b",
-        r"^\s*(what is|what are|show me|list)\b",
-    )
-    if is_single_answer and any(re.search(pattern, q_lower) for pattern in transactional_patterns):
-        return False
+The user asked: "{query}"
+The query returned {row_count} rows with columns: {", ".join(str(c) for c in columns[:10])}
+First 3 rows of result:
+{result_preview}
 
-    if row_count >= 8 and len(result_columns or []) >= 2:
-        return True
+Generate exactly 3 follow-up questions the user could ask next.
+Rules:
+- Each must be a natural language query they can copy-paste
+- Use actual column names where helpful
+- Vary the intent: drill-down, comparison, visualization
+- Do NOT repeat the original question
 
-    ambiguous_markers = (
-        "ambiguous",
-        "unclear",
-        "could",
-        "might",
-        "may want",
-        "investigate",
-        "not enough",
-        "missing",
-    )
-    return any(marker in response_lower for marker in ambiguous_markers)
+Return JSON only: {{"suggestions": ["Q1", "Q2", "Q3"]}}"""
+    else:
+        # No result data — use query + response context
+        prompt = f"""\
+You are a data analytics assistant helping a user explore their dataset.
+
+The user asked: "{query}"
+Your response: "{response_text[:600]}"
+Available columns: {", ".join(col_names[:15])}
+
+Generate exactly 3 follow-up questions the user could ask next.
+Rules:
+- Each must be a natural language query they can copy-paste
+- Use actual column names where helpful
+- Vary the intent: drill-down, comparison, visualization
+- Do NOT repeat the original question
+
+Return JSON only: {{"suggestions": ["Q1", "Q2", "Q3"]}}"""
+
+    try:
+        response = await llm_router.call(
+            prompt=prompt,
+            model_role="intent_engine",
+            expect_json=True,
+            temperature=0.4,
+            max_tokens=200,
+        )
+        if isinstance(response, dict) and "suggestions" in response:
+            suggestions = [s for s in response["suggestions"] if isinstance(s, str) and len(s) > 8]
+            if suggestions:
+                return suggestions[:3]
+    except Exception as e:
+        logger.warning(f"LLM follow-up suggestion failed: {e}")
+
+    return _generate_follow_up_suggestions_fallback(query, metadata)
 
 
 async def _passive_belief_update(
@@ -600,9 +407,126 @@ async def _passive_belief_update(
             belief_store, user_id, ai_response, dataset_id
         )
     except Exception as e:
-        logging.getLogger(__name__).warning(
-            f"Passive belief update failed (non-critical): {e}"
+        logging.getLogger(__name__).warning(f"Passive belief update failed (non-critical): {e}")
+
+
+async def _reflect_on_response(
+    query: str,
+    ai_response: str,
+    dataset_context: str,
+    dataset_type: str,
+    user_id: str,
+    conversation_id: str,
+) -> None:
+    """
+    Fire-and-forget: reflect on AI response quality and store learned instructions.
+
+    This is the core feedback loop for Priority 0 self-improvement:
+    1. Score the AI output on novelty, actionability, specificity, correctness
+    2. If quality is below threshold, extract prompt adjustments
+    3. Store the adjustments per conversation for injection on next turn
+
+    Non-blocking — runs asyncio.create_task(), never raises.
+    """
+    if not ai_response or len(ai_response.strip()) < 20:
+        return
+
+    try:
+        from services.insight_reflection.reflector import insight_reflection_agent
+        from services.insight_reflection.conversation_learner import (
+            conversation_learner,
         )
+
+        score = await insight_reflection_agent.reflect(
+            user_query=query,
+            ai_output=ai_response[:2000],
+            schema_context=dataset_context[:800],
+            dataset_type=dataset_type or "general",
+            output_type="insight",
+            user_id=user_id,
+        )
+
+        # Store full adjustment if quality needs improvement
+        if score.overall_score < insight_reflection_agent.GOOD_THRESHOLD:
+            adjustments = score.prompt_adjustments
+            instruction = adjustments.get("instruction_add", "").strip()
+            if instruction:
+                # Store all adjustment fields (instruction, temperature, examples)
+                await conversation_learner.add_adjustment(
+                    conversation_id,
+                    {
+                        "instruction": instruction,
+                        "temperature_change": adjustments.get("temperature_change", 0.0),
+                        "add_examples": adjustments.get("add_examples", False),
+                        "failure_modes": score.failure_modes,
+                    },
+                )
+                logger.info(
+                    f"[Reflection] Learned adjustment for conv {conversation_id[:12]}...: "
+                    f"'{instruction[:60]}...' temp={adjustments.get('temperature_change', 0.0):.2f} "
+                    f"(score={score.overall_score:.2f})"
+                )
+
+        # Record domain-level evaluation and inject domain adjustments
+        try:
+            from services.insight_reflection.domain_prompt_adjuster import (
+                domain_prompt_adjuster,
+            )
+
+            asyncio.create_task(
+                domain_prompt_adjuster.record_evaluation(
+                    domain=dataset_type or "general",
+                    output_type="insight",
+                    overall_score=score.overall_score,
+                    failure_modes=score.failure_modes,
+                    dimensions={
+                        "novelty": score.novelty,
+                        "actionability": score.actionability,
+                        "specificity": score.specificity,
+                        "correctness": score.correctness,
+                    },
+                )
+            )
+
+            # Fetch domain adjustments and inject them as conversation instructions
+            # Only inject if quality is below threshold and domain has enough data
+            domain_adj = await domain_prompt_adjuster.format_for_prompt(
+                domain=dataset_type or "general",
+                output_type="insight",
+            )
+            if domain_adj and score.overall_score < insight_reflection_agent.GOOD_THRESHOLD:
+                # Store domain adjustment as a special instruction (prefixed to distinguish)
+                await conversation_learner.add_adjustment(
+                    conversation_id,
+                    {
+                        "instruction": f"[Domain:{dataset_type}] " + domain_adj[:150],
+                        "temperature_change": 0.0,
+                        "add_examples": False,
+                        "failure_modes": ["domain_quality"],
+                    },
+                )
+                logger.info(
+                    f"[Reflection] Injected domain adjustment for {dataset_type} "
+                    f"into conv {conversation_id[:12]}..."
+                )
+        except Exception as de:
+            logger.debug(f"[Reflection] Domain recording skipped: {de}")
+
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[Reflection] Failed (non-critical): {e}")
+
+
+async def _try_extract_belief(
+    user_id: str, dataset_id: str, user_message: str, ai_response: str, db
+) -> None:
+    """Fire-and-forget: extract correction/business rules from user follow-up."""
+    try:
+        from services.memory.belief_service import BeliefService
+
+        service = BeliefService(db)
+        await service.extract_and_save(user_id, dataset_id, user_message, ai_response)
+    except Exception as e:
+        logger.warning(f"[BeliefService] extract error (non-fatal): {e}")
 
 
 from services.memory.memory_service import memory_service
@@ -613,11 +537,11 @@ from services.charts.column_matcher import column_matcher
 from services.conversations.conversation_service import (
     load_or_create_conversation,
     save_conversation,
+    auto_name_conversation,
 )
 from core.prompts import PromptFactory, PromptType
 from core.prompt_sanitizer import sanitize_user_input, is_data_related_query
 from services.ai.query_rewrite import rewrite_query, understand_query
-from services.query_executor import query_executor, query_classifier, QueryClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -674,9 +598,7 @@ class QueryComplexityAnalyzer:
         for pattern in cls.SIMPLE_PATTERNS:
             if re.match(pattern, query_lower):
                 # But if it also contains complex indicators, upgrade
-                complex_score = sum(
-                    1 for p in cls.COMPLEX_PATTERNS if re.search(p, query_lower)
-                )
+                complex_score = sum(1 for p in cls.COMPLEX_PATTERNS if re.search(p, query_lower))
                 if complex_score == 0:
                     return "simple"
 
@@ -826,12 +748,8 @@ class DeepAnalysisRouter:
         """
         query_lower = query.lower().strip()
 
-        trigger_matches = [
-            p for p in cls.DEEP_ANALYSIS_TRIGGERS if re.search(p, query_lower)
-        ]
-        simple_matches = [
-            p for p in cls.SIMPLE_QUERY_PATTERNS if re.match(p, query_lower)
-        ]
+        trigger_matches = [p for p in cls.DEEP_ANALYSIS_TRIGGERS if re.search(p, query_lower)]
+        simple_matches = [p for p in cls.SIMPLE_QUERY_PATTERNS if re.match(p, query_lower)]
 
         should_route = cls.should_route_to_quis(query)
 
@@ -906,9 +824,7 @@ class ContextWindowManager:
 
         # If conversation is short, return all
         if len(messages) <= recent_count + 5:
-            logger.debug(
-                f"ContextWindow: Short conversation ({len(messages)} msgs), keeping all"
-            )
+            logger.debug(f"ContextWindow: Short conversation ({len(messages)} msgs), keeping all")
             return messages
 
         # Always keep most recent messages
@@ -954,9 +870,7 @@ class ContextWindowManager:
 
         # Messages with data/insights
         content = message.get("content", "")
-        if any(
-            kw in content.lower() for kw in ["trend", "insight", "analysis", "found"]
-        ):
+        if any(kw in content.lower() for kw in ["trend", "insight", "analysis", "found"]):
             score += 1
 
         # Long AI responses likely contain important analysis
@@ -965,9 +879,7 @@ class ContextWindowManager:
 
         return score
 
-    async def summarize_old_messages(
-        self, messages: List[Dict], llm_router_instance
-    ) -> str:
+    async def summarize_old_messages(self, messages: List[Dict], llm_router_instance) -> str:
         """
         Summarize old conversation history for context compression.
 
@@ -1014,9 +926,7 @@ class ContextWindowManager:
             logger.warning(f"Failed to summarize old messages: {e}")
             return ""
 
-    def get_optimized_context(
-        self, messages: List[Dict], summary: str = ""
-    ) -> List[Dict]:
+    def get_optimized_context(self, messages: List[Dict], summary: str = "") -> List[Dict]:
         """
         Get optimized context with optional summary prepended.
 
@@ -1057,9 +967,7 @@ class ResilientChatProcessor:
     Ensures chat availability even when primary models fail.
     """
 
-    def __init__(
-        self, max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 10.0
-    ):
+    def __init__(self, max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 10.0):
         """
         Args:
             max_retries: Maximum retry attempts per model
@@ -1112,9 +1020,7 @@ class ResilientChatProcessor:
 
             except Exception as e:
                 last_error = e
-                logger.warning(
-                    f"LLM call failed (attempt {attempt + 1}/{self.max_retries}): {e}"
-                )
+                logger.warning(f"LLM call failed (attempt {attempt + 1}/{self.max_retries}): {e}")
 
                 # Exponential backoff
                 delay = min(self.base_delay * (2**attempt), self.max_delay)
@@ -1393,7 +1299,10 @@ class AIService:
                         dataset_id=dataset_id,
                         columns_found=[p["column"] for p in privacy_info["pii_detected"]],
                         pii_detected=privacy_info["pii_detected"],
-                        confidence_scores={p["column"]: p.get("confidence", 0.9) for p in privacy_info["pii_detected"]},
+                        confidence_scores={
+                            p["column"]: p.get("confidence", 0.9)
+                            for p in privacy_info["pii_detected"]
+                        },
                     )
                 )
 
@@ -1455,9 +1364,7 @@ class AIService:
                         )
                         return context
 
-                logger.debug(
-                    "RAG: No chunks after re-ranking, falling back to full context"
-                )
+                logger.debug("RAG: No chunks after re-ranking, falling back to full context")
 
             # Fallback to full context (with privacy controls applied)
             return create_context_string(privacy_metadata)
@@ -1579,18 +1486,6 @@ class AIService:
         except Exception as e:
             logger.warning(f"Failed to apply corrections: {e}")
 
-        # --- INTENT GUARDRAIL: Reject off-topic queries ---
-        if _is_off_topic(query_lower) and not is_data_related_query(query):
-            guardrail_response = (
-                "I'm a specialized data analytics assistant. I can help with trends, charts, "
-                "forecasts, correlations, or insights from your dataset.\n\n"
-                'Try asking: "Show top products by revenue" or "What is the sales trend over time?"'
-            )
-            return {
-                "response_text": guardrail_response,
-                "chart_config": None,
-                "conversation_id": conversation_id,
-            }
         routing_info = DeepAnalysisRouter.get_routing_info(query)
         if routing_info["route_to_quis"]:
             logger.info(f"Routing to LangGraph QUIS: {routing_info['reason']}")
@@ -1609,16 +1504,12 @@ class AIService:
                 if "No significant novel insights" in quis_result.get(
                     "response", ""
                 ) or not quis_result.get("approved_insights"):
-                    logger.info(
-                        "QUIS found no novel insights - falling back to standard pipeline"
-                    )
+                    logger.info("QUIS found no novel insights - falling back to standard pipeline")
                     # Fall through to the standard chat pipeline below
                 else:
                     # Format QUIS response for chat compatibility
                     return {
-                        "response_text": quis_result.get(
-                            "response", "Analysis complete."
-                        ),
+                        "response_text": quis_result.get("response", "Analysis complete."),
                         "chart_config": quis_result.get("charts", [None])[0]
                         if quis_result.get("charts")
                         else None,
@@ -1630,9 +1521,7 @@ class AIService:
                         "stats": quis_result.get("stats", {}),
                     }
             except ImportError as e:
-                logger.warning(
-                    f"LangGraph not available, falling back to standard pipeline: {e}"
-                )
+                logger.warning(f"LangGraph not available, falling back to standard pipeline: {e}")
             except Exception as e:
                 logger.error(f"QUIS analysis failed, falling back: {e}", exc_info=True)
 
@@ -1642,9 +1531,11 @@ class AIService:
         messages = conv.get("messages", [])
         messages.append({"role": "user", "content": query})
 
-        dataset_doc = await self.db.uploads.find_one(
-            {"_id": dataset_id, "user_id": user_id}
-        )
+        # Auto-name new conversations using Mistral Nemo (fire-and-forget)
+        if not conv.get("title") and len(conv.get("messages", [])) == 0:
+            asyncio.create_task(auto_name_conversation(str(conv["_id"]), user_id, query))
+
+        dataset_doc = await self.db.uploads.find_one({"_id": dataset_id, "user_id": user_id})
         if not dataset_doc:
             raise HTTPException(404, "Dataset not found.")
 
@@ -1653,9 +1544,7 @@ class AIService:
             raise HTTPException(409, "Dataset is still being processed.")
 
         # RAG: Try vector retrieval first, fallback to full context
-        dataset_context = await self._get_rag_context(
-            query, dataset_id, user_id, metadata
-        )
+        dataset_context = await self._get_rag_context(query, dataset_id, user_id, metadata)
 
         # Get column names for query understanding
         column_names = []
@@ -1663,46 +1552,112 @@ class AIService:
         if schema:
             column_names = list(schema.keys())
 
-        # Use full query understanding pipeline
-        query_understanding = await understand_query(
-            query,
-            dataset_context=dataset_context,
-            available_columns=column_names,
-        )
+        # Use full query understanding pipeline (with timeout)
+        try:
+            query_understanding = await asyncio.wait_for(
+                understand_query(
+                    query,
+                    dataset_context=dataset_context,
+                    available_columns=column_names,
+                ),
+                timeout=settings.UNDERSTAND_QUERY_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Query understanding timed out after {settings.UNDERSTAND_QUERY_TIMEOUT}s — falling back to raw query"
+            )
+            from collections import namedtuple
+
+            FallbackUnderstanding = namedtuple(
+                "FallbackUnderstanding",
+                [
+                    "enriched_query",
+                    "archetype",
+                    "what_i_understood",
+                    "needs_clarification",
+                    "routing",
+                    "was_enriched",
+                ],
+            )
+            query_understanding = FallbackUnderstanding(
+                enriched_query=query,
+                archetype="analyst",
+                what_i_understood="",
+                needs_clarification=False,
+                routing="data",
+                was_enriched=False,
+            )
         enhanced_query = query_understanding.enriched_query
         archetype = query_understanding.archetype
         what_i_understood = query_understanding.what_i_understood
         needs_clarification = query_understanding.needs_clarification
 
+        # --- GUARDRAIL: routing-based, runs with full dataset context ---
+        # understand_query() has schema + columns — its routing decision is
+        # semantically accurate. This replaces all regex/keyword guardrails.
+        if query_understanding.routing == "conversational":
+            guardrail_response = (
+                "I'm a specialized data analytics assistant. I can help with trends, "
+                "charts, forecasts, correlations, or insights from your dataset.\n\n"
+                'Try asking: "Show top products by revenue" or "What is the sales trend over time?"'
+            )
+            return {
+                "response_text": guardrail_response,
+                "chart_config": None,
+                "conversation_id": conversation_id,
+            }
+
         if query_understanding.was_enriched:
             logger.info(
-                f"Query enhanced: archetype={archetype}, "
+                f"Query enhanced: archetype={archetype}, routing={query_understanding.routing}, "
                 f"'{query[:50]}...' → '{enhanced_query[:50]}...'"
             )
         messages[-1]["content"] = enhanced_query
 
-        factory = PromptFactory(dataset_metadata=metadata)
+        conv_id_str = str(conv["_id"])
         optimized_messages = context_manager.optimize_history(messages)
 
-        # Retrieve relevant memories for context-aware responses
-        memories = await memory_service.retrieve_relevant_memories(
-            query, user_id, dataset_id
+        # Unified memory retrieval — one call replaces 3 individual service calls
+        from services.memory_injector import memory_injector
+
+        memory_ctx = await memory_injector.get_context(
+            user_id=user_id,
+            dataset_id=dataset_id,
+            query=enhanced_query,
+            conversation_id=conv_id_str,
         )
 
+        factory = PromptFactory(dataset_metadata=metadata)
         prompt = factory.get_prompt(
             PromptType.CONVERSATIONAL,
             user_message=enhanced_query,
             history=optimized_messages,
-            memories=memories,
+            memories=memory_ctx.memories,
+            belief_context=memory_ctx.belief_context,
         )
 
-        llm_response = await llm_router.call(
-            prompt, model_role="chart_engine", expect_json=True, is_conversational=True
-        )
+        try:
+            llm_response = await asyncio.wait_for(
+                llm_router.call(
+                    prompt,
+                    model_role="chart_engine",
+                    expect_json=True,
+                    is_conversational=True,
+                    instructions_override=memory_ctx.instructions_override,
+                ),
+                timeout=settings.CHAT_LLM_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Primary LLM call timed out after {settings.CHAT_LLM_TIMEOUT}s")
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    "The AI model took too long to respond. This can happen during peak usage. "
+                    "Please try asking your question again."
+                ),
+            )
 
-        logger.info(
-            f"LLM Response structure: {json.dumps(llm_response, indent=2)[:1000]}"
-        )
+        logger.info(f"LLM Response structure: {json.dumps(llm_response, indent=2)[:1000]}")
         logger.info(
             f"LLM Response keys: {list(llm_response.keys()) if isinstance(llm_response, dict) else 'Not a dict'}"
         )
@@ -1725,19 +1680,31 @@ class AIService:
             logger.warning(
                 "Narrative summary missing from initial LLM response; retrying with stricter instructions"
             )
-            llm_response = await llm_router.call(
-                _build_narrative_repair_prompt(prompt),
-                model_role="chart_engine",
-                expect_json=True,
-                is_conversational=True,
-            )
-            (
-                structured_response,
-                ai_text,
-                insights,
-                data_summary,
-                chart_config_raw,
-            ) = _extract_chat_payload_parts(llm_response)
+            try:
+                llm_response = await asyncio.wait_for(
+                    llm_router.call(
+                        _build_narrative_repair_prompt(prompt),
+                        model_role="chart_engine",
+                        expect_json=True,
+                        is_conversational=True,
+                        instructions_override=memory_ctx.instructions_override,
+                    ),
+                    timeout=settings.CHAT_LLM_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Narrative repair timed out after {settings.CHAT_LLM_TIMEOUT}s — "
+                    "proceeding with original response"
+                )
+                # Fall through — use the original response as-is
+            else:
+                (
+                    structured_response,
+                    ai_text,
+                    insights,
+                    data_summary,
+                    chart_config_raw,
+                ) = _extract_chat_payload_parts(llm_response)
 
         if (not ai_text or not ai_text.strip()) and chart_config_raw:
             ai_text = (
@@ -1770,14 +1737,14 @@ class AIService:
                 if not file_path:
                     raise ValueError("Dataset file path not found")
 
-                df = await enhanced_dataset_service.ensure_dataframe_for_agent(dataset_id, user_id, sample=False)
+                df = await enhanced_dataset_service.ensure_dataframe_for_agent(
+                    dataset_id, user_id, sample=False
+                )
 
                 # --- COLUMN VALIDATION: Auto-fix LLM column references ---
                 available_columns = list(df.columns)
-                chart_config_raw, corrections = (
-                    column_matcher.validate_and_fix_chart_config(
-                        chart_config_raw, available_columns, threshold=0.6
-                    )
+                chart_config_raw, corrections = column_matcher.validate_and_fix_chart_config(
+                    chart_config_raw, available_columns, threshold=0.6
                 )
                 if corrections:
                     logger.info(f"Chart columns auto-corrected: {corrections}")
@@ -1808,9 +1775,10 @@ class AIService:
                 if chart_type == ChartType.PIE:
                     if "labels" in chart_config_raw:
                         columns.append(chart_config_raw["labels"])
-                    if "values" in chart_config_raw and chart_config_raw[
-                        "values"
-                    ] not in ["count", "count of each model"]:
+                    if "values" in chart_config_raw and chart_config_raw["values"] not in [
+                        "count",
+                        "count of each model",
+                    ]:
                         columns.append(chart_config_raw["values"])
                     elif "x" in chart_config_raw:
                         columns.append(chart_config_raw["x"])
@@ -1819,8 +1787,7 @@ class AIService:
                         numeric_cols = [
                             col
                             for col in df.columns
-                            if df[col].dtype
-                            in [pl.Int64, pl.Int32, pl.Float64, pl.Float32]
+                            if df[col].dtype in [pl.Int64, pl.Int32, pl.Float64, pl.Float32]
                         ]
                         if numeric_cols and columns[0] not in numeric_cols:
                             columns.append(numeric_cols[0])
@@ -1890,9 +1857,7 @@ class AIService:
                     "data": chart_traces,
                     "layout": layout,
                 }
-                logger.info(
-                    f"Chart hydrated successfully with {len(chart_traces)} trace(s)"
-                )
+                logger.info(f"Chart hydrated successfully with {len(chart_traces)} trace(s)")
                 logger.info(
                     f"First trace sample: {json.dumps(chart_traces[0] if chart_traces else {})[:500]}"
                 )
@@ -1921,8 +1886,18 @@ class AIService:
         await save_conversation(conv["_id"], messages)
 
         # Async memory extraction (fire-and-forget, non-blocking)
+        asyncio.create_task(memory_service.extract_and_store(query, ai_text, user_id, dataset_id))
+
+        # Async reflection for self-improvement (fire-and-forget)
         asyncio.create_task(
-            memory_service.extract_and_store(query, ai_text, user_id, dataset_id)
+            _reflect_on_response(
+                query=query,
+                ai_response=ai_text,
+                dataset_context=dataset_context,
+                dataset_type=metadata.get("detected_domain", "general").lower(),
+                user_id=user_id,
+                conversation_id=str(conv["_id"]),
+            )
         )
 
         response_data = {
@@ -1936,12 +1911,8 @@ class AIService:
         }
 
         if chart_data:
-            logger.info(
-                f"Returning chart_config with {len(chart_data.get('data', []))} trace(s)"
-            )
-            first_trace = (
-                chart_data.get("data", [{}])[0] if chart_data.get("data") else None
-            )
+            logger.info(f"Returning chart_config with {len(chart_data.get('data', []))} trace(s)")
+            first_trace = chart_data.get("data", [{}])[0] if chart_data.get("data") else None
             if first_trace and isinstance(first_trace, dict):
                 logger.info(f"Sample trace structure: {first_trace.keys()}")
             else:
@@ -1961,6 +1932,9 @@ class AIService:
         user_id: str,
         conversation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # Lazy import to avoid circular dependency
+        from services.query_executor import query_executor, query_classifier
+
         """
         Process a user query using DuckDB SQL execution for accurate results.
 
@@ -2011,10 +1985,12 @@ class AIService:
         messages = conv.get("messages", [])
         messages.append({"role": "user", "content": query})
 
+        # Auto-name new conversations using Mistral Nemo (fire-and-forget)
+        if not conv.get("title") and len(conv.get("messages", [])) == 0:
+            asyncio.create_task(auto_name_conversation(str(conv["_id"]), user_id, query))
+
         # --- Dataset validation and loading ---
-        dataset_doc = await self.db.uploads.find_one(
-            {"_id": dataset_id, "user_id": user_id}
-        )
+        dataset_doc = await self.db.uploads.find_one({"_id": dataset_id, "user_id": user_id})
         if not dataset_doc:
             raise HTTPException(404, "Dataset not found.")
 
@@ -2027,17 +2003,18 @@ class AIService:
             raise HTTPException(500, "Dataset file path not found.")
 
         # Load dataset into memory
-        df = await enhanced_dataset_service.ensure_dataframe_for_agent(dataset_id, user_id, sample=False)
+        df = await enhanced_dataset_service.ensure_dataframe_for_agent(
+            dataset_id, user_id, sample=False
+        )
 
         # --- Classify query type ---
         needs_sql = query_classifier.needs_sql_execution(query)
         complexity = query_classifier.get_query_complexity(query)
 
-        logger.info(
-            f"Query classification: needs_sql={needs_sql}, complexity={complexity}"
-        )
+        logger.info(f"Query classification: needs_sql={needs_sql}, complexity={complexity}")
 
         sql_fallback = False  # tracks whether SQL was attempted but fell back to LLM
+        corrections_applied = []  # correction rewriter not used in this execution path
 
         if needs_sql:
             # --- SQL EXECUTION PATH (Accurate, No Hallucinations) ---
@@ -2050,8 +2027,8 @@ class AIService:
             if result["success"]:
                 response_parts = [result["response"]]
                 result_table = _build_result_table_payload(result)
-                follow_up_suggestions = _generate_result_followups(
-                    query, result, metadata
+                follow_up_suggestions = await _generate_follow_up_suggestions_llm(
+                    query, result.get("response", ""), metadata, result
                 )
 
                 # Add data-quality callouts if relevant; tables and follow-ups stay structured.
@@ -2075,13 +2052,7 @@ class AIService:
                     chart_data = await self._generate_chart_for_results(
                         result["data"], result.get("columns", []), query
                     )
-                show_follow_ups = _should_show_followups(
-                    query,
-                    ai_text,
-                    metadata,
-                    result=result,
-                    chart_data=chart_data,
-                )
+                show_follow_ups = True
 
                 # Save to conversation
                 ai_message = {"role": "ai", "content": ai_text}
@@ -2096,6 +2067,26 @@ class AIService:
                     ai_message["chart_config"] = chart_data
                 messages.append(ai_message)
                 await save_conversation(conv["_id"], messages)
+
+                # Async reflection for self-improvement (fire-and-forget)
+                # Build a basic schema context from result data for the reflection engine
+                schema_context = _build_result_table_payload(result)
+                schema_context_str = (
+                    json.dumps(schema_context, default=str)[:800]
+                    if schema_context
+                    else metadata.get("detected_domain", "general")
+                )
+
+                asyncio.create_task(
+                    _reflect_on_response(
+                        query=query,
+                        ai_response=ai_text,
+                        dataset_context=schema_context_str,
+                        dataset_type=metadata.get("detected_domain", "general").lower(),
+                        user_id=user_id,
+                        conversation_id=str(conv["_id"]),
+                    )
+                )
 
                 return {
                     "response": ai_text,
@@ -2126,26 +2117,31 @@ class AIService:
         logger.info("📋 Using metadata-based response")
 
         # Use traditional LLM response for non-SQL queries
-        dataset_context = await self._get_rag_context(
-            query, dataset_id, user_id, metadata
-        )
+        dataset_context = await self._get_rag_context(query, dataset_id, user_id, metadata)
 
         enhanced_query = await rewrite_query(query, dataset_context)
 
-        factory = PromptFactory(dataset_metadata=metadata)
+        conv_id_str = str(conv["_id"])
         optimized_messages = context_manager.optimize_history(messages)
 
-        # Retrieve relevant memories for context-aware responses
-        memories = await memory_service.retrieve_relevant_memories(
-            query, user_id, dataset_id
+        # Unified memory retrieval — one call replaces 3 individual service calls
+        from services.memory_injector import memory_injector
+
+        memory_ctx = await memory_injector.get_context(
+            user_id=user_id,
+            dataset_id=dataset_id,
+            query=enhanced_query,
+            conversation_id=conv_id_str,
         )
 
+        factory = PromptFactory(dataset_metadata=metadata)
         prompt = factory.get_prompt(
             PromptType.CONVERSATIONAL,
             user_message=enhanced_query,
-            history=optimized_messages,  # Smart context selection instead of naive slice
-            memories=memories,
+            history=optimized_messages,
+            memories=memory_ctx.memories,
             include_context=False,
+            belief_context=memory_ctx.belief_context,
         )
 
         conversational_role = llm_router.resolve_conversational_role(
@@ -2159,6 +2155,7 @@ class AIService:
             is_conversational=True,
             query_complexity=complexity,
             context=dataset_context,
+            instructions_override=memory_ctx.instructions_override,
         )
 
         ai_text = llm_response if isinstance(llm_response, str) else str(llm_response)
@@ -2170,8 +2167,18 @@ class AIService:
         await save_conversation(conv["_id"], messages)
 
         # Async memory extraction (fire-and-forget, non-blocking)
+        asyncio.create_task(memory_service.extract_and_store(query, ai_text, user_id, dataset_id))
+
+        # Async reflection for self-improvement (fire-and-forget)
         asyncio.create_task(
-            memory_service.extract_and_store(query, ai_text, user_id, dataset_id)
+            _reflect_on_response(
+                query=query,
+                ai_response=ai_text,
+                dataset_context=dataset_context,
+                dataset_type=metadata.get("detected_domain", "general").lower(),
+                user_id=user_id,
+                conversation_id=str(conv["_id"]),
+            )
         )
 
         # Calculate elapsed time for metadata path
@@ -2254,8 +2261,7 @@ class AIService:
 
             # --- Column selection ---
             has_temporal = any(
-                re.search(r"(date|time|year|month|quarter|week)", c.lower())
-                for c in df.columns
+                re.search(r"(date|time|year|month|quarter|week)", c.lower()) for c in df.columns
             )
 
             if forced_type == "pie":
@@ -2276,9 +2282,7 @@ class AIService:
                 x_col = temporal_cols[0] if temporal_cols else df.columns[0]
                 y_col = numeric_cols[0]
             else:
-                chart_type = forced_type or (
-                    "scatter" if len(numeric_cols) >= 2 else "bar"
-                )
+                chart_type = forced_type or ("scatter" if len(numeric_cols) >= 2 else "bar")
                 x_col = categorical_cols[0] if categorical_cols else df.columns[0]
                 y_col = numeric_cols[0]
 
@@ -2290,9 +2294,7 @@ class AIService:
                     col,
                     flags=re.IGNORECASE,
                 )
-                cleaned = (
-                    re.sub(r"[()\[\]]", "", cleaned).strip().replace("_", " ").title()
-                )
+                cleaned = re.sub(r"[()\[\]]", "", cleaned).strip().replace("_", " ").title()
                 return cleaned or col
 
             # Validate columns exist in df
@@ -2304,9 +2306,7 @@ class AIService:
             # --- Build Plotly trace ---
             if chart_type == "pie":
                 labels = df[x_col].cast(pl.String).to_list()
-                values = [
-                    float(v) if v is not None else 0.0 for v in df[y_col].to_list()
-                ]
+                values = [float(v) if v is not None else 0.0 for v in df[y_col].to_list()]
                 trace = {
                     "labels": labels[:30],
                     "values": values[:30],
@@ -2320,9 +2320,7 @@ class AIService:
                     if _is_string(df[x_col].dtype)
                     else df[x_col].to_list()
                 )
-                y_data = [
-                    float(v) if v is not None else 0.0 for v in df[y_col].to_list()
-                ]
+                y_data = [float(v) if v is not None else 0.0 for v in df[y_col].to_list()]
 
                 if not x_data or not y_data:
                     return None
@@ -2371,9 +2369,7 @@ class AIService:
                 layout["xaxis"] = {"title": _clean_label(x_col), "tickangle": -30}
                 layout["yaxis"] = {"title": _clean_label(y_col)}
 
-            logger.info(
-                f"Chart generated: type={chart_type}, x={x_col}, y={y_col}, rows={len(df)}"
-            )
+            logger.info(f"Chart generated: type={chart_type}, x={x_col}, y={y_col}, rows={len(df)}")
             return {"data": [trace], "layout": layout}
 
         except Exception as e:
@@ -2414,9 +2410,7 @@ class AIService:
             HTTPException(409): Dataset still processing
             HTTPException(500): Dashboard generation failed
         """
-        dataset_doc = await self.db.uploads.find_one(
-            {"_id": dataset_id, "user_id": user_id}
-        )
+        dataset_doc = await self.db.uploads.find_one({"_id": dataset_id, "user_id": user_id})
         if not dataset_doc:
             raise HTTPException(404, "Dataset not found.")
 
@@ -2424,17 +2418,13 @@ class AIService:
         if not metadata:
             raise HTTPException(409, "Dataset is still being processed.")
 
-        privacy_metadata, _ = await self._apply_privacy_controls(
-            metadata, user_id, dataset_id
-        )
+        privacy_metadata, _ = await self._apply_privacy_controls(metadata, user_id, dataset_id)
         dataset_context = create_context_string(privacy_metadata)
 
         factory = PromptFactory(dataset_metadata=privacy_metadata)
         prompt = factory.get_prompt(PromptType.DASHBOARD_DESIGNER)
 
-        layout = await llm_router.call(
-            prompt, model_role="visualization_engine", expect_json=True
-        )
+        layout = await llm_router.call(prompt, model_role="visualization_engine", expect_json=True)
 
         if not layout or "dashboard" not in layout:
             raise HTTPException(500, "AI failed to generate dashboard.")
@@ -2572,7 +2562,9 @@ class AIService:
         Returns:
             Response dict with response, chart_config, conversation_id
         """
+        # Lazy imports to avoid circular dependency
         from services.cache import response_cache, fallback_generator
+        from services.query_executor import query_classifier
 
         # Determine query type early: similar-cache should not be used for SQL analytics queries
         needs_sql = query_classifier.needs_sql_execution(query)
@@ -2620,17 +2612,13 @@ class AIService:
 
             # Normalize response structure for frontend compatibility
             normalized_response = {
-                "response": response.get("response")
-                or response.get("response_text")
-                or "",
+                "response": response.get("response") or response.get("response_text") or "",
                 "chart_config": response.get("chart_config"),
                 "conversation_id": response.get("conversation_id"),
                 "sql": response.get("sql"),
                 "result_table": response.get("result_table"),
                 "follow_up_suggestions": response.get("follow_up_suggestions", []),
-                "show_follow_up_suggestions": response.get(
-                    "show_follow_up_suggestions", False
-                ),
+                "show_follow_up_suggestions": response.get("show_follow_up_suggestions", False),
                 "insights": response.get("insights", []),
                 "data_summary": response.get("data_summary", ""),
             }
@@ -2646,12 +2634,8 @@ class AIService:
                 response_cache.set(query, dataset_id, normalized_response, mode=mode)
 
             logger.info(f"Final response keys: {list(normalized_response.keys())}")
-            logger.info(
-                f"Response field type: {type(normalized_response.get('response'))}"
-            )
-            logger.info(
-                f"Chart config field type: {type(normalized_response.get('chart_config'))}"
-            )
+            logger.info(f"Response field type: {type(normalized_response.get('response'))}")
+            logger.info(f"Chart config field type: {type(normalized_response.get('chart_config'))}")
 
             return normalized_response
 
@@ -2660,17 +2644,9 @@ class AIService:
             error_code = e.status_code if hasattr(e, "status_code") else 500
 
             # Handle rate limit errors gracefully
-            if (
-                error_code == 429
-                or "429" in error_detail
-                or "rate" in error_detail.lower()
-            ):
-                logger.warning(
-                    f"Rate limit hit for user {user_id}, generating fallback response"
-                )
-                response_cache.mark_rate_limited(
-                    "openrouter", retry_after_seconds=1800
-                )  # 30 min
+            if error_code == 429 or "429" in error_detail or "rate" in error_detail.lower():
+                logger.warning(f"Rate limit hit for user {user_id}, generating fallback response")
+                response_cache.mark_rate_limited("openrouter", retry_after_seconds=1800)  # 30 min
 
                 # Get dataset metadata for fallback
                 dataset_doc = await self.db.uploads.find_one(
@@ -2685,11 +2661,7 @@ class AIService:
                 return fallback
 
             # Handle unavailable errors
-            if (
-                error_code == 502
-                or error_code == 503
-                or "unavailable" in error_detail.lower()
-            ):
+            if error_code == 502 or error_code == 503 or "unavailable" in error_detail.lower():
                 logger.warning(f"AI service unavailable, generating fallback response")
 
                 dataset_doc = await self.db.uploads.find_one(
@@ -2714,11 +2686,7 @@ class AIService:
             logger.error(f"Unexpected error in chat processing: {e}", exc_info=True)
 
             # Check if it's a rate limit in disguise
-            if (
-                "429" in error_str
-                or "rate" in error_str.lower()
-                or "limit" in error_str.lower()
-            ):
+            if "429" in error_str or "rate" in error_str.lower() or "limit" in error_str.lower():
                 dataset_doc = await self.db.uploads.find_one(
                     {"_id": dataset_id, "user_id": user_id}
                 )
@@ -2756,15 +2724,15 @@ class AIService:
             return "Your dataset is still being processed. Please wait a moment and try again."
 
         if "json" in error_lower or "parse" in error_lower:
-            return "I had trouble understanding the data format. Please try rephrasing your question."
+            return (
+                "I had trouble understanding the data format. Please try rephrasing your question."
+            )
 
         if "timeout" in error_lower:
             return "The analysis is taking longer than expected. Try a simpler question or check back shortly."
 
         if "connection" in error_lower or "network" in error_lower:
-            return (
-                "Connection issue detected. Please check your internet and try again."
-            )
+            return "Connection issue detected. Please check your internet and try again."
 
         if "empty response" in error_lower:
             return "I couldn't generate a complete response. Please try rephrasing your question."
@@ -2805,14 +2773,39 @@ class AIService:
             user_id: User's authentication identifier
             conversation_id: Optional ID to continue existing conversation
         """
+        # Lazy import to avoid circular dependency
+        from services.query_executor import query_executor
+
+        # --- RATE LIMITING: Per-user per-endpoint check ---
+        from services.rate_limiter_chat import rate_limit_check
+
+        allowed, rate_meta = rate_limit_check(user_id, "chat_streaming")
+        if not allowed:
+            yield {
+                "type": "error",
+                "content": "Rate limit exceeded. Please wait a moment and try again.",
+            }
+            return
+
         query_lower = query.strip().lower()
 
-        # --- SECURITY: Sanitize user input to prevent prompt injection ---
+        # --- SECURITY: Prompt injection guard + input sanitization ---
+        from services.prompt_injection_guard import sanitize_and_validate
+        from services.chat_error_handler import categorize_error, create_error_event, ErrorCategory
+
+        is_valid, validation_error, sanitized = sanitize_and_validate(query)
+        if not is_valid:
+            yield create_error_event(ErrorCategory.UNKNOWN, validation_error)
+            return
+
+        query = sanitized
+        query_lower = query.lower()
+
         try:
             query = sanitize_user_input(query)
             query_lower = query.lower()
         except ValueError as e:
-            yield {"type": "error", "content": f"Invalid query: {str(e)}"}
+            yield create_error_event(ErrorCategory.UNKNOWN, str(e))
             return
 
         # --- CORRECTION RULES: Apply user's defined corrections ---
@@ -2829,22 +2822,6 @@ class AIService:
         except Exception as e:
             logger.warning(f"Failed to apply corrections: {e}")
 
-        # --- INTENT GUARDRAIL: Reject off-topic queries ---
-        if _is_off_topic(query_lower) and not is_data_related_query(query):
-            guardrail_response = (
-                "I'm a specialized data analytics assistant. I can help with trends, charts, "
-                "forecasts, correlations, or insights from your dataset.\n\n"
-                'Try asking: "Show top products by revenue" or "What is the sales trend over time?"'
-            )
-            yield {"type": "token", "content": guardrail_response}
-            yield {"type": "response_complete", "full_response": guardrail_response}
-            yield {
-                "type": "done",
-                "conversation_id": conversation_id,
-                "chart_config": None,
-            }
-            return
-
         yield {
             "type": "thinking_step",
             "label": "Loading conversation history",
@@ -2854,9 +2831,11 @@ class AIService:
         messages = conv.get("messages", [])
         messages.append({"role": "user", "content": query})
 
-        dataset_doc = await self.db.uploads.find_one(
-            {"_id": dataset_id, "user_id": user_id}
-        )
+        # Auto-name new conversations using Mistral Nemo (fire-and-forget)
+        if not conv.get("title") and len(conv.get("messages", [])) == 0:
+            asyncio.create_task(auto_name_conversation(str(conv["_id"]), user_id, query))
+
+        dataset_doc = await self.db.uploads.find_one({"_id": dataset_id, "user_id": user_id})
         if not dataset_doc:
             yield {"type": "error", "content": "Dataset not found"}
             return
@@ -2867,12 +2846,62 @@ class AIService:
             return
 
         yield {"type": "thinking_step", "label": "Reading dataset structure", "step": 2}
+
+        # Inject active beliefs for business rules context
+        belief_block = ""
+        try:
+            from services.memory.belief_service import BeliefService
+
+            belief_service = BeliefService(self.db)
+            belief_block = await belief_service.format_for_prompt(user_id, dataset_id)
+        except Exception as e:
+            logger.warning(f"[BeliefService] Failed to load beliefs (non-critical): {e}")
+
+        # --- UNIFIED INTENT: understand_query() is the single routing authority ---
+        # Called here (after dataset load) so it has schema + column names.
+        # Replaces all previous regex guardrails and query_classifier.needs_sql_execution().
+        _column_names_for_intent: list = []
+        _schema_for_intent = metadata.get("schema", {})
+        if _schema_for_intent:
+            _column_names_for_intent = list(_schema_for_intent.keys())
+
+        _dataset_context_for_intent = metadata.get("ai_context", "") or metadata.get("summary", "")
+        stream_understanding = await understand_query(
+            query,
+            dataset_context=_dataset_context_for_intent,
+            available_columns=_column_names_for_intent,
+        )
+        logger.info(
+            f"[StreamIntent] routing={stream_understanding.routing}, "
+            f"archetype={stream_understanding.archetype}"
+        )
+
+        # Guardrail: block conversational/off-topic queries with context-aware message
+        if stream_understanding.routing == "conversational":
+            guardrail_response = (
+                "I'm a specialized data analytics assistant. I can help with trends, "
+                "charts, forecasts, correlations, or insights from your dataset.\n\n"
+                'Try asking: "Show top products by revenue" or "What is the sales trend over time?"'
+            )
+            yield {"type": "token", "content": guardrail_response}
+            yield {
+                "type": "response_complete",
+                "full_response": _strip_json_wrapper(guardrail_response),
+            }
+            yield {
+                "type": "done",
+                "conversation_id": conversation_id,
+                "chart_config": None,
+            }
+            return
+
+        # Use enriched query for all downstream processing
+        query = stream_understanding.enriched_query
+
         # --- DEEP ANALYSIS ROUTER: Route complex queries to QUIS ---
         routing_info = DeepAnalysisRouter.get_routing_info(query)
         if routing_info["route_to_quis"]:
-            logger.info(
-                f"Streaming: Routing to QUIS for deep analysis: {routing_info['reason']}"
-            )
+            logger.info(f"Streaming: Routing to QUIS for deep analysis: {routing_info['reason']}")
             try:
                 from services.agents.quis_graph import run_quis_analysis
 
@@ -2893,7 +2922,7 @@ class AIService:
                 for i, word in enumerate(words):
                     token = word + (" " if i < len(words) - 1 else "")
                     yield {"type": "token", "content": token}
-                yield {"type": "response_complete", "full_response": quis_text}
+                yield {"type": "response_complete", "full_response": _strip_json_wrapper(quis_text)}
                 # Handle QUIS charts
                 quis_charts = quis_result.get("charts", [])
                 if quis_charts:
@@ -2902,9 +2931,7 @@ class AIService:
                 messages.append({"role": "ai", "content": quis_text})
                 await save_conversation(conv["_id"], messages)
                 # Passive belief update (fire-and-forget)
-                asyncio.create_task(
-                    _passive_belief_update(user_id, query, quis_text, dataset_id)
-                )
+                asyncio.create_task(_passive_belief_update(user_id, query, quis_text, dataset_id))
                 yield {
                     "type": "done",
                     "conversation_id": str(conv["_id"]),
@@ -2912,9 +2939,7 @@ class AIService:
                 }
                 return
             except ImportError as e:
-                logger.warning(
-                    f"LangGraph not available, falling back to streaming: {e}"
-                )
+                logger.warning(f"LangGraph not available, falling back to streaming: {e}")
             except Exception as e:
                 logger.error(
                     f"QUIS analysis failed, falling back to streaming: {e}",
@@ -2924,13 +2949,15 @@ class AIService:
         sql_fallback = False  # tracks whether SQL was attempted but fell back to LLM
         column_corrections = {}  # tracks LLM column name corrections made by column_matcher
 
-        # --- SQL EXECUTION PATH (grounded, actual data) — same as HTTP for data questions ---
-        needs_sql = query_classifier.needs_sql_execution(query)
+        # --- SQL EXECUTION PATH: driven by routing (replaces query_classifier) ---
+        needs_sql = stream_understanding.routing == "sql"
         if needs_sql:
             file_path = dataset_doc.get("file_path")
             if file_path:
                 try:
-                    df = await enhanced_dataset_service.ensure_dataframe_for_agent(dataset_id, user_id, sample=False)
+                    df = await enhanced_dataset_service.ensure_dataframe_for_agent(
+                        dataset_id, user_id, sample=False
+                    )
                     yield {
                         "type": "thinking_step",
                         "label": "Executing data query",
@@ -2942,303 +2969,137 @@ class AIService:
                     if result.get("success") and result.get("response"):
                         ai_text = result["response"]
                         result_table = _build_result_table_payload(result)
+
+                        # --- RENDER INTENT: AI decides which blocks to show ---
+                        render_intent = result.get("render_intent") or {}
+                        should_show_chart = render_intent.get("show_chart", True)
+                        should_show_table = render_intent.get("show_table", True)
+                        should_show_sql = render_intent.get("show_sql", False)
+                        response_mode = render_intent.get("response_mode", "analytical")
+
+                        # Emit intent event early so frontend can configure shell
+                        yield {
+                            "type": "render_intent",
+                            "show_chart": should_show_chart,
+                            "show_table": should_show_table,
+                            "show_sql": should_show_sql,
+                            "response_mode": response_mode,
+                        }
+
+                        # Only generate chart if AI decided it's useful
                         chart_data = None
-                        _chart_intent = bool(
-                            re.search(
-                                r"(?i)\b(chart|plot|graph|visuali[sz]e?|bar|line|pie|scatter|histogram|heatmap)\b",
-                                query,
+                        if should_show_chart and result.get("data"):
+                            _chart_intent = bool(
+                                re.search(
+                                    r"(?i)\b(chart|plot|graph|visuali[sz]e?|bar|line|pie|scatter|histogram|heatmap)\b",
+                                    query,
+                                )
                             )
+                            _min_rows = 1 if _chart_intent else 2
+                            if len(result["data"]) >= _min_rows:
+                                yield {
+                                    "type": "thinking_step",
+                                    "label": "Building visualization",
+                                    "step": 4,
+                                }
+                                chart_data = await self._generate_chart_for_results(
+                                    result["data"], result.get("columns", []), query
+                                )
+
+                        sql_follow_ups = await _generate_follow_up_suggestions_llm(
+                            query, result.get("response", ""), metadata, result
                         )
-                        _min_rows = 1 if _chart_intent else 2
-                        if result.get("data") and len(result["data"]) >= _min_rows:
-                            yield {
-                                "type": "thinking_step",
-                                "label": "Building visualization",
-                                "step": 4,
-                            }
-                            chart_data = await self._generate_chart_for_results(
-                                result["data"], result.get("columns", []), query
-                            )
-                        sql_follow_ups = _generate_result_followups(
-                            query, result, metadata
-                        )
-                        show_follow_ups = _should_show_followups(
-                            query,
-                            ai_text,
-                            metadata,
-                            result=result,
-                            chart_data=chart_data,
-                        )
+                        show_follow_ups = True
                         # Stream the pre-computed answer token-by-token for consistent UX
                         words = ai_text.split()
                         for i, word in enumerate(words):
                             token = word + (" " if i < len(words) - 1 else "")
                             yield {"type": "token", "content": token}
-                        yield {"type": "response_complete", "full_response": ai_text}
+                        yield {
+                            "type": "response_complete",
+                            "full_response": _strip_json_wrapper(ai_text),
+                        }
                         if chart_data:
                             yield {"type": "chart", "chart_config": chart_data}
                         ai_message = {"role": "ai", "content": ai_text}
-                        if result.get("sql"):
+                        if should_show_sql and result.get("sql"):
                             ai_message["sql"] = result["sql"]
-                        if result_table:
+                        if should_show_table and result_table:
                             ai_message["result_table"] = result_table
                         if sql_follow_ups:
                             ai_message["follow_up_suggestions"] = sql_follow_ups
                             ai_message["show_follow_up_suggestions"] = show_follow_ups
                         if chart_data:
                             ai_message["chart_config"] = chart_data
+                        # Always persist full render_intent so history renders correctly
+                        ai_message["render_intent"] = render_intent
                         messages.append(ai_message)
                         await save_conversation(conv["_id"], messages)
                         # Passive belief update (fire-and-forget)
                         asyncio.create_task(
                             _passive_belief_update(user_id, query, ai_text, dataset_id)
                         )
+                        # Belief extraction for correction detection (fire-and-forget)
+                        asyncio.create_task(
+                            _try_extract_belief(user_id, dataset_id, query, ai_text, self.db)
+                        )
                         yield {
                             "type": "done",
                             "conversation_id": str(conv["_id"]),
                             "chart_config": chart_data,
-                            "sql": result.get("sql"),
-                            "result_table": result_table,
+                            "sql": result.get("sql") if should_show_sql else None,
+                            "result_table": result_table if should_show_table else None,
                             "follow_up_suggestions": sql_follow_ups,
                             "show_follow_up_suggestions": show_follow_ups,
+                            "render_intent": render_intent,
                         }
                         return
                 except Exception as e:
-                    logger.warning(
-                        f"Streaming SQL execution failed, falling back to LLM: {e}"
-                    )
+                    logger.warning(f"Streaming SQL execution failed, falling back to LLM: {e}")
                     sql_fallback = True
 
-        # --- RAG context retrieval ---
-        yield {
-            "type": "thinking_step",
-            "label": "Searching relevant context",
-            "step": 3,
-        }
-        dataset_context = await self._get_rag_context(
-            query, dataset_id, user_id, metadata
+        # --- CHAT AGENT HARNESS: conversational path handled by ReAct agent ---
+        df = await enhanced_dataset_service.ensure_dataframe_for_agent(
+            dataset_id, user_id, sample=False
+        )
+        if df is None:
+            yield {
+                "type": "error",
+                "content": "Dataset data could not be loaded for chat analysis.",
+            }
+            return
+
+        schema_lines = [f"{name}: {dtype}" for name, dtype in zip(df.columns, df.dtypes)]
+        schema_str = (
+            "Columns:\n" + "\n".join(schema_lines) if schema_lines else "Schema not available"
         )
 
-        # Rewrite query internally for better LLM understanding (NOT shown to user)
-        enhanced_query = await rewrite_query(query, dataset_context)
-        if enhanced_query != query:
-            logger.info(
-                f"Query rewritten: '{query[:50]}...' → '{enhanced_query[:50]}...'"
-            )
+        # Append belief context to schema for agent guidance
+        if belief_block:
+            schema_str = f"{schema_str}\n\n{belief_block}"
 
-        # Keep original query in messages for conversation history (shown to user)
-        # Only use enhanced_query for the LLM prompt
-
-        # Apply privacy controls to metadata for LLM prompts
-        privacy_metadata, _ = await self._apply_privacy_controls(
-            metadata, user_id, dataset_id
-        )
-        factory = PromptFactory(dataset_metadata=privacy_metadata)
-        optimized_messages = context_manager.optimize_history(messages)
-
-        # Retrieve relevant memories for context-aware responses
-        memories = await memory_service.retrieve_relevant_memories(
-            query, user_id, dataset_id
-        )
-
-        # Retrieve belief context — what the user already knows (passive novelty)
-        belief_context: list = []
-        try:
-            from services.agents.belief_store import (
-                get_belief_store,
-                PassiveBeliefIngestion,
-            )
-
-            _bs = get_belief_store()
-            belief_context = await PassiveBeliefIngestion.get_novelty_context(
-                _bs, user_id, query, max_beliefs=5
-            )
-        except Exception:
-            pass  # Belief store is optional — never block chat
-
-        prompt = factory.get_prompt(
-            PromptType.CONVERSATIONAL,
-            user_message=enhanced_query,
-            history=optimized_messages,
-            memories=memories,
-            belief_context=belief_context,
-        )
-
-        # Analyze query complexity for adaptive formatting
-        query_complexity = QueryComplexityAnalyzer.classify(query)
-        streaming_role = llm_router.resolve_conversational_role(query_complexity)
-        logger.info(
-            f"Query complexity: {query_complexity} for query: '{query[:50]}...'"
-        )
+        from services.agents.chat_agent_harness import run_chat_agent_streaming
 
         full_response = ""
         insights = []
         data_summary = ""
-        yield {"type": "thinking_step", "label": "Generating response", "step": 4}
 
         try:
-            async for chunk in llm_router.call_streaming(
-                prompt,
-                model_role=streaming_role,
-                is_conversational=True,
-                query_complexity=query_complexity,
+            async for event in run_chat_agent_streaming(
+                query=query,
+                dataset_id=dataset_id,
+                user_id=user_id,
+                df=df,
+                schema=schema_str,
             ):
-                if chunk["type"] == "token":
-                    full_response += chunk["content"]
-                    yield {"type": "token", "content": chunk["content"]}
-
-                elif chunk["type"] == "error":
-                    yield {"type": "error", "content": chunk["content"]}
-                    return
-
-                elif chunk["type"] == "done":
-                    try:
-                        # Strip markdown code fences — some models (e.g. Gemini Flash)
-                        # wrap JSON output in ```json ... ``` blocks
-                        _raw = full_response.strip()
-                        if _raw.startswith("```"):
-                            _raw = re.sub(r"^```[a-zA-Z]*\n?", "", _raw)
-                            _raw = re.sub(r"\n?```\s*$", "", _raw).strip()
-                        structured_response = json.loads(_raw)
-                        insights = structured_response.get("insights", [])
-                        if isinstance(insights, str):
-                            insights = [insights]
-                        data_summary = structured_response.get("data_summary", "")
-                        chart_config_raw = structured_response.get("chart_config")
-                        full_response = (
-                            structured_response.get("answer")
-                            or structured_response.get("response_text")
-                            or full_response
-                        )
-                    except (json.JSONDecodeError, TypeError):
-                        chart_config_raw = None
-
-                    if _needs_narrative_repair(query, full_response, chart_config_raw):
-                        logger.warning(
-                            "Streaming response omitted narrative summary; retrying with stricter instructions"
-                        )
-                        repaired_response = await llm_router.call(
-                            _build_narrative_repair_prompt(prompt),
-                            model_role=streaming_role,
-                            expect_json=True,
-                            is_conversational=True,
-                        )
-                        (
-                            _structured_response,
-                            repaired_text,
-                            repaired_insights,
-                            repaired_data_summary,
-                            _repaired_chart_config,
-                        ) = _extract_chat_payload_parts(repaired_response)
-                        if repaired_text and repaired_text.strip():
-                            full_response = repaired_text
-                            if repaired_insights:
-                                insights = repaired_insights
-                            if repaired_data_summary:
-                                data_summary = repaired_data_summary
-
-                    if chart_config_raw and (
-                        not full_response or not full_response.strip()
-                    ):
-                        full_response = (
-                            "I've prepared a supporting chart for this question, "
-                            "but the narrative summary was missing from the model response."
-                        )
-
-                    # Strip technical jargon for non-technical users
-                    full_response = _humanize_chat_text(full_response)
-                    insights = [_humanize_chat_text(i) for i in insights if i]
-
-                    yield {"type": "response_complete", "full_response": full_response}
-
+                if event.get("type") == "response_complete":
+                    full_response = event.get("full_response", "")
+                yield event
         except Exception as e:
-            error_str = str(e)
-            logger.error(f"Streaming error: {e}", exc_info=True)
-
-            from services.response_cache import fallback_generator, response_cache
-
-            # Handle rate limit errors gracefully with fallback
-            if (
-                "429" in error_str
-                or "rate" in error_str.lower()
-                or "limit" in error_str.lower()
-            ):
-                logger.warning(
-                    "Rate limit hit during streaming, providing fallback response"
-                )
-                response_cache.mark_rate_limited("openrouter", retry_after_seconds=1800)
-
-                fallback = fallback_generator.generate(
-                    query=query, dataset_metadata=metadata, error_type="rate_limit"
-                )
-
-                fallback_text = fallback.get(
-                    "response",
-                    "I'm currently experiencing high demand. Please try again shortly.",
-                )
-
-                # Stream the fallback response token by token for consistent UX
-                words = fallback_text.split()
-                for i, word in enumerate(words):
-                    token = word + (" " if i < len(words) - 1 else "")
-                    yield {"type": "token", "content": token}
-
-                yield {"type": "response_complete", "full_response": fallback_text}
-                yield {
-                    "type": "done",
-                    "conversation_id": conversation_id,
-                    "chart_config": None,
-                }
-                return
-
-            # Handle DNS / network / unavailable errors with contextual fallback
-            if any(
-                signal in error_str.lower()
-                for signal in [
-                    "name resolution",
-                    "dns",
-                    "unavailable",
-                    "timeout",
-                    "connection",
-                    "connect",
-                    "unreachable",
-                    "503",
-                    "502",
-                    "network",
-                    "refused",
-                    "reset",
-                ]
-            ):
-                logger.warning(
-                    f"Network/availability error during streaming, providing fallback: {error_str[:100]}"
-                )
-
-                fallback = fallback_generator.generate(
-                    query=query, dataset_metadata=metadata, error_type="unavailable"
-                )
-
-                fallback_text = fallback.get(
-                    "response",
-                    "I'm temporarily unable to reach my AI models. Please try again in a moment.",
-                )
-
-                words = fallback_text.split()
-                for i, word in enumerate(words):
-                    token = word + (" " if i < len(words) - 1 else "")
-                    yield {"type": "token", "content": token}
-
-                yield {"type": "response_complete", "full_response": fallback_text}
-                yield {
-                    "type": "done",
-                    "conversation_id": conversation_id,
-                    "chart_config": None,
-                }
-                return
-
-            # For all other errors, yield a user-friendly error
+            logger.error(f"Chat agent harness failed: {e}", exc_info=True)
             yield {
                 "type": "error",
-                "content": self._format_user_friendly_error(error_str, 500),
+                "content": self._format_user_friendly_error(str(e), 500),
             }
             return
 
@@ -3258,9 +3119,7 @@ class AIService:
             "comparison",
             "correlation",
         ]
-        should_generate_chart = any(
-            kw in full_response.lower() for kw in chart_keywords
-        )
+        should_generate_chart = any(kw in full_response.lower() for kw in chart_keywords)
 
         if should_generate_chart:
             try:
@@ -3282,14 +3141,14 @@ class AIService:
                     max_tokens=500,
                 )
 
-                if isinstance(chart_response, dict) and chart_response.get(
-                    "chart_config"
-                ):
+                if isinstance(chart_response, dict) and chart_response.get("chart_config"):
                     chart_config_raw = chart_response["chart_config"]
 
                     file_path = dataset_doc.get("file_path")
                     if file_path:
-                        df = await enhanced_dataset_service.ensure_dataframe_for_agent(dataset_id, user_id, sample=False)
+                        df = await enhanced_dataset_service.ensure_dataframe_for_agent(
+                            dataset_id, user_id, sample=False
+                        )
 
                         # --- COLUMN VALIDATION: Auto-fix LLM column references ---
                         available_columns = list(df.columns)
@@ -3299,9 +3158,7 @@ class AIService:
                             )
                         )
                         if corrections:
-                            logger.info(
-                                f"Streaming chart columns auto-corrected: {corrections}"
-                            )
+                            logger.info(f"Streaming chart columns auto-corrected: {corrections}")
                             column_corrections = corrections
 
                         from db.schemas_dashboard import (
@@ -3394,24 +3251,13 @@ class AIService:
                                 return (
                                     dtype in CATEGORICAL_DTYPES
                                     or dtype in string_types
-                                    or str(dtype).lower()
-                                    in ("utf8", "string", "categorical")
+                                    or str(dtype).lower() in ("utf8", "string", "categorical")
                                 )
 
-                            cat_cols = [
-                                c
-                                for c in df.columns
-                                if _is_categorical_dtype(df[c].dtype)
-                            ]
-                            num_cols = [
-                                c for c in df.columns if df[c].dtype in NUMERIC_DTYPES
-                            ]
+                            cat_cols = [c for c in df.columns if _is_categorical_dtype(df[c].dtype)]
+                            num_cols = [c for c in df.columns if df[c].dtype in NUMERIC_DTYPES]
                             # Don't pick ID-like columns
-                            cat_cols = [
-                                c
-                                for c in cat_cols
-                                if "id" not in c.lower() or len(c) > 5
-                            ]
+                            cat_cols = [c for c in cat_cols if "id" not in c.lower() or len(c) > 5]
                             if not columns and cat_cols and num_cols:
                                 columns = [cat_cols[0], num_cols[0]]
                             elif (
@@ -3431,9 +3277,7 @@ class AIService:
                             # Histogram only needs 1 numeric column
                             from services.charts.hydrate import NUMERIC_DTYPES
 
-                            num_cols = [
-                                c for c in df.columns if df[c].dtype in NUMERIC_DTYPES
-                            ]
+                            num_cols = [c for c in df.columns if df[c].dtype in NUMERIC_DTYPES]
                             if num_cols:
                                 columns = [num_cols[0]]
 
@@ -3443,16 +3287,12 @@ class AIService:
                         elif not isinstance(raw_group_by, list):
                             raw_group_by = None
                         if raw_group_by:
-                            raw_group_by = [
-                                g for g in raw_group_by if g in available_columns
-                            ]
+                            raw_group_by = [g for g in raw_group_by if g in available_columns]
                             if not raw_group_by:
                                 raw_group_by = None
 
                         class HydrationConfig:
-                            def __init__(
-                                self, chart_type, columns, aggregation, group_by=None
-                            ):
+                            def __init__(self, chart_type, columns, aggregation, group_by=None):
                                 self.chart_type = chart_type
                                 self.columns = columns.copy()
                                 self.aggregation = aggregation
@@ -3511,43 +3351,27 @@ class AIService:
                                 "data": chart_traces,
                                 "layout": layout,
                                 # Enterprise annotation layer (7-layer anatomy)
-                                "title_insight": chart_config_raw.get(
-                                    "title_insight", ""
-                                ),
-                                "subtitle_scope": chart_config_raw.get(
-                                    "subtitle_scope", ""
-                                ),
-                                "badge_type": chart_config_raw.get(
-                                    "badge_type", "KEY FINDING"
-                                ),
+                                "title_insight": chart_config_raw.get("title_insight", ""),
+                                "subtitle_scope": chart_config_raw.get("subtitle_scope", ""),
+                                "badge_type": chart_config_raw.get("badge_type", "KEY FINDING"),
                                 "insight_annotation": chart_config_raw.get(
                                     "insight_annotation", ""
                                 ),
                                 "key_numbers": chart_config_raw.get("key_numbers", []),
-                                "reading_guide": chart_config_raw.get(
-                                    "reading_guide", ""
-                                ),
-                                "action_chips": chart_config_raw.get(
-                                    "action_chips", []
-                                ),
+                                "reading_guide": chart_config_raw.get("reading_guide", ""),
+                                "action_chips": chart_config_raw.get("action_chips", []),
                                 "show_reference_line": chart_config_raw.get(
                                     "show_reference_line", False
                                 ),
-                                "reference_type": chart_config_raw.get(
-                                    "reference_type", "none"
-                                ),
+                                "reference_type": chart_config_raw.get("reference_type", "none"),
                                 "highlight_outliers": chart_config_raw.get(
                                     "highlight_outliers", False
                                 ),
                                 "color_strategy": chart_config_raw.get(
                                     "color_strategy", "brand_single"
                                 ),
-                                "tooltip_fields": chart_config_raw.get(
-                                    "tooltip_fields", []
-                                ),
-                                "drill_down_column": chart_config_raw.get(
-                                    "drill_down_column"
-                                ),
+                                "tooltip_fields": chart_config_raw.get("tooltip_fields", []),
+                                "drill_down_column": chart_config_raw.get("drill_down_column"),
                                 "position": chart_config_raw.get("position", "primary"),
                                 "span": chart_config_raw.get("span", 2),
                             }
@@ -3563,21 +3387,17 @@ class AIService:
                 yield {"type": "chart_error", "reason": "Chart couldn't be rendered"}
 
         try:
-            follow_up_suggestions = _generate_follow_up_suggestions(
+            follow_up_suggestions = await _generate_follow_up_suggestions_llm(
                 query, full_response, metadata
             )
-            logger.info(f"✓ Streaming: Follow-up suggestions generated ({len(follow_up_suggestions)} suggestions)")
+            logger.info(
+                f"✓ Streaming: Follow-up suggestions generated ({len(follow_up_suggestions)} suggestions)"
+            )
         except Exception as fup_err:
             logger.error(f"Failed to generate follow-up suggestions: {fup_err}", exc_info=True)
             follow_up_suggestions = []
 
-        show_follow_ups = _should_show_followups(
-            query,
-            full_response,
-            metadata,
-            chart_data=chart_data,
-            sql_fallback=sql_fallback,
-        )
+        show_follow_ups = True
 
         ai_message = {"role": "ai", "content": full_response}
         if insights:
@@ -3605,12 +3425,19 @@ class AIService:
 
         # Passive belief update (fire-and-forget, no explicit feedback needed)
         try:
-            asyncio.create_task(
-                _passive_belief_update(user_id, query, full_response, dataset_id)
-            )
+            asyncio.create_task(_passive_belief_update(user_id, query, full_response, dataset_id))
             logger.info("✓ Streaming: Belief update task created")
         except Exception as belief_err:
             logger.error(f"Failed to create belief task: {belief_err}", exc_info=True)
+
+        # Belief extraction for correction detection (fire-and-forget)
+        try:
+            asyncio.create_task(
+                _try_extract_belief(user_id, dataset_id, query, full_response, self.db)
+            )
+            logger.info("✓ Streaming: Belief extraction task created")
+        except Exception as bel_ext_err:
+            logger.error(f"Failed to create belief extraction task: {bel_ext_err}", exc_info=True)
 
         logger.info(f"⚡ Streaming: About to yield DONE event for conversation {conv['_id']}")
         yield {

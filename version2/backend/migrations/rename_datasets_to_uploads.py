@@ -13,7 +13,7 @@ The script will backup your data before making changes.
 Usage:
     python -m migrations.rename_datasets_to_uploads
 
-Author: DataSage AI Team
+Author: Signal AI Team
 Version: 1.0
 """
 
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 def get_mongo_client():
     """Get MongoDB client."""
     mongo_url = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
-    database_name = os.getenv("DATABASE_NAME", "datasage_ai")
+    database_name = os.getenv("DATABASE_NAME", "signal_ai")
 
     client = MongoClient(mongo_url)
     db = client[database_name]

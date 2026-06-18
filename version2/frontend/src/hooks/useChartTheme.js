@@ -5,7 +5,7 @@ export function useChartTheme() {
   const isDark = resolvedTheme === 'dark';
 
   const colors = {
-    revenue: '#8B5CF6',
+    revenue: '#E85002',
     expense: '#EF4444',
     profit: '#14B8A6',
     neutral: '#98989F',
@@ -19,7 +19,7 @@ export function useChartTheme() {
     border: 'rgba(255, 255, 255, 0.08)',
     lineColor: 'rgba(255, 255, 255, 0.03)',
     categorical: [
-      '#8B5CF6',
+      '#E85002',
       '#14B8A6',
       '#F59E0B',
       '#EC4899',
@@ -30,7 +30,7 @@ export function useChartTheme() {
   };
 
   const lightColors = {
-    revenue: '#7C3AED',
+    revenue: '#E85002',
     expense: '#DC2626',
     profit: '#0D9488',
     neutral: '#64748B',
@@ -44,7 +44,7 @@ export function useChartTheme() {
     border: 'rgba(0, 0, 0, 0.08)',
     lineColor: 'rgba(0, 0, 0, 0.03)',
     categorical: [
-      '#7C3AED',
+      '#E85002',
       '#0D9488',
       '#F59E0B',
       '#DB2777',
@@ -60,7 +60,7 @@ export function useChartTheme() {
     paper_bgcolor: 'transparent',
     plot_bgcolor: 'transparent',
     font: {
-      family: 'Inter, "Plus Jakarta Sans", system-ui, sans-serif',
+      family: 'Inter, system-ui, sans-serif',
       color: activeColors.text,
       size: 13,
     },
@@ -99,15 +99,15 @@ export function useChartTheme() {
 
   const palettes = {
     bar: activeColors.categorical,
-    line: ['#8B5CF6', '#14B8A6', '#3B82F6', '#F59E0B', '#EC4899', '#10B981'],
+    line: ['#E85002', '#14B8A6', '#3B82F6', '#F59E0B', '#EC4899', '#10B981'],
     pie: activeColors.categorical,
-    scatter: ['#8B5CF6', '#14B8A6', '#F59E0B', '#3B82F6', '#EC4899', '#F97316'],
-    box: ['#8B5CF6', '#14B8A6', '#F59E0B', '#EF4444', '#3B82F6', '#10B981'],
-    area: ['#8B5CF6', '#14B8A6', '#3B82F6', '#F59E0B', '#EC4899'],
+    scatter: ['#E85002', '#14B8A6', '#F59E0B', '#3B82F6', '#EC4899', '#F97316'],
+    box: ['#E85002', '#14B8A6', '#F59E0B', '#EF4444', '#3B82F6', '#10B981'],
+    area: ['#E85002', '#14B8A6', '#3B82F6', '#F59E0B', '#EC4899'],
     default: activeColors.categorical,
     heatmap: isDark
-      ? [[0, '#1e1b4b'], [0.2, '#4338ca'], [0.4, '#7c3aed'], [0.6, '#8b5cf6'], [0.8, '#a78bfa'], [1, '#c4b5fd']]
-      : [[0, '#f5f3ff'], [0.2, '#ddd6fe'], [0.4, '#c4b5fd'], [0.6, '#a78bfa'], [0.8, '#8b5cf6'], [1, '#7c3aed']],
+      ? [[0, '#1e1b4b'], [0.2, '#4338ca'], [0.4, '#E85002'], [0.6, '#E85002'], [0.8, '#E85002'], [1, '#c4b5fd']]
+      : [[0, '#f5f3ff'], [0.2, '#ddd6fe'], [0.4, '#c4b5fd'], [0.6, '#E85002'], [0.8, '#E85002'], [1, '#E85002']],
   };
 
   const getPalette = (chartType) => {

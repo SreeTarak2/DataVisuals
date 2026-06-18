@@ -1,0 +1,301 @@
+student_id,student_name,major,enrollment_date,gpa
+student_0001,Student 1,Business,2023-10-13,2.92
+student_0002,Student 2,Engineering,2024-12-13,2.21
+student_0003,Student 3,Biology,2023-01-31,2.80
+student_0004,Student 4,Business,2023-09-08,2.32
+student_0005,Student 5,Engineering,2021-12-22,3.80
+student_0006,Student 6,Business,2024-09-26,2.74
+student_0007,Student 7,Engineering,2024-08-18,3.45
+student_0008,Student 8,Biology,2023-02-27,3.09
+student_0009,Student 9,Engineering,2024-04-17,3.10
+student_0010,Student 10,Business,2022-01-07,3.92
+student_0011,Student 11,Engineering,2022-03-24,2.00
+student_0012,Student 12,Computer Science,2021-08-05,3.19
+student_0013,Student 13,Biology,2024-12-28,2.60
+student_0014,Student 14,Business,2021-03-30,2.43
+student_0015,Student 15,Business,2020-02-14,3.54
+student_0016,Student 16,Business,2023-02-07,3.02
+student_0017,Student 17,Biology,2020-07-12,2.08
+student_0018,Student 18,Business,2020-11-15,2.28
+student_0019,Student 19,Business,2024-12-26,3.16
+student_0020,Student 20,Biology,2021-06-08,3.62
+student_0021,Student 21,Computer Science,2023-03-14,2.80
+student_0022,Student 22,Biology,2024-02-12,2.15
+student_0023,Student 23,Business,2024-06-11,2.97
+student_0024,Student 24,Engineering,2024-08-18,3.80
+student_0025,Student 25,Computer Science,2023-05-04,3.28
+student_0026,Student 26,Computer Science,2024-02-05,3.62
+student_0027,Student 27,Engineering,2020-06-09,3.56
+student_0028,Student 28,Business,2021-12-13,3.76
+student_0029,Student 29,Engineering,2022-05-03,3.86
+student_0030,Student 30,Computer Science,2024-11-16,3.54
+student_0031,Student 31,Computer Science,2023-07-22,3.55
+student_0032,Student 32,Engineering,2020-04-20,2.61
+student_0033,Student 33,Computer Science,2021-10-15,3.08
+student_0034,Student 34,Biology,2021-10-31,3.00
+student_0035,Student 35,Biology,2020-11-09,2.10
+student_0036,Student 36,Engineering,2022-07-01,3.51
+student_0037,Student 37,Computer Science,2021-03-30,2.86
+student_0038,Student 38,Engineering,2020-10-30,2.26
+student_0039,Student 39,Computer Science,2022-09-01,3.14
+student_0040,Student 40,Computer Science,2023-01-27,2.80
+student_0041,Student 41,Computer Science,2022-03-27,3.00
+student_0042,Student 42,Biology,2024-04-09,2.27
+student_0043,Student 43,Biology,2022-09-26,2.79
+student_0044,Student 44,Biology,2023-02-23,3.23
+student_0045,Student 45,Biology,2021-05-11,2.14
+student_0046,Student 46,Engineering,2021-10-24,3.37
+student_0047,Student 47,Computer Science,2020-08-18,3.34
+student_0048,Student 48,Engineering,2022-01-18,2.70
+student_0049,Student 49,Business,2021-12-06,3.19
+student_0050,Student 50,Computer Science,2024-04-25,2.61
+student_0051,Student 51,Business,2023-06-16,3.64
+student_0052,Student 52,Engineering,2023-06-30,2.29
+student_0053,Student 53,Computer Science,2024-08-02,2.47
+student_0054,Student 54,Business,2020-11-15,3.52
+student_0055,Student 55,Computer Science,2020-08-18,3.48
+student_0056,Student 56,Biology,2023-06-25,3.85
+student_0057,Student 57,Business,2020-01-29,2.69
+student_0058,Student 58,Computer Science,2021-09-16,2.90
+student_0059,Student 59,Computer Science,2021-11-10,2.42
+student_0060,Student 60,Biology,2021-02-21,3.09
+student_0061,Student 61,Business,2023-01-28,2.97
+student_0062,Student 62,Biology,2023-11-24,3.40
+student_0063,Student 63,Computer Science,2022-02-10,3.17
+student_0064,Student 64,Computer Science,2021-06-07,2.34
+student_0065,Student 65,Business,2021-02-15,3.58
+student_0066,Student 66,Business,2020-04-18,2.93
+student_0067,Student 67,Computer Science,2020-05-16,2.78
+student_0068,Student 68,Business,2023-09-19,3.70
+student_0069,Student 69,Business,2024-11-05,2.22
+student_0070,Student 70,Business,2024-11-11,3.77
+student_0071,Student 71,Engineering,2021-04-18,3.96
+student_0072,Student 72,Computer Science,2021-10-08,2.97
+student_0073,Student 73,Computer Science,2021-01-16,2.40
+student_0074,Student 74,Engineering,2023-02-22,3.85
+student_0075,Student 75,Computer Science,2020-03-22,2.49
+student_0076,Student 76,Business,2021-11-14,2.98
+student_0077,Student 77,Biology,2020-02-07,2.69
+student_0078,Student 78,Business,2021-12-28,3.25
+student_0079,Student 79,Biology,2022-10-23,2.55
+student_0080,Student 80,Computer Science,2023-07-05,2.52
+student_0081,Student 81,Engineering,2024-12-28,4.00
+student_0082,Student 82,Computer Science,2023-02-10,3.90
+student_0083,Student 83,Biology,2020-11-06,2.68
+student_0084,Student 84,Engineering,2023-09-07,2.27
+student_0085,Student 85,Engineering,2022-12-02,3.92
+student_0086,Student 86,Biology,2022-05-04,2.48
+student_0087,Student 87,Biology,2022-05-23,3.94
+student_0088,Student 88,Business,2022-07-08,3.08
+student_0089,Student 89,Biology,2023-08-29,2.28
+student_0090,Student 90,Biology,2024-11-01,2.28
+student_0091,Student 91,Biology,2022-05-30,3.99
+student_0092,Student 92,Biology,2023-09-05,3.87
+student_0093,Student 93,Biology,2021-10-12,2.14
+student_0094,Student 94,Computer Science,2021-01-12,2.64
+student_0095,Student 95,Biology,2024-01-29,2.06
+student_0096,Student 96,Business,2024-12-07,3.95
+student_0097,Student 97,Engineering,2021-09-13,2.89
+student_0098,Student 98,Business,2020-11-07,3.56
+student_0099,Student 99,Computer Science,2020-09-26,2.37
+student_0100,Student 100,Business,2023-05-25,3.13
+student_0101,Student 101,Biology,2023-05-06,2.46
+student_0102,Student 102,Computer Science,2022-01-05,2.16
+student_0103,Student 103,Engineering,2020-10-01,3.00
+student_0104,Student 104,Engineering,2023-12-29,3.30
+student_0105,Student 105,Biology,2024-10-11,2.77
+student_0106,Student 106,Engineering,2020-10-08,2.33
+student_0107,Student 107,Biology,2020-03-07,2.82
+student_0108,Student 108,Computer Science,2021-07-06,3.90
+student_0109,Student 109,Biology,2024-02-29,3.34
+student_0110,Student 110,Biology,2024-03-31,2.41
+student_0111,Student 111,Biology,2022-06-18,3.73
+student_0112,Student 112,Engineering,2023-11-09,2.65
+student_0113,Student 113,Engineering,2024-12-22,2.49
+student_0114,Student 114,Engineering,2024-05-08,2.08
+student_0115,Student 115,Engineering,2024-01-14,2.63
+student_0116,Student 116,Computer Science,2022-12-02,2.22
+student_0117,Student 117,Engineering,2024-08-20,3.76
+student_0118,Student 118,Biology,2022-11-28,3.08
+student_0119,Student 119,Computer Science,2023-02-16,2.77
+student_0120,Student 120,Computer Science,2021-01-23,2.58
+student_0121,Student 121,Engineering,2024-12-16,2.61
+student_0122,Student 122,Business,2022-08-02,2.33
+student_0123,Student 123,Business,2023-06-09,3.84
+student_0124,Student 124,Biology,2022-08-07,3.66
+student_0125,Student 125,Engineering,2020-07-04,3.45
+student_0126,Student 126,Computer Science,2021-01-03,3.56
+student_0127,Student 127,Biology,2022-03-16,2.83
+student_0128,Student 128,Engineering,2020-02-21,2.36
+student_0129,Student 129,Biology,2024-12-12,2.91
+student_0130,Student 130,Business,2021-10-25,3.38
+student_0131,Student 131,Biology,2024-01-11,3.47
+student_0132,Student 132,Computer Science,2020-08-21,3.41
+student_0133,Student 133,Business,2020-06-23,3.05
+student_0134,Student 134,Engineering,2024-01-28,3.58
+student_0135,Student 135,Biology,2022-02-14,3.10
+student_0136,Student 136,Computer Science,2024-04-22,2.34
+student_0137,Student 137,Business,2023-03-04,3.74
+student_0138,Student 138,Biology,2020-11-28,3.74
+student_0139,Student 139,Biology,2024-04-24,3.42
+student_0140,Student 140,Engineering,2021-09-22,2.62
+student_0141,Student 141,Engineering,2021-08-14,3.25
+student_0142,Student 142,Computer Science,2020-09-26,3.92
+student_0143,Student 143,Computer Science,2023-06-29,3.53
+student_0144,Student 144,Computer Science,2022-07-28,3.00
+student_0145,Student 145,Engineering,2023-01-18,3.61
+student_0146,Student 146,Engineering,2021-05-02,2.43
+student_0147,Student 147,Engineering,2022-07-18,2.82
+student_0148,Student 148,Computer Science,2023-05-16,3.20
+student_0149,Student 149,Biology,2024-12-11,3.09
+student_0150,Student 150,Biology,2020-04-10,2.37
+student_0151,Student 151,Computer Science,2023-08-30,2.70
+student_0152,Student 152,Biology,2024-10-14,2.06
+student_0153,Student 153,Business,2021-11-09,3.84
+student_0154,Student 154,Computer Science,2020-08-11,2.83
+student_0155,Student 155,Biology,2020-11-26,3.34
+student_0156,Student 156,Biology,2022-07-21,3.50
+student_0157,Student 157,Business,2020-03-14,2.19
+student_0158,Student 158,Business,2021-10-23,2.74
+student_0159,Student 159,Engineering,2024-08-06,2.14
+student_0160,Student 160,Engineering,2024-09-23,3.10
+student_0161,Student 161,Business,2022-08-22,2.27
+student_0162,Student 162,Business,2021-11-05,3.05
+student_0163,Student 163,Biology,2023-11-26,2.42
+student_0164,Student 164,Computer Science,2020-08-11,3.14
+student_0165,Student 165,Computer Science,2022-09-17,3.45
+student_0166,Student 166,Business,2022-05-24,3.22
+student_0167,Student 167,Business,2021-06-15,3.05
+student_0168,Student 168,Business,2020-09-22,3.23
+student_0169,Student 169,Engineering,2022-11-30,3.46
+student_0170,Student 170,Engineering,2022-10-05,3.62
+student_0171,Student 171,Biology,2023-12-22,2.58
+student_0172,Student 172,Biology,2020-01-04,2.24
+student_0173,Student 173,Engineering,2023-07-04,3.59
+student_0174,Student 174,Biology,2024-06-25,3.23
+student_0175,Student 175,Engineering,2022-04-27,2.09
+student_0176,Student 176,Business,2023-02-21,3.61
+student_0177,Student 177,Biology,2020-01-24,3.28
+student_0178,Student 178,Business,2021-06-05,3.58
+student_0179,Student 179,Business,2021-09-06,3.01
+student_0180,Student 180,Business,2024-04-19,2.01
+student_0181,Student 181,Business,2021-11-30,2.79
+student_0182,Student 182,Computer Science,2024-08-31,2.35
+student_0183,Student 183,Business,2024-09-03,2.68
+student_0184,Student 184,Engineering,2022-08-29,3.59
+student_0185,Student 185,Biology,2022-09-13,2.31
+student_0186,Student 186,Engineering,2024-12-31,3.73
+student_0187,Student 187,Business,2022-08-05,3.57
+student_0188,Student 188,Engineering,2024-02-29,2.11
+student_0189,Student 189,Business,2023-03-03,3.45
+student_0190,Student 190,Business,2023-02-11,3.07
+student_0191,Student 191,Biology,2023-03-28,3.37
+student_0192,Student 192,Business,2020-05-15,3.94
+student_0193,Student 193,Business,2024-09-17,2.06
+student_0194,Student 194,Engineering,2023-07-07,3.07
+student_0195,Student 195,Biology,2023-03-15,3.21
+student_0196,Student 196,Biology,2023-05-03,2.23
+student_0197,Student 197,Business,2023-12-15,3.72
+student_0198,Student 198,Computer Science,2021-07-10,2.83
+student_0199,Student 199,Engineering,2024-12-01,2.48
+student_0200,Student 200,Engineering,2024-08-25,3.90
+student_0201,Student 201,Biology,2022-12-11,2.60
+student_0202,Student 202,Computer Science,2022-02-05,3.57
+student_0203,Student 203,Biology,2020-07-08,2.89
+student_0204,Student 204,Computer Science,2024-06-24,2.97
+student_0205,Student 205,Biology,2021-01-24,2.68
+student_0206,Student 206,Engineering,2024-02-09,3.75
+student_0207,Student 207,Business,2024-05-07,2.65
+student_0208,Student 208,Computer Science,2024-08-10,3.96
+student_0209,Student 209,Biology,2021-02-24,3.45
+student_0210,Student 210,Engineering,2022-03-04,3.43
+student_0211,Student 211,Computer Science,2020-01-09,2.62
+student_0212,Student 212,Computer Science,2023-11-08,3.70
+student_0213,Student 213,Computer Science,2021-11-13,2.93
+student_0214,Student 214,Computer Science,2020-07-30,3.04
+student_0215,Student 215,Business,2020-02-16,3.16
+student_0216,Student 216,Business,2023-08-01,3.78
+student_0217,Student 217,Business,2021-02-14,2.39
+student_0218,Student 218,Business,2022-12-26,2.64
+student_0219,Student 219,Engineering,2023-10-06,2.24
+student_0220,Student 220,Biology,2020-11-18,2.55
+student_0221,Student 221,Computer Science,2023-06-29,3.12
+student_0222,Student 222,Computer Science,2021-02-27,3.09
+student_0223,Student 223,Business,2021-07-09,2.28
+student_0224,Student 224,Business,2023-03-21,2.49
+student_0225,Student 225,Computer Science,2021-09-29,3.23
+student_0226,Student 226,Business,2023-01-12,2.89
+student_0227,Student 227,Biology,2020-02-29,2.94
+student_0228,Student 228,Computer Science,2020-08-04,2.77
+student_0229,Student 229,Computer Science,2022-05-23,2.78
+student_0230,Student 230,Engineering,2023-06-16,2.71
+student_0231,Student 231,Business,2024-08-01,2.40
+student_0232,Student 232,Computer Science,2024-03-27,3.53
+student_0233,Student 233,Biology,2020-07-09,3.63
+student_0234,Student 234,Engineering,2020-07-18,2.91
+student_0235,Student 235,Engineering,2022-08-21,2.46
+student_0236,Student 236,Biology,2020-10-21,3.72
+student_0237,Student 237,Business,2022-01-14,2.78
+student_0238,Student 238,Business,2024-06-03,3.72
+student_0239,Student 239,Business,2022-07-17,2.98
+student_0240,Student 240,Computer Science,2022-08-31,2.23
+student_0241,Student 241,Engineering,2022-08-02,3.69
+student_0242,Student 242,Business,2024-04-21,2.70
+student_0243,Student 243,Biology,2022-11-06,2.21
+student_0244,Student 244,Computer Science,2021-10-29,3.11
+student_0245,Student 245,Computer Science,2024-06-10,2.60
+student_0246,Student 246,Engineering,2022-03-31,3.18
+student_0247,Student 247,Biology,2023-06-25,2.49
+student_0248,Student 248,Biology,2022-09-14,2.77
+student_0249,Student 249,Business,2021-03-02,3.63
+student_0250,Student 250,Engineering,2024-05-25,3.96
+student_0251,Student 251,Business,2023-01-20,3.39
+student_0252,Student 252,Biology,2023-09-19,3.34
+student_0253,Student 253,Engineering,2020-08-22,3.18
+student_0254,Student 254,Engineering,2021-10-28,3.11
+student_0255,Student 255,Engineering,2020-12-26,2.62
+student_0256,Student 256,Engineering,2020-05-22,3.20
+student_0257,Student 257,Engineering,2021-11-01,2.99
+student_0258,Student 258,Computer Science,2020-07-04,2.44
+student_0259,Student 259,Biology,2024-12-22,3.16
+student_0260,Student 260,Computer Science,2024-03-30,2.29
+student_0261,Student 261,Biology,2022-07-16,3.06
+student_0262,Student 262,Engineering,2023-06-14,3.16
+student_0263,Student 263,Biology,2021-02-25,3.36
+student_0264,Student 264,Business,2021-09-05,3.14
+student_0265,Student 265,Business,2022-06-09,3.44
+student_0266,Student 266,Business,2020-07-01,3.17
+student_0267,Student 267,Engineering,2024-10-01,2.26
+student_0268,Student 268,Business,2020-05-07,2.74
+student_0269,Student 269,Computer Science,2020-01-02,3.41
+student_0270,Student 270,Business,2020-08-12,3.72
+student_0271,Student 271,Computer Science,2021-04-26,2.86
+student_0272,Student 272,Engineering,2023-07-04,2.64
+student_0273,Student 273,Engineering,2022-04-11,2.76
+student_0274,Student 274,Biology,2023-09-18,2.35
+student_0275,Student 275,Biology,2021-01-20,3.11
+student_0276,Student 276,Business,2024-09-16,2.83
+student_0277,Student 277,Business,2024-11-22,3.34
+student_0278,Student 278,Biology,2020-01-24,2.14
+student_0279,Student 279,Computer Science,2020-10-21,3.44
+student_0280,Student 280,Engineering,2023-09-09,2.87
+student_0281,Student 281,Biology,2020-06-22,2.27
+student_0282,Student 282,Engineering,2024-10-27,2.91
+student_0283,Student 283,Engineering,2023-06-30,2.36
+student_0284,Student 284,Engineering,2023-02-04,3.64
+student_0285,Student 285,Engineering,2021-12-28,2.45
+student_0286,Student 286,Engineering,2023-05-23,2.01
+student_0287,Student 287,Engineering,2024-09-30,3.46
+student_0288,Student 288,Business,2022-04-21,3.85
+student_0289,Student 289,Business,2020-03-09,3.96
+student_0290,Student 290,Engineering,2023-12-14,2.74
+student_0291,Student 291,Engineering,2023-11-15,2.16
+student_0292,Student 292,Business,2022-08-10,3.03
+student_0293,Student 293,Computer Science,2021-05-17,2.94
+student_0294,Student 294,Computer Science,2023-11-01,3.27
+student_0295,Student 295,Business,2023-06-09,2.11
+student_0296,Student 296,Business,2022-12-31,3.56
+student_0297,Student 297,Engineering,2022-07-18,3.03
+student_0298,Student 298,Engineering,2023-03-21,3.47
+student_0299,Student 299,Engineering,2021-12-23,3.92
+student_0300,Student 300,Business,2021-08-15,2.34

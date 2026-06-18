@@ -22,7 +22,7 @@ const ChatMessage = memo(({ msg, isUser }) => {
             animate={{ opacity: 1, x: 0 }}
             className={`flex gap-3 mb-4 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
         >
-            <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border ${isUser ? 'bg-ocean/20 border-ocean/30 text-ocean' : 'bg-purple-500/20 border-purple-500/30 text-purple-400'
+            <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border ${isUser ? 'bg-ocean/20 border-ocean/30 text-ocean' : 'bg-orange-500/20 border-orange-500/30 text-orange-400'
                 }`}>
                 {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
             </div>
@@ -214,8 +214,8 @@ const Observatory = () => {
                     <div className="text-pearl font-bold truncate text-sm">{selectedDataset?.name || 'INITIALIZING...'}</div>
                     {/* Agent Status Indicator */}
                     {isAnalyzing && (
-                        <div className="mt-2 text-[10px] text-purple-400 flex items-center gap-2 animate-pulse">
-                            <div className="w-1.5 h-1.5 bg-purple-400 rounded-full" />
+                        <div className="mt-2 text-[10px] text-orange-400 flex items-center gap-2 animate-pulse">
+                            <div className="w-1.5 h-1.5 bg-orange-400 rounded-full" />
                             AGENTS BUSY: ANALYZING DATA...
                         </div>
                     )}
@@ -230,7 +230,7 @@ const Observatory = () => {
                     {/* Streaming Message */}
                     {isStreaming && (
                         <div className="flex gap-3 mb-4 flex-row">
-                            <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border bg-purple-500/20 border-purple-500/30 text-purple-400">
+                            <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border bg-orange-500/20 border-orange-500/30 text-orange-400">
                                 <Bot className="w-4 h-4" />
                             </div>
                             <div className="flex flex-col max-w-[85%] items-start">

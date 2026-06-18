@@ -1,6 +1,6 @@
 # backend/core/chart_definitions.py
 """
-Chart Definition Registry for DataSage AI.
+Chart Definition Registry for Signal AI.
 
 This is the single source of truth for chart knowledge. Each chart entry contains:
 - id: machine id

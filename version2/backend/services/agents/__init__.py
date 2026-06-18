@@ -8,7 +8,7 @@ LangGraph-based implementation of the QUIS framework with:
 - Reflexion/Critic loops for self-correction
 - Subjective Novelty Detection via Belief Graph
 
-Author: DataSage AI
+Author: Signal AI
 """
 
 from .state import AgentState, create_initial_state

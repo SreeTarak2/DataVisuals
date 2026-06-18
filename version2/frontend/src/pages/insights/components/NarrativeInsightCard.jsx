@@ -1,6 +1,6 @@
 /**
  * NarrativeInsightCard — A premium, wide card design for narrative insights.
- * Ported from datasage-intelligence/src/components/InsightCard.tsx
+ * Ported from signal-intelligence/src/components/InsightCard.tsx
  */
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -81,7 +81,7 @@ const NarrativeInsightCard = ({ insight, onInvestigate }) => {
 
                         <button
                             onClick={() => onInvestigate && onInvestigate(`Investigate this finding: "${description}". What are the implications and what should I do about it?`)}
-                            className="flex items-center gap-1.5 text-[13px] text-violet-400 hover:text-violet-300 transition-colors font-medium bg-violet-500/10 px-3 py-1.5 rounded-lg border border-violet-500/20"
+                            className="flex items-center gap-1.5 text-[13px] text-orange-400 hover:text-orange-300 transition-colors font-medium bg-orange-500/10 px-3 py-1.5 rounded-lg border border-orange-500/20"
                         >
                             <MessageSquare className="w-3 h-3" />
                             Ask Assistant

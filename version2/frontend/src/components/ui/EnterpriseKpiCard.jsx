@@ -1,14 +1,14 @@
 'use client'
 
-import React, { useMemo, useState, forwardRef } from 'react'
-import { motion } from 'framer-motion'
+import React, { useMemo, useState, forwardRef, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
-  TrendingUp, TrendingDown, Minus,
+  TrendingUp, TrendingDown, Minus, Pencil, Check, X,
   DollarSign, Users, FileText, BarChart3,
   Activity, Target, Zap, Database, Package,
   ShoppingCart, Percent, Hash, Calendar,
   MessageSquare, Info, Lightbulb, AlertCircle,
-  RefreshCw, Clock
+  RefreshCw, Clock, AlertTriangle
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Skeleton } from './skeleton'
@@ -24,86 +24,114 @@ const ICON_MAP = {
   DollarSign, Users, FileText, BarChart3, Activity,
   Target, Zap, Database, Package, ShoppingCart,
   Percent, Hash, Calendar, TrendingUp,
-  MessageSquare, Info, Lightbulb
+  MessageSquare, Info, Lightbulb,
 }
 
-// ─── Status Colors ───
-const STATUS_COLORS = {
-  success: {
-    border: 'border-l-emerald-500',
-    text: 'text-emerald-600 dark:text-emerald-400',
-    hex: '#10b981',
-    bg: 'bg-emerald-500/10',
-    badge: 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
-  },
-  critical: {
-    border: 'border-l-red-500',
-    text: 'text-red-600 dark:text-red-400',
-    hex: '#ef4444',
-    bg: 'bg-red-500/10',
-    badge: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300'
-  },
-  neutral: {
-    border: 'border-l-slate-400 dark:border-l-slate-500',
-    text: 'text-slate-600 dark:text-slate-400',
-    hex: '#64748b',
-    bg: 'bg-slate-500/10',
-    badge: 'bg-slate-100 dark:bg-slate-500/20 text-slate-700 dark:text-slate-300'
-  }
-}
-
-// Enterprise accent colors from backend semantic_color calculation
-const ACCENT_COLORS = {
-  green: {
-    border: 'border-l-emerald-500',
-    text: 'text-emerald-600 dark:text-emerald-400',
-    hex: '#10b981',
-    bg: 'bg-emerald-500/10',
-  },
-  red: {
-    border: 'border-l-red-500',
-    text: 'text-red-600 dark:text-red-400',
-    hex: '#ef4444',
-    bg: 'bg-red-500/10',
-  },
-  amber: {
-    border: 'border-l-amber-500',
-    text: 'text-amber-600 dark:text-amber-400',
-    hex: '#f59e0b',
-    bg: 'bg-amber-500/10',
-  },
-  teal: {
-    border: 'border-l-teal-500',
-    text: 'text-teal-600 dark:text-teal-400',
-    hex: '#14b8a6',
-    bg: 'bg-teal-500/10',
-  },
-  neutral: {
-    border: 'border-l-slate-400 dark:border-l-slate-500',
-    text: 'text-slate-600 dark:text-slate-400',
-    hex: '#64748b',
-    bg: 'bg-slate-500/10',
-  },
-}
-
-const NEUTRAL_ACCENTS = [
-  { border: 'border-l-cyan-500', text: 'text-cyan-600 dark:text-cyan-400', hex: '#06b6d4', bg: 'bg-cyan-500/10' },
-  { border: 'border-l-violet-500', text: 'text-violet-600 dark:text-violet-400', hex: '#8b5cf6', bg: 'bg-violet-500/10' },
-  { border: 'border-l-amber-500', text: 'text-amber-600 dark:text-amber-400', hex: '#f59e0b', bg: 'bg-amber-500/10' },
-  { border: 'border-l-rose-500', text: 'text-rose-600 dark:text-rose-400', hex: '#f43f5e', bg: 'bg-rose-500/10' },
-  { border: 'border-l-teal-500', text: 'text-teal-600 dark:text-teal-400', hex: '#14b8a6', bg: 'bg-teal-500/10' },
+const ICON_OPTIONS = [
+  { value: 'DollarSign', label: '💰 Revenue' },
+  { value: 'Users', label: '👥 Users' },
+  { value: 'Percent', label: '📊 Percentage' },
+  { value: 'BarChart3', label: '📈 Chart' },
+  { value: 'Activity', label: '📉 Activity' },
+  { value: 'Target', label: '🎯 Target' },
+  { value: 'ShoppingCart', label: '🛒 Sales' },
+  { value: 'Package', label: '📦 Product' },
+  { value: 'Hash', label: '#️⃣ Count' },
+  { value: 'Calendar', label: '📅 Date' },
+  { value: 'Clock', label: '⏱️ Time' },
+  { value: 'Database', label: '🗄️ Data' },
 ]
 
-// ─── Utility Functions ───
-const hashString = (value = '') => {
-  let hash = 0
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(i)
-    hash |= 0
-  }
-  return Math.abs(hash)
+// ─── Metric Type Classification ───
+const classifyMetricType = (props) => {
+  const {
+    title = '',
+    format,
+    sparklineData,
+    targetValue,
+    achievementPercent,
+    isAnomaly,
+    anomalyDirection,
+    zScore,
+    businessCategory,
+    deltaPercent,
+    benchmarkValue,
+  } = props
+
+  const hasSparkline = Array.isArray(sparklineData)
+    ? sparklineData.length > 2
+    : sparklineData?.data?.length > 2
+
+  // 1. Anomaly — z-score alert, trumps all other types
+  if (isAnomaly || (zScore != null && Math.abs(zScore) > 2)) return 'anomaly'
+
+  // 2. Goal — has explicit target with progress measurement
+  const hasTarget = targetValue != null && targetValue !== ''
+  const hasProgress = achievementPercent != null && achievementPercent !== undefined
+  if (hasTarget || hasProgress) return 'goal'
+
+  // 3. Health — rate/score/quality metrics
+  if (format === 'percentage' && /score|rate|quality|health|uptime|sla|satisfaction|completion|accuracy|coverage/i.test(title)) return 'health'
+
+  // 4. Snapshot — no sparkline and no significant delta
+  if (!hasSparkline && (deltaPercent == null)) return 'snapshot'
+
+  // 5. Trend — has sparkline and/or delta (default for most metrics)
+  return 'trend'
 }
 
+// ─── Layout definitions per metric type ───
+const METRIC_LAYOUTS = {
+  trend:    ['header', 'value', 'delta', 'sparkline', 'submetrics', 'freshness', 'insight'],
+  snapshot: ['header', 'value', 'sparkline', 'submetrics',              'insight'],
+  health:   ['header', 'healthHero', 'sparkline', 'submetrics', 'freshness', 'insight'],
+  goal:     ['header', 'value', 'progressBar', 'delta', 'sparkline', 'submetrics', 'insight'],
+  anomaly:  ['header', 'value', 'anomalyBadge', 'delta', 'sparkline', 'submetrics', 'insight'],
+}
+
+// ─── Deterministic Accent Color System ───
+const CATEGORY_ACCENT_MAP = {
+  revenue: 'emerald',
+  cost: 'rose',
+  volume: 'blue',
+  users: 'indigo',
+  rate_metric: 'violet',
+  churn_risk: 'red',
+  price: 'teal',
+  performance: 'amber',
+  duration: 'cyan',
+  quantity: 'emerald',
+  growth: 'teal',
+  neutral: 'neutral',
+  unknown: 'neutral',
+}
+
+const ACCENT_META = {
+  emerald: { hex: '#10b981' },
+  teal:    { hex: '#14b8a6' },
+  blue:    { hex: '#3b82f6' },
+  indigo:  { hex: '#6366f1' },
+  violet:  { hex: '#8b5cf6' },
+  amber:   { hex: '#f59e0b' },
+  orange:  { hex: '#E85002' },
+  rose:    { hex: '#f43f5e' },
+  cyan:    { hex: '#06b6d4' },
+  red:     { hex: '#ef4444' },
+  neutral: { hex: '#6b7280' },
+}
+
+const getAccentForCategory = (category) => {
+  return ACCENT_META[CATEGORY_ACCENT_MAP[category] || 'neutral'] || ACCENT_META.neutral
+}
+
+// ─── Trend Colors ───
+const getTrendColor = (direction) => {
+  if (direction === 'up') return 'var(--kpi-success)'
+  if (direction === 'down') return 'var(--kpi-critical)'
+  return 'var(--kpi-text-muted)'
+}
+
+// ─── Utility Functions ───
 const formatValue = (value, format = 'number') => {
   if (value === null || value === undefined || value === 'N/A') return 'N/A'
 
@@ -115,12 +143,7 @@ const formatValue = (value, format = 'number') => {
       if (Math.abs(num) >= 1e9) return `$${(num / 1e9).toFixed(2)}B`
       if (Math.abs(num) >= 1e6) return `$${(num / 1e6).toFixed(2)}M`
       if (Math.abs(num) >= 1e3) return `$${(num / 1e3).toFixed(2)}K`
-      return new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 2
-      }).format(num)
+      return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(num)
     case 'percentage':
       return `${num.toFixed(1)}%`
     case 'integer':
@@ -138,42 +161,10 @@ const formatValue = (value, format = 'number') => {
   }
 }
 
-const formatFullPrecision = (value, format = 'number') => {
-  if (value === null || value === undefined || value === 'N/A') return 'N/A'
-
-  const num = typeof value === 'string' ? parseFloat(value.replace(/[^0-9.-]/g, '')) : value
-  if (isNaN(num)) return String(value)
-
-  switch (format) {
-    case 'currency':
-      return new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      }).format(num)
-    case 'percentage':
-      return `${num.toFixed(2)}%`
-    default:
-      return new Intl.NumberFormat('en-US', {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 2
-      }).format(num)
-  }
-}
-
 const humanizeComparisonLabel = (label) => {
   if (!label) return 'vs previous period'
   if (/row order|first half|time-sorted/i.test(label)) return 'vs previous period'
   return label
-}
-
-const getStatusLabel = (status, deltaDirection, higherIsBetter) => {
-  if (status === 'success') return higherIsBetter ? 'Improving' : 'Improving'
-  if (status === 'critical') return 'Elevated'
-  if (deltaDirection === 'up') return 'Elevated'
-  if (deltaDirection === 'down') return 'Lower'
-  return 'Stable'
 }
 
 const getCoverageCount = (datasetData) => {
@@ -188,18 +179,26 @@ const getCoverageCount = (datasetData) => {
 
 const getValuePrefix = (format, unitPrefix) => {
   if (unitPrefix) return unitPrefix
-  if (format === 'currency') return '$'
   return ''
 }
 
 const getValueSuffix = (format, unitSuffix) => {
   if (unitSuffix) return unitSuffix
-  if (format === 'percentage') return '%'
   return ''
 }
 
-// ─── Mini Sparkline Component ───
-const MiniSparkline = ({ data, color = '#10b981', height = 48, width = 240 }) => {
+// ─── Mini Sparkline with Baseline Band & Forecast ───
+const MiniSparklineWithBaseline = ({
+  data,
+  baselineMean,
+  baselineStd,
+  color = '#10b981',
+  isAnomaly,
+  anomalyDirection,
+  forecastValue,
+  height = 40,
+  width = 200,
+}) => {
   if (!data || data.length < 2) return null
 
   const min = Math.min(...data)
@@ -210,12 +209,44 @@ const MiniSparkline = ({ data, color = '#10b981', height = 48, width = 240 }) =>
   const points = data.map((v, i) => {
     const x = (i / (data.length - 1)) * (width - padding * 2) + padding
     const y = height - padding - ((v - min) / range) * (height - padding * 2)
-    return `${x},${y}`
+    return { x, y, value: v }
   })
 
-  const pathD = `M ${points.join(' L ')}`
+  const pathD = `M ${points.map(p => `${p.x},${p.y}`).join(' L ')}`
   const areaD = `${pathD} L ${width - padding},${height} L ${padding},${height} Z`
-  const lastPt = points[points.length - 1].split(',')
+  const lastPt = points[points.length - 1]
+
+  let baselineBandD = null
+  let baselineLineY = null
+  if (baselineMean != null && baselineStd != null && baselineStd > 0) {
+    const bandTop = height - padding - ((baselineMean + baselineStd - min) / range) * (height - padding * 2)
+    const bandBottom = height - padding - ((baselineMean - baselineStd - min) / range) * (height - padding * 2)
+    baselineBandD = `M ${padding},${bandTop} L ${width - padding},${bandTop} L ${width - padding},${bandBottom} L ${padding},${bandBottom} Z`
+    baselineLineY = height - padding - ((baselineMean - min) / range) * (height - padding * 2)
+  }
+
+  let forecastLineD = null
+  if (forecastValue != null) {
+    const fX = width - padding
+    const fY = height - padding - ((forecastValue - min) / range) * (height - padding * 2)
+    forecastLineD = `M ${lastPt.x},${lastPt.y} L ${fX},${fY}`
+  }
+
+  const anomalyDots = []
+  if (isAnomaly) {
+    points.forEach((p, i) => {
+      anomalyDots.push(
+        <circle key={i} cx={p.x} cy={p.y} r={3} fill="#ef4444" stroke="rgba(239,68,68,0.3)" strokeWidth={2} />
+      )
+    })
+  }
+
+  let dotColor = color
+  let dotRadius = 3
+  if (anomalyDirection === 'above_normal' || anomalyDirection === 'below_normal') {
+    dotColor = '#ef4444'
+    dotRadius = 4
+  }
 
   return (
     <svg
@@ -226,9 +257,18 @@ const MiniSparkline = ({ data, color = '#10b981', height = 48, width = 240 }) =>
       className="block w-full"
       aria-hidden="true"
     >
+      {baselineBandD && <path d={baselineBandD} fill={color} fillOpacity="0.04" />}
+      {baselineLineY != null && (
+        <line x1={padding} y1={baselineLineY} x2={width - padding} y2={baselineLineY} stroke={color} strokeWidth="0.75" strokeDasharray="4 3" strokeOpacity="0.25" />
+      )}
       <path d={areaD} fill={color} fillOpacity="0.08" />
       <path d={pathD} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={lastPt[0]} cy={lastPt[1]} r="3" fill={color} />
+      {forecastLineD && (
+        <path d={forecastLineD} fill="none" stroke={color} strokeWidth="1.25" strokeDasharray="4 4" strokeOpacity="0.5" strokeLinecap="round" />
+      )}
+      {isAnomaly ? anomalyDots : (
+        <circle cx={lastPt.x} cy={lastPt.y} r={dotRadius} fill={dotColor} />
+      )}
     </svg>
   )
 }
@@ -236,27 +276,24 @@ const MiniSparkline = ({ data, color = '#10b981', height = 48, width = 240 }) =>
 // ─── Skeleton Card ───
 const SkeletonKpiCard = ({ animationDelay = 0 }) => (
   <motion.div
-    initial={{ opacity: 0, y: 10 }}
+    initial={{ opacity: 0, y: 8 }}
     animate={{ opacity: 1, y: 0 }}
-    transition={{ duration: 0.4, delay: animationDelay }}
-    className="h-full"
+    transition={{ duration: 0.35, delay: animationDelay, ease: [0.16, 1, 0.3, 1] }}
+    className="kpi-shell"
+    data-accent="neutral"
   >
-    <div className="h-full flex flex-col gap-4 p-5 rounded-xl border border-border/50 bg-card overflow-hidden">
-      <div className="flex items-center justify-between">
-        <Skeleton className="h-3 w-32 rounded" />
-        <Skeleton className="h-5 w-16 rounded-full" />
+    <div className="kpi-core">
+      <div className="flex items-center justify-between mb-4">
+        <Skeleton className="h-3 w-28 rounded" />
+        <Skeleton className="h-5 w-14 rounded-full" />
       </div>
-      <div className="space-y-2">
-        <Skeleton className="h-9 w-36 rounded" />
-        <Skeleton className="h-3 w-20 rounded" />
+      <Skeleton className="h-9 w-32 rounded mb-2" />
+      <Skeleton className="h-3 w-20 rounded mb-3" />
+      <Skeleton className="h-8 w-full rounded" />
+      <div className="flex gap-2 mt-3">
+        <Skeleton className="h-10 flex-1 rounded-lg" />
+        <Skeleton className="h-10 flex-1 rounded-lg" />
       </div>
-      <Skeleton className="h-10 w-full rounded" />
-      <div className="grid grid-cols-3 gap-2">
-        <Skeleton className="h-12 rounded-lg" />
-        <Skeleton className="h-12 rounded-lg" />
-        <Skeleton className="h-12 rounded-lg" />
-      </div>
-      <Skeleton className="h-16 w-full rounded-lg" />
     </div>
   </motion.div>
 )
@@ -264,23 +301,19 @@ const SkeletonKpiCard = ({ animationDelay = 0 }) => (
 // ─── Empty Card ───
 const EmptyKpiCard = ({ title, reason = 'No data available', icon = 'BarChart3', animationDelay = 0 }) => {
   const IconComponent = ICON_MAP[icon] || BarChart3
-
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: animationDelay }}
-      className="h-full"
+      transition={{ duration: 0.35, delay: animationDelay, ease: [0.16, 1, 0.3, 1] }}
     >
-      <div className="h-full flex flex-col items-center justify-center p-6 rounded-xl border border-dashed border-border/50 bg-card">
-        <div className="flex flex-col items-center gap-3 text-center">
-          <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
-            <IconComponent className="w-5 h-5 text-muted-foreground/50" />
-          </div>
-          <div>
-            <p className="text-sm font-medium text-foreground">{title}</p>
-            <p className="text-xs text-muted-foreground mt-1">{reason}</p>
-          </div>
+      <div className="kpi-empty">
+        <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: 'rgba(128,128,128,0.04)' }}>
+          <IconComponent className="w-5 h-5" style={{ color: 'rgba(128,128,128,0.25)' }} />
+        </div>
+        <div>
+          <p className="text-sm font-medium" style={{ color: 'var(--kpi-text-secondary)' }}>{title}</p>
+          <p className="text-xs mt-1" style={{ color: 'var(--kpi-text-muted)' }}>{reason}</p>
         </div>
       </div>
     </motion.div>
@@ -290,29 +323,34 @@ const EmptyKpiCard = ({ title, reason = 'No data available', icon = 'BarChart3',
 // ─── Error Card ───
 const ErrorKpiCard = ({ title, errorMessage = 'Failed to load data', icon = 'BarChart3', animationDelay = 0, onRefresh }) => {
   const IconComponent = ICON_MAP[icon] || BarChart3
-
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: animationDelay }}
-      className="h-full"
+      transition={{ duration: 0.35, delay: animationDelay, ease: [0.16, 1, 0.3, 1] }}
     >
-      <div className="h-full flex flex-col p-5 rounded-xl border border-red-200 dark:border-red-500/20 bg-card overflow-hidden">
-        <div className="flex items-center gap-2 mb-4">
-          <IconComponent className="w-4 h-4 text-muted-foreground/60" />
-          <span className="text-xs font-medium text-muted-foreground">{title}</span>
+      <div className="kpi-error">
+        <div className="flex items-center gap-2 mb-3">
+          <IconComponent className="w-3.5 h-3.5" style={{ color: 'var(--kpi-text-muted)' }} />
+          <span className="text-xs font-medium" style={{ color: 'var(--kpi-text-muted)' }}>{title}</span>
         </div>
-        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center">
-          <AlertCircle className="w-8 h-8 text-red-500/70" />
+        <div className="flex flex-col items-center justify-center gap-3 text-center py-2">
+          <AlertCircle className="w-7 h-7" style={{ color: 'rgba(239, 68, 68, 0.5)' }} />
           <div>
-            <p className="text-sm font-medium text-foreground">Unable to load data</p>
-            <p className="text-xs text-muted-foreground mt-1">{errorMessage}</p>
+            <p className="text-sm font-medium" style={{ color: 'var(--kpi-text-primary)' }}>Unable to load data</p>
+            <p className="text-xs mt-1" style={{ color: 'var(--kpi-text-muted)' }}>{errorMessage}</p>
           </div>
           {onRefresh && (
             <button
               onClick={onRefresh}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 border border-red-200 dark:border-red-500/25 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+              style={{
+                color: 'rgba(239, 68, 68, 0.8)',
+                border: '1px solid rgba(239, 68, 68, 0.2)',
+                background: 'rgba(239, 68, 68, 0.06)',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.12)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.06)'}
             >
               <RefreshCw className="w-3 h-3" />
               Retry
@@ -324,89 +362,37 @@ const ErrorKpiCard = ({ title, errorMessage = 'Failed to load data', icon = 'Bar
   )
 }
 
-// ─── Stale Indicator ───
-const StaleIndicator = ({ minutes }) => {
-  const formatStaleTime = (mins) => {
-    if (mins < 60) return `${mins}m ago`
-    if (mins < 1440) return `${Math.floor(mins / 60)}h ago`
-    return `${Math.floor(mins / 1440)}d ago`
-  }
+// ─── Driver Badge ───
+const DriverBadge = ({ topDriver }) => {
+  if (!topDriver || !topDriver.dimension) return null
+  const segment = topDriver.segment || '—'
+  const pct = topDriver.pctOfTotal != null ? `${topDriver.pctOfTotal.toFixed(0)}%` : '—'
 
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/20">
-            <Clock className="w-2.5 h-2.5" />
-            Stale
+          <span className="block truncate text-xs font-medium" style={{ color: 'var(--kpi-text-secondary)' }}>
+            {segment.length > 10 ? segment.slice(0, 10) + '…' : segment} · {pct}
           </span>
         </TooltipTrigger>
         <TooltipContent>
-          <p>Data last updated {formatStaleTime(minutes)}</p>
+          <p className="text-xs">{topDriver.dimension}: {segment} contributes {pct} of total</p>
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
   )
 }
 
-// ─── Live Indicator ───
-const LiveIndicator = () => (
-  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
-    <span className="relative flex h-2 w-2">
-      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-    </span>
-    Live
-  </span>
-)
+// ════════════════════════════════════════════════
+// MAIN COMPONENT
+// ════════════════════════════════════════════════
 
-// ─── Status Badge Component ───
-const StatusBadge = ({ status = 'on-track' }) => {
-  const statusConfig = {
-    'on-track': {
-      cls: 'bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/20',
-      label: 'On track'
-    },
-    'at-risk': {
-      cls: 'bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/20',
-      label: 'At risk'
-    },
-    'critical': {
-      cls: 'bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/20',
-      label: 'Critical'
-    }
-  };
-
-  const config = statusConfig[status] || statusConfig['on-track'];
-
-  return (
-    <span className={cn('px-2 py-0.5 rounded text-[11px] font-medium border', config.cls)}>
-      {config.label}
-    </span>
-  );
-};
-
-// ─── Progress Bar Component ───
-const ProgressBar = ({ percent, status = 'on-track' }) => {
-  const statusColors = {
-    'on-track': 'bg-emerald-500',
-    'at-risk': 'bg-amber-500',
-    'critical': 'bg-red-500',
-  };
-
-  return (
-    <div className="h-1 rounded-full overflow-hidden w-full bg-border/50">
-      <div
-        className={cn('h-full rounded-full transition-all duration-500', statusColors[status] || statusColors['on-track'])}
-        style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }}
-      />
-    </div>
-  );
-};
-
-// ─── Main Enterprise KPI Card ───
 const EnterpriseKpiCard = forwardRef(({
+  id,
   title,
+  column: columnProp,
+  aggregation: aggregationProp,
   value,
   format = 'number',
   definition,
@@ -433,7 +419,6 @@ const EnterpriseKpiCard = forwardRef(({
   datasetData,
   unitPrefix,
   unitSuffix,
-  // NEW props for period-based KPIs
   targetValue,
   targetLabel = 'Target',
   achievementPercent,
@@ -444,52 +429,246 @@ const EnterpriseKpiCard = forwardRef(({
   theme = 'dark',
   accentColor,
   actionPrompt,
+  businessCategory,
+  periodLabel,
+  previousPeriodLabel,
+  periodType,
+  baselineValue,
+  baselineLabel,
+  vsBaselinePct,
+  baselineStd,
+  normalRangeLow,
+  normalRangeHigh,
+  isAnomaly,
+  anomalyDirection,
+  zScore,
+  anomalySeverity,
+  expectedValue,
+  trendDirection,
+  topDriver,
+  vsPreviousPct,
+  provenance,
+  rootCauseChain,
+  metricDecomposition,
+  compact = false,
 }, ref) => {
-  const isDark = theme === 'dark';
-  const [showDetails, setShowDetails] = useState(false);
+  const [showDetails, setShowDetails] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editValues, setEditValues] = useState(null)
 
-  // Normalize sparklineData - backend returns {data: [], type: "time_series"} or just array
-  const normalizedSparkline = useMemo(() => {
-    if (!sparklineData) return null
-    if (Array.isArray(sparklineData)) {
-      return sparklineData.length > 2 ? sparklineData : null
-    }
-    if (typeof sparklineData === 'object' && sparklineData.data) {
-      return sparklineData.data.length > 2 ? sparklineData.data : null
-    }
-    return null
-  }, [sparklineData])
+  // Available columns from datasetData
+  const availableColumns = useMemo(() => {
+    if (!datasetData || !Array.isArray(datasetData) || datasetData.length === 0) return []
+    return Object.keys(datasetData[0] || {}).filter(k => k !== '_id')
+  }, [datasetData])
 
-  // Period Selector Component
-  const PeriodSelectorComp = () => {
-    if (availablePeriods.length === 0) return null;
+  const AGG_OPTIONS = [
+    { value: 'sum', label: 'Total (SUM)' },
+    { value: 'mean', label: 'Average (MEAN)' },
+    { value: 'median', label: 'Median' },
+    { value: 'count', label: 'Count' },
+    { value: 'max', label: 'Maximum' },
+    { value: 'min', label: 'Minimum' },
+  ]
+
+  const FORMAT_OPTIONS = [
+    { value: 'currency', label: 'Currency ($)' },
+    { value: 'percentage', label: 'Percentage (%)' },
+    { value: 'integer', label: 'Integer' },
+    { value: 'decimal', label: 'Decimal' },
+    { value: 'number', label: 'Number' },
+  ]
+
+  // Client-side KPI recalculation
+  const recalculateValue = useCallback((col, agg) => {
+    if (!datasetData || !Array.isArray(datasetData) || datasetData.length === 0) return null
+    const raw = datasetData
+      .map(r => r[col])
+      .filter(v => v !== null && v !== undefined && v !== '')
+      .map(v => Number(v))
+      .filter(n => !isNaN(n))
+    if (raw.length === 0) return null
+    switch (agg) {
+      case 'sum': return raw.reduce((a, b) => a + b, 0)
+      case 'mean': return raw.reduce((a, b) => a + b, 0) / raw.length
+      case 'median': {
+        const sorted = [...raw].sort((a, b) => a - b)
+        const mid = Math.floor(sorted.length / 2)
+        return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+      }
+      case 'count': return raw.length
+      case 'max': return Math.max(...raw)
+      case 'min': return Math.min(...raw)
+      default: return raw.reduce((a, b) => a + b, 0) / raw.length
+    }
+  }, [datasetData])
+
+  const handleStartEdit = useCallback(() => {
+    setEditValues({
+      column: columnProp || title,
+      aggregation: aggregationProp || 'sum',
+      format: format || 'number',
+      icon: icon || 'BarChart3',
+    })
+    setIsEditing(true)
+  }, [columnProp, title, aggregationProp, format, icon])
+
+  const handleCancelEdit = useCallback(() => {
+    setIsEditing(false)
+    setEditValues(null)
+  }, [])
+
+  const handleSaveEdit = useCallback(() => {
+    if (!editValues) return
+    const newValue = recalculateValue(editValues.column, editValues.aggregation)
+    window.dispatchEvent(new CustomEvent('kpi-edited', {
+      detail: {
+        id,
+        title,
+        column: editValues.column,
+        aggregation: editValues.aggregation,
+        format: editValues.format,
+        icon: editValues.icon,
+        value: newValue,
+      }
+    }))
+    setIsEditing(false)
+    setEditValues(null)
+  }, [editValues, title, id, recalculateValue])
+
+  // ── Edit Panel Component ──
+  const EditPanel = () => {
+    if (!editValues) return null
+
+    const updateEdit = (field, val) => {
+      setEditValues(prev => ({ ...prev, [field]: val }))
+    }
+
+    const livePreview = recalculateValue(editValues.column, editValues.aggregation)
 
     return (
-      <select
-        value={period}
-        onChange={(e) => onPeriodChange?.(e.target.value)}
-        className={cn(
-          "appearance-none cursor-pointer rounded-lg px-3 py-1.5 text-xs font-semibold",
-          "transition-all duration-200 bg-transparent border",
-          "focus:outline-none focus:ring-1 focus:ring-ocean/50",
-          isDark
-            ? "text-pearl-muted hover:text-pearl border-pearl/10 hover:border-pearl/20"
-            : "text-slate-500 hover:text-slate-700 border-slate-200 hover:border-slate-300"
-        )}
+      <motion.div
+        initial={{ opacity: 0, height: 0 }}
+        animate={{ opacity: 1, height: 'auto' }}
+        exit={{ opacity: 0, height: 0 }}
+        className="kpi-edit-panel"
       >
-        {availablePeriods.map(p => (
-          <option key={p} value={p} className={isDark ? "bg-midnight-light" : "bg-white"}>
-            {p === 'day' ? 'Today' :
-              p === 'week' ? 'This Week' :
-                p === 'month' ? 'This Month' :
-                  p === 'quarter' ? 'This Quarter' :
-                    p === 'year' ? 'This Year' :
-                      p === 'all' ? 'All Time' : p}
-          </option>
-        ))}
-      </select>
-    );
-  };
+        <div className="kpi-edit-header">
+          <span className="kpi-edit-title">Configure Metric</span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handleSaveEdit}
+              className="kpi-edit-btn kpi-edit-btn--save"
+              aria-label="Save changes"
+            >
+              <Check className="w-3 h-3" />
+              Apply
+            </button>
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              className="kpi-edit-btn kpi-edit-btn--cancel"
+              aria-label="Cancel"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+
+        <div className="kpi-edit-grid">
+          {/* Column */}
+          <div className="kpi-edit-field">
+            <label className="kpi-edit-label">Column</label>
+            {availableColumns.length > 0 ? (
+              <select
+                value={editValues.column}
+                onChange={e => updateEdit('column', e.target.value)}
+                className="kpi-edit-select"
+              >
+                {availableColumns.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            ) : (
+              <span className="kpi-edit-empty">No data loaded</span>
+            )}
+          </div>
+
+          {/* Aggregation */}
+          <div className="kpi-edit-field">
+            <label className="kpi-edit-label">Aggregation</label>
+            <select
+              value={editValues.aggregation}
+              onChange={e => updateEdit('aggregation', e.target.value)}
+              className="kpi-edit-select"
+            >
+              {AGG_OPTIONS.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Format */}
+          <div className="kpi-edit-field">
+            <label className="kpi-edit-label">Format</label>
+            <select
+              value={editValues.format}
+              onChange={e => updateEdit('format', e.target.value)}
+              className="kpi-edit-select"
+            >
+              {FORMAT_OPTIONS.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Icon */}
+          <div className="kpi-edit-field">
+            <label className="kpi-edit-label">Icon</label>
+            <select
+              value={editValues.icon}
+              onChange={e => updateEdit('icon', e.target.value)}
+              className="kpi-edit-select"
+            >
+              {ICON_OPTIONS.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {livePreview !== null && livePreview !== undefined && (
+          <div className="kpi-edit-preview">
+            <span className="kpi-edit-preview-label">Preview</span>
+            <span className="kpi-edit-preview-value">
+              {formatValue(livePreview, editValues.format)}
+            </span>
+          </div>
+        )}
+      </motion.div>
+    )
+  }
+
+  // ── Metric Type Detection ──
+  const metricType = useMemo(() => classifyMetricType({
+    title, format, sparklineData,
+    targetValue, achievementPercent,
+    isAnomaly, anomalyDirection, zScore,
+    businessCategory, deltaPercent,
+    benchmarkValue,
+  }), [title, format, sparklineData, targetValue, achievementPercent,
+      isAnomaly, anomalyDirection, zScore, businessCategory, deltaPercent, benchmarkValue])
+
+  const layout = METRIC_LAYOUTS[metricType] || METRIC_LAYOUTS.trend
+
+  // Normalize sparklineData
+  const normalizedSparkline = useMemo(() => {
+    if (!sparklineData) return null
+    if (Array.isArray(sparklineData)) return sparklineData.length > 2 ? sparklineData : null
+    if (typeof sparklineData === 'object' && sparklineData.data) return sparklineData.data.length > 2 ? sparklineData.data : null
+    return null
+  }, [sparklineData])
 
   const isExpense = /cost|discount|churn|expense|fee|tax|loss/i.test(title)
   const higherIsBetter = !isExpense
@@ -501,196 +680,465 @@ const EnterpriseKpiCard = forwardRef(({
   // Calculate Delta
   const delta = useMemo(() => {
     if (deltaPercent !== null && deltaPercent !== undefined) {
-      return {
-        percentChange: deltaPercent,
-        direction: deltaPercent > 0 ? 'up' : deltaPercent < 0 ? 'down' : 'neutral',
-        previousValue: comparisonValue
-      }
+      return { percentChange: deltaPercent, direction: deltaPercent > 0 ? 'up' : deltaPercent < 0 ? 'down' : 'neutral', previousValue: comparisonValue }
     }
     if (comparisonValue !== null && comparisonValue !== undefined && comparisonValue !== 0) {
       const currentNum = typeof value === 'number' ? value : parseFloat(String(value).replace(/[^0-9.-]/g, ''))
       const prevNum = typeof comparisonValue === 'number' ? comparisonValue : parseFloat(String(comparisonValue).replace(/[^0-9.-]/g, ''))
       if (!isNaN(currentNum) && !isNaN(prevNum) && prevNum !== 0) {
         const pct = ((currentNum - prevNum) / Math.abs(prevNum)) * 100
-        return {
-          percentChange: pct,
-          direction: pct > 0 ? 'up' : pct < 0 ? 'down' : 'neutral',
-          previousValue: comparisonValue
-        }
+        return { percentChange: pct, direction: pct > 0 ? 'up' : pct < 0 ? 'down' : 'neutral', previousValue: comparisonValue }
       }
     }
     return null
   }, [value, comparisonValue, deltaPercent])
 
-  // Apply Business Status
-  const status = useMemo(() => {
-    if (!delta || delta.direction === 'neutral') return 'neutral'
-    if (higherIsBetter) {
-      return delta.direction === 'up' ? 'success' : 'critical'
-    } else {
-      return delta.direction === 'down' ? 'success' : 'critical'
+  // Status computation
+  const kpiStatus = useMemo(() => {
+    if (baselineValue != null && baselineStd != null && baselineStd > 0) {
+      const z = (value - baselineValue) / baselineStd
+      if (Math.abs(z) > 3) {
+        if (higherIsBetter) return z > 0 ? { status: 'success', label: 'Above Target' } : { status: 'critical', label: 'Below Target' }
+        else return z > 0 ? { status: 'critical', label: 'Elevated' } : { status: 'success', label: 'Below Normal' }
+      }
+      if (Math.abs(z) > 2) return { status: 'warning', label: 'Watch' }
+      return { status: 'neutral', label: 'Normal' }
     }
-  }, [delta, higherIsBetter])
-  const statusLabel = getStatusLabel(status, delta?.direction, higherIsBetter)
+    if (!delta || delta.direction === 'neutral') return { status: 'neutral', label: 'Stable' }
+    if (higherIsBetter) return delta.direction === 'up' ? { status: 'success', label: 'Improving' } : { status: 'critical', label: 'Declining' }
+    else return delta.direction === 'down' ? { status: 'success', label: 'Improving' } : { status: 'critical', label: 'Elevated' }
+  }, [value, baselineValue, baselineStd, higherIsBetter, delta])
+
+  const status = kpiStatus.status
+  const statusLabel = kpiStatus.label
   const insightText = aiSuggestion || benchmarkText || definition || ''
   const detailsText = actionPrompt || insightText || definition || ''
 
-  // Get color style - prefer accent_color from backend when available
-  const neutralAccent = useMemo(() => {
-    const idx = hashString(`${title}:${icon}`) % NEUTRAL_ACCENTS.length
-    return NEUTRAL_ACCENTS[idx]
-  }, [title, icon])
-
-  const style = useMemo(() => {
-    // If accent_color is provided from backend, use it
-    if (accentColor && ACCENT_COLORS[accentColor]) {
-      return ACCENT_COLORS[accentColor]
+  // Deterministic accent color
+  const effectiveCategory = useMemo(() => {
+    if (businessCategory && businessCategory !== 'unknown') return businessCategory
+    const lower = title.toLowerCase()
+    for (const [key] of Object.entries(CATEGORY_ACCENT_MAP)) {
+      if (key === 'neutral' || key === 'unknown') continue
+      if (lower.includes(key)) return key
     }
-    // Fall back to calculated status
-    return status === 'neutral' ? neutralAccent : STATUS_COLORS[status]
-  }, [accentColor, status, neutralAccent])
+    return 'neutral'
+  }, [businessCategory, title])
+
+  const accentName = CATEGORY_ACCENT_MAP[effectiveCategory] || 'neutral'
+
   const IconComponent = ICON_MAP[icon] || BarChart3
+  const kpiIconColor = useMemo(() => {
+    const meta = ACCENT_META[accentName]
+    return meta?.hex || '#6b7280'
+  }, [accentName])
   const DeltaIcon = delta?.direction === 'up' ? TrendingUp : delta?.direction === 'down' ? TrendingDown : Minus
 
-  // Render States
-  if (state === 'loading') {
-    return <SkeletonKpiCard animationDelay={animationDelay} />
+  // Format stale minutes
+  const formattedStaleTime = staleMinutes != null
+    ? staleMinutes < 60 ? `${staleMinutes}m ago`
+      : staleMinutes < 1440 ? `${Math.floor(staleMinutes / 60)}h ago`
+      : `${Math.floor(staleMinutes / 1440)}d ago`
+    : null
+
+  // ── Provenance / Root Cause visibility ──
+  const hasProvenance = provenance && (provenance.record_count > 0 || provenance.null_count > 0)
+  const hasRootCause = rootCauseChain && rootCauseChain.has_root_cause
+  const hasMetricDecomp = metricDecomposition && metricDecomposition.has_decomposition && metricDecomposition.components?.length > 0
+
+  const isDrillable = !!onClick
+  const metricDecompTitle = hasMetricDecomp
+    ? `${title} decomposes into ${metricDecomposition.component_count} components`
+    : null
+  const formattedValue = formatValue(value, format)
+
+  // ── Period Selector ──
+  const PeriodSelectorComp = () => {
+    if (availablePeriods.length === 0) return null
+    return (
+      <select
+        value={period}
+        onChange={(e) => onPeriodChange?.(e.target.value)}
+        className="appearance-none cursor-pointer rounded-md px-2 py-1 text-[11px] font-semibold transition-colors bg-transparent border focus:outline-none"
+        style={{ color: 'var(--kpi-text-muted)', borderColor: 'rgba(128,128,128,0.06)' }}
+      >
+        {availablePeriods.map(p => (
+          <option key={p} value={p}>{p === 'day' ? 'Today' : p === 'week' ? 'This Week' : p === 'month' ? 'This Month' : p === 'quarter' ? 'This Quarter' : p === 'year' ? 'This Year' : p === 'all' ? 'All Time' : p}</option>
+        ))}
+      </select>
+    )
   }
 
-  if (state === 'empty') {
-    return <EmptyKpiCard title={title} reason={emptyReason} icon={icon} animationDelay={animationDelay} />
+  // ── Sub-components ──
+
+  const StatusPill = ({ size = 'default' }) => {
+    if (!statusLabel) return null
+    return (
+      <span className={cn(
+        'kpi-pill',
+        size === 'hero' && 'kpi-pill--hero',
+        status === 'critical' ? 'kpi-pill--critical' :
+        status === 'success' ? 'kpi-pill--success' :
+        status === 'warning' ? 'kpi-pill--warning' :
+        'kpi-pill--neutral'
+      )}>
+        {status === 'critical' && <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--kpi-critical)' }} />}
+        {status === 'success' && <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--kpi-success)' }} />}
+        {status === 'warning' && <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--kpi-warning)' }} />}
+        {statusLabel}
+      </span>
+    )
   }
 
-  if (state === 'error') {
-    return <ErrorKpiCard title={title} errorMessage={errorMessage} icon={icon} animationDelay={animationDelay} onRefresh={onRefresh} />
+  const DeltaDisplay = () => {
+    if (vsBaselinePct != null) {
+      return (
+        <div className="kpi-delta-row">
+          <span className="kpi-trend" data-direction={vsBaselinePct > 0 ? 'up' : vsBaselinePct < 0 ? 'down' : 'neutral'}>
+            {vsBaselinePct > 0
+              ? <TrendingUp className="kpi-trend-icon" />
+              : <TrendingDown className="kpi-trend-icon" />
+            }
+            {Math.abs(vsBaselinePct).toFixed(1)}%
+          </span>
+          {baselineLabel && (
+            <span className="kpi-comparison-label">vs {baselineLabel}</span>
+          )}
+        </div>
+      )
+    }
+    if (delta) {
+      return (
+        <div className="kpi-delta-row">
+          <span className="kpi-trend" data-direction={delta.direction}>
+            <DeltaIcon className="kpi-trend-icon" />
+            {Math.abs(delta.percentChange).toFixed(1)}%
+          </span>
+          <span className="kpi-comparison-label">{comparisonText}</span>
+        </div>
+      )
+    }
+    return null
   }
 
-  // Main Card Render
+  const AnomalyBadge = () => {
+    if (metricType !== 'anomaly') return null
+    const severityColor = anomalySeverity === 'critical' ? 'var(--kpi-critical)' : 'var(--kpi-warning)'
+    const severityBg = anomalySeverity === 'critical' ? 'var(--kpi-critical-bg)' : 'var(--kpi-warning-bg)'
+    return (
+      <div className="kpi-anomaly-badge" style={{ background: severityBg }}>
+        <AlertTriangle className="w-3.5 h-3.5" style={{ color: severityColor }} />
+        <span className="kpi-anomaly-severity" style={{ color: severityColor }}>
+          {anomalySeverity === 'critical' ? 'Critical' : 'Warning'}
+        </span>
+        <span className="kpi-anomaly-zscore" style={{ color: 'var(--kpi-text-disabled)' }}>
+          {zScore != null ? `${zScore > 0 ? '+' : ''}${zScore.toFixed(1)}σ` : ''}
+        </span>
+        {expectedValue != null && (
+          <span className="kpi-anomaly-expected" style={{ color: 'var(--kpi-text-muted)' }}>
+            Expected: {formatValue(expectedValue, format)}
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  const ProgressBarDisplay = () => {
+    if (achievementPercent === null || achievementPercent === undefined) return null
+    return (
+      <div className="kpi-progress">
+        <span className="kpi-progress-label">{targetLabel}: {formatValue(targetValue, format)}</span>
+        <div className="kpi-progress-track">
+          <div
+            className="kpi-progress-fill"
+            data-status={periodStatus}
+            style={{ width: `${Math.min(Math.max(achievementPercent, 0), 100)}%` }}
+          />
+        </div>
+        <span className="kpi-progress-label">{achievementPercent.toFixed(0)}%</span>
+      </div>
+    )
+  }
+
+  const SubMetrics = () => {
+    const hasMetrics = baselineValue != null || vsBaselinePct != null || topDriver
+    if (!hasMetrics) return null
+    return (
+      <div className="kpi-metrics">
+        {baselineValue != null && (
+          <div className="kpi-metric-item">
+            <p className="kpi-metric-label">Baseline</p>
+            <p className="kpi-metric-value">{formatValue(baselineValue, format)}</p>
+          </div>
+        )}
+        {vsBaselinePct != null && (
+          <div className="kpi-metric-item">
+            <p className="kpi-metric-label">vs Baseline</p>
+            <p className="kpi-metric-value" style={{ color: getTrendColor(vsBaselinePct > 0 ? 'up' : 'down') }}>
+              {vsBaselinePct.toFixed(1)}%
+            </p>
+          </div>
+        )}
+        {topDriver && (
+          <div className="kpi-metric-item">
+            <p className="kpi-metric-label">Top Driver</p>
+            <DriverBadge topDriver={topDriver} />
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Section Renderer ──
+  const renderSection = (section) => {
+    switch (section) {
+      case 'header':
+        return (
+          <div key="header" className="kpi-header">
+            <div className="flex items-center gap-2 min-w-0">
+              <IconComponent className="w-4 h-4 shrink-0" style={{ color: kpiIconColor, opacity: 0.6 }} />
+              <span className="kpi-title" title={title}>{title}</span>
+            </div>
+            <div className="kpi-header-right">
+              <StatusPill />
+              {!isEditing && (
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); handleStartEdit() }}
+                  className="kpi-edit-trigger"
+                  aria-label="Edit KPI"
+                  title="Configure metric"
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              )}
+              {(detailsText || hasProvenance || hasRootCause || hasMetricDecomp) && (
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); setShowDetails(s => !s) }}
+                  className="inline-flex items-center justify-center w-5 h-5 rounded transition-colors"
+                  style={{ color: showDetails ? 'rgba(128,128,128,0.7)' : 'rgba(128,128,128,0.25)' }}
+                  aria-label={showDetails ? 'Hide KPI details' : 'Show KPI details'}
+                >
+                  <Info className="w-3 h-3" />
+                </button>
+              )}
+              <PeriodSelectorComp />
+              {isDrillable && (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'rgba(128,128,128,0.15)' }}>
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+              )}
+            </div>
+          </div>
+        )
+
+      case 'value':
+        return (
+          <div key="value" className="kpi-value-row">
+            {valuePrefix && <span className="kpi-prefix">{valuePrefix}</span>}
+            <span className="kpi-value" role="status" aria-label={ariaLabel || `${title}: ${formattedValue}`}>
+              {formattedValue}
+            </span>
+            {valueSuffix && <span className="kpi-suffix">{valueSuffix}</span>}
+          </div>
+        )
+
+      case 'delta':
+        if (!delta && vsBaselinePct == null) return null
+        return <div key="delta">{DeltaDisplay()}</div>
+
+      case 'healthHero':
+        return (
+          <div key="healthHero" className="kpi-health-hero">
+            <div className="kpi-value-row">
+              {valuePrefix && <span className="kpi-prefix">{valuePrefix}</span>}
+              <span className="kpi-value" role="status">{formattedValue}</span>
+              {valueSuffix && <span className="kpi-suffix">{valueSuffix}</span>}
+            </div>
+            <StatusPill size="hero" />
+          </div>
+        )
+
+      case 'sparkline':
+        if (!normalizedSparkline) return null
+        return (
+          <div key="sparkline" className="kpi-sparkline">
+            <MiniSparklineWithBaseline
+              data={normalizedSparkline}
+              baselineMean={baselineValue}
+              baselineStd={baselineStd}
+              color={ACCENT_META[accentName]?.hex || '#6b7280'}
+              isAnomaly={isAnomaly}
+              anomalyDirection={anomalyDirection}
+              forecastValue={expectedValue}
+            />
+          </div>
+        )
+
+      case 'progressBar':
+        if (achievementPercent == null) return null
+        return <div key="progressBar">{ProgressBarDisplay()}</div>
+
+      case 'anomalyBadge':
+        if (metricType !== 'anomaly') return null
+        return <div key="anomalyBadge">{AnomalyBadge()}</div>
+
+      case 'submetrics': {
+        const hasSubMetrics = baselineValue != null || vsBaselinePct != null || topDriver
+        if (!hasSubMetrics && !isEditing) return null
+        return <div key="submetrics">{isEditing ? <EditPanel /> : SubMetrics()}</div>
+      }
+
+      case 'freshness':
+        return (
+          <div key="freshness">
+            {formattedStaleTime && (
+              <div className="flex items-center gap-1 mt-2">
+                <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: 'rgba(245, 158, 11, 0.5)' }} />
+                <span className="text-[10px]" style={{ color: 'var(--kpi-text-disabled)' }}>{formattedStaleTime}</span>
+              </div>
+            )}
+            {state === 'live' && (
+              <div className="flex items-center gap-1.5 mt-2">
+                <span className="kpi-live-dot" />
+                <span className="text-[10px]" style={{ color: 'var(--kpi-success)' }}>Live</span>
+              </div>
+            )}
+          </div>
+        )
+
+      case 'insight':
+        if (!showDetails) return null
+        if (!detailsText && !hasProvenance && !hasRootCause && !hasMetricDecomp) return null
+        return (
+          <div key="insight" className="kpi-insight">
+            {detailsText && <p className="text-xs leading-relaxed mb-2" style={{ color: 'var(--kpi-text-secondary)' }}>{detailsText}</p>}
+            {hasProvenance && (
+              <div className="kpi-provenance">
+                <div className="kpi-provenance-header">
+                  <Database className="w-3 h-3" />
+                  <span>Provenance</span>
+                  {provenance.confidence_label && (
+                    <span className={`kpi-confidence-badge kpi-confidence-badge--${provenance.confidence_label.toLowerCase()}`}>
+                      {provenance.confidence_label}
+                    </span>
+                  )}
+                </div>
+                <div className="kpi-provenance-grid">
+                  <div className="kpi-provenance-item">
+                    <span className="kpi-provenance-label">Formula</span>
+                    <span className="kpi-provenance-value">{provenance.formula_description || `${provenance.aggregation?.toUpperCase?.() || 'SUM'}(${provenance.column || title})`}</span>
+                  </div>
+                  {provenance.record_count > 0 && (
+                    <div className="kpi-provenance-item">
+                      <span className="kpi-provenance-label">Records</span>
+                      <span className="kpi-provenance-value">{provenance.record_count.toLocaleString()}</span>
+                    </div>
+                  )}
+                  {provenance.null_count > 0 && (
+                    <div className="kpi-provenance-item">
+                      <span className="kpi-provenance-label">Nulls</span>
+                      <span className="kpi-provenance-value">{provenance.null_count.toLocaleString()} ({provenance.null_pct?.toFixed?.(1) || '0'}%)</span>
+                    </div>
+                  )}
+                  {provenance.downsampled && (
+                    <div className="kpi-provenance-item">
+                      <span className="kpi-provenance-label">Sampled</span>
+                      <span className="kpi-provenance-value">{provenance.downsample_ratio ? `${(provenance.downsample_ratio * 100).toFixed(0)}% of rows` : 'Yes'}</span>
+                    </div>
+                  )}
+                  {provenance.total_rows > provenance.record_count && (
+                    <div className="kpi-provenance-item">
+                      <span className="kpi-provenance-label">Total rows</span>
+                      <span className="kpi-provenance-value">{provenance.total_rows.toLocaleString()}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {hasRootCause && (
+              <div className="kpi-root-cause">
+                <div className="kpi-provenance-header">
+                  <Activity className="w-3 h-3" />
+                  <span>Root Cause</span>
+                </div>
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--kpi-text-secondary)' }}>
+                  {rootCauseChain.summary || rootCauseChain.links?.[0]?.headline || ''}
+                </p>
+                {rootCauseChain.links?.[0]?.contributors?.length > 0 && (
+                  <div className="kpi-provenance-grid" style={{ marginTop: 6 }}>
+                    {rootCauseChain.links[0].contributors.slice(0, 3).map((c, i) => (
+                      <div key={i} className="kpi-provenance-item">
+                        <span className="kpi-provenance-label">{c.dimension}</span>
+                        <span className="kpi-provenance-value">{c.segment} · {c.contribution_pct > 0 ? '+' : ''}{c.contribution_pct?.toFixed?.(0) || '0'}%</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {hasMetricDecomp && (
+              <div className="kpi-root-cause">
+                <div className="kpi-provenance-header">
+                  <BarChart3 className="w-3 h-3" />
+                  <span>Metric Decomposition</span>
+                </div>
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--kpi-text-secondary)' }}>
+                  {metricDecompTitle}
+                </p>
+                <div className="kpi-provenance-grid" style={{ marginTop: 6 }}>
+                  {metricDecomposition.components.slice(0, 4).map((c, i) => (
+                    <div key={i} className="kpi-provenance-item">
+                      <span className="kpi-provenance-label">{c.column}</span>
+                      <span className="kpi-provenance-value" style={{ color: c.change_pct > 0 ? 'var(--kpi-success)' : c.change_pct < 0 ? 'var(--kpi-critical)' : undefined }}>
+                        {c.change_pct > 0 ? '+' : ''}{c.change_pct?.toFixed?.(1) || '0'}%
+                        {c.contribution_pp != null && (
+                          <span style={{ color: 'var(--kpi-text-disabled)', marginLeft: 4 }}>
+                            · {c.contribution_pp > 0 ? '+' : ''}{c.contribution_pp.toFixed(1)}pp
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )
+
+      default:
+        return null
+    }
+  }
+
+  // ── Render States ──
+  if (state === 'loading') return <SkeletonKpiCard animationDelay={animationDelay} />
+  if (state === 'empty') return <EmptyKpiCard title={title} reason={emptyReason} icon={icon} animationDelay={animationDelay} />
+  if (state === 'error') return <ErrorKpiCard title={title} errorMessage={errorMessage} icon={icon} animationDelay={animationDelay} onRefresh={onRefresh} />
+
   return (
     <motion.div
       ref={ref}
-      initial={{ opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: animationDelay }}
-      className="h-full"
+      transition={{ duration: 0.35, delay: animationDelay, ease: [0.16, 1, 0.3, 1] }}
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e) } } : undefined}
+      className={cn(onClick && 'cursor-pointer')}
     >
-      <div className={cn(
-        "relative h-full flex flex-col gap-4 p-5 rounded-xl bg-card overflow-hidden transition-colors duration-200 shadow-[0_18px_45px_rgba(0,0,0,0.22)]",
-        onClick && "cursor-pointer"
-      )}>
-
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex flex-col gap-0.5">
-            <p className="text-[13px] text-muted-foreground font-normal truncate">{title}</p>
-            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/60">
-              <span>{comparisonText}</span>
-              {state === 'stale' && staleMinutes && staleMinutes > 5 && <StaleIndicator minutes={staleMinutes} />}
-              {state === 'live' && <LiveIndicator />}
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {isOutlier && (
-              <span className="inline-flex items-center gap-1 rounded text-[11px] font-medium border px-2 py-0.5 bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/20">
-                <AlertCircle className="w-3 h-3" />
-                Outlier
-              </span>
-            )}
-            {detailsText && (
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setShowDetails((current) => !current);
-                }}
-                className={cn(
-                  "inline-flex items-center justify-center rounded px-2 py-1 transition-colors",
-                  showDetails
-                    ? "bg-primary/10 text-primary"
-                    : "bg-muted/40 text-muted-foreground hover:text-foreground hover:bg-muted"
-                )}
-                aria-label={showDetails ? 'Hide KPI details' : 'Show KPI details'}
-                title={showDetails ? 'Hide details' : 'Show details'}
-              >
-                <Info className="w-3.5 h-3.5" />
-              </button>
-            )}
-            <span className={cn(
-              "inline-flex items-center gap-1 rounded text-[11px] font-medium border px-2 py-0.5",
-              status === 'critical'
-                ? "bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/20"
-                : status === 'success'
-                  ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/20"
-                  : "bg-muted text-muted-foreground border-border/50"
-            )}>
-              {status === 'critical' && <span className="w-1.5 h-1.5 rounded-full bg-red-500 dark:bg-red-400" />}
-              {status === 'success' && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />}
-              {statusLabel}
-            </span>
-            <PeriodSelectorComp />
-          </div>
+      <div
+        className="kpi-shell"
+        data-accent={accentName}
+        data-compact={compact ? 'true' : 'false'}
+        data-metric-type={metricType}
+        data-editing={isEditing ? 'true' : 'false'}
+      >
+        <div className="kpi-core">
+          {layout.map((section) => renderSection(section))}
         </div>
-
-        <div role="status" aria-label={ariaLabel || `${title}: ${formatValue(value, format)}`}>
-          <div className="flex items-baseline gap-1.5 flex-wrap mb-1.5">
-            {valuePrefix && <span className="text-xl font-medium text-foreground/70">{valuePrefix}</span>}
-            <span className="text-4xl font-semibold text-foreground tracking-tight tabular-nums leading-none">
-              {formatValue(value, format)}
-            </span>
-            {valueSuffix && <span className="text-base font-normal text-muted-foreground">{valueSuffix}</span>}
-          </div>
-          {delta && (
-            <div className="flex items-center gap-1.5 text-[13px]">
-              <span className={cn(
-                "font-medium flex items-center gap-0.5",
-                delta.direction === 'down' && higherIsBetter ? "text-emerald-600 dark:text-emerald-400" :
-                delta.direction === 'up' && !higherIsBetter ? "text-red-600 dark:text-red-400" :
-                delta.direction === 'up' ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"
-              )}>
-                <DeltaIcon className="w-3.5 h-3.5" />
-                {Math.abs(delta.percentChange).toFixed(1)}%
-              </span>
-              <span className="text-muted-foreground/70">{comparisonText}</span>
-            </div>
-          )}
-        </div>
-
-        {normalizedSparkline && (
-          <div className="h-10">
-            <MiniSparkline data={normalizedSparkline} color={style.hex} width={240} height={40} />
-          </div>
-        )}
-
-        <div className="grid grid-cols-3 gap-2">
-          {[
-            { label: 'Records', value: recordCount != null ? recordCount.toLocaleString() : '—' },
-            { label: benchmarkLabel || 'Top 25% avg', value: benchmarkValue != null ? formatFullPrecision(benchmarkValue, format) : (benchmarkText || '—') },
-            { label: 'Coverage', value: coverageCount != null ? `${coverageCount} cols` : '—' },
-          ].map(({ label, value: val }) => (
-            <div key={label} className="bg-muted/50 rounded-lg px-3 py-2.5">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-1">{label}</p>
-              <p className="text-[15px] font-medium text-foreground tabular-nums">{val}</p>
-            </div>
-          ))}
-        </div>
-
-        {showDetails && detailsText && (
-          <div className="rounded-lg bg-muted/40 px-3.5 py-3">
-            <p className="text-[13px] leading-relaxed text-muted-foreground">{detailsText}</p>
-          </div>
-        )}
-
-        {achievementPercent !== undefined && achievementPercent !== null && (
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-xs text-muted-foreground">{achievementPercent.toFixed(0)}% of target</span>
-              <StatusBadge status={periodStatus} />
-            </div>
-            <ProgressBar percent={achievementPercent} status={periodStatus} />
-          </div>
-        )}
       </div>
     </motion.div>
   )
@@ -698,5 +1146,4 @@ const EnterpriseKpiCard = forwardRef(({
 
 EnterpriseKpiCard.displayName = 'EnterpriseKpiCard'
 
-export { StatusBadge, ProgressBar };
 export default EnterpriseKpiCard

@@ -1,0 +1,174 @@
+[
+  {
+    "category": "control",
+    "description": "Genuine FK: orders.customer_id \u2192 customers.id (exact name match)",
+    "passed": true,
+    "errors": [],
+    "result_count": 1,
+    "results": [
+      {
+        "source_table": "orders",
+        "source_column": "customer_id",
+        "target_table": "customers",
+        "target_column": "id",
+        "confidence": 0.95,
+        "method": "name_match",
+        "overlap_ratio": null,
+        "fk_sample_size": null
+      }
+    ]
+  },
+  {
+    "category": "false_overlap",
+    "description": "False overlap: orders.status \u2194 customers.segment share values but are NOT a relationship \u2014 identifier-likeness should crush confidence",
+    "passed": true,
+    "errors": [],
+    "result_count": 0,
+    "results": []
+  },
+  {
+    "category": "shared_codes",
+    "description": "Shared codes: products.product_code \u2194 regions.region_code share code values but are NOT a genuine FK relationship",
+    "passed": true,
+    "errors": [],
+    "result_count": 1,
+    "results": [
+      {
+        "source_table": "regions",
+        "source_column": "region_id",
+        "target_table": "products",
+        "target_column": "product_id",
+        "confidence": 0.18,
+        "method": "value_overlap",
+        "overlap_ratio": 1.0,
+        "fk_sample_size": 10
+      }
+    ]
+  },
+  {
+    "category": "wrong_fk",
+    "description": "Wrong FK guess: orders.customer_id matches both customers.id and employees.id \u2014 engine should detect both",
+    "passed": true,
+    "errors": [],
+    "result_count": 2,
+    "results": [
+      {
+        "source_table": "orders",
+        "source_column": "customer_id",
+        "target_table": "customers",
+        "target_column": "id",
+        "confidence": 0.95,
+        "method": "name_match",
+        "overlap_ratio": null,
+        "fk_sample_size": null
+      },
+      {
+        "source_table": "orders",
+        "source_column": "customer_id",
+        "target_table": "employees",
+        "target_column": "id",
+        "confidence": 0.93,
+        "method": "value_overlap",
+        "overlap_ratio": 1.0,
+        "fk_sample_size": 100
+      }
+    ]
+  },
+  {
+    "category": "multiple_parents",
+    "description": "Multiple parents: claims references policies, customers, and providers \u2014 all should be detected",
+    "passed": true,
+    "errors": [],
+    "result_count": 3,
+    "results": [
+      {
+        "source_table": "claims",
+        "source_column": "customer_id",
+        "target_table": "customers",
+        "target_column": "id",
+        "confidence": 0.95,
+        "method": "name_match",
+        "overlap_ratio": null,
+        "fk_sample_size": null
+      },
+      {
+        "source_table": "claims",
+        "source_column": "provider_id",
+        "target_table": "providers",
+        "target_column": "id",
+        "confidence": 0.95,
+        "method": "name_match",
+        "overlap_ratio": null,
+        "fk_sample_size": null
+      },
+      {
+        "source_table": "claims",
+        "source_column": "policy_id",
+        "target_table": "policies",
+        "target_column": "id",
+        "confidence": 0.93,
+        "method": "value_overlap",
+        "overlap_ratio": 1.0,
+        "fk_sample_size": 50
+      }
+    ]
+  },
+  {
+    "category": "id_overlap",
+    "description": "KNOWN LIMITATION: orders.status_id (values 10-60) \u2192 customers.customer_id (values 1-100). Both have _id suffix so identifier-likeness (0.95) can't distinguish \u2014 engine falsely detects the coincidental value overlap at ~0.90 confidence",
+    "passed": true,
+    "errors": [],
+    "result_count": 2,
+    "results": [
+      {
+        "source_table": "orders",
+        "source_column": "status_id",
+        "target_table": "customers",
+        "target_column": "customer_id",
+        "confidence": 0.11,
+        "method": "value_overlap",
+        "overlap_ratio": 1.0,
+        "fk_sample_size": 6
+      },
+      {
+        "source_table": "customers",
+        "source_column": "segment_id",
+        "target_table": "orders",
+        "target_column": "status_id",
+        "confidence": 0.11,
+        "method": "value_overlap",
+        "overlap_ratio": 1.0,
+        "fk_sample_size": 6
+      }
+    ]
+  },
+  {
+    "category": "wrong_parent",
+    "description": "Wrong parent: orders.employee_id matches both employees.id (name_match, 0.95) and customers.id (value_overlap, 0.93) \u2014 name match must rank higher",
+    "passed": true,
+    "errors": [],
+    "result_count": 2,
+    "results": [
+      {
+        "source_table": "orders",
+        "source_column": "employee_id",
+        "target_table": "employees",
+        "target_column": "id",
+        "confidence": 0.95,
+        "method": "name_match",
+        "overlap_ratio": null,
+        "fk_sample_size": null
+      },
+      {
+        "source_table": "orders",
+        "source_column": "employee_id",
+        "target_table": "customers",
+        "target_column": "id",
+        "confidence": 0.93,
+        "method": "value_overlap",
+        "overlap_ratio": 1.0,
+        "fk_sample_size": 100
+      }
+    ]
+  }
+]

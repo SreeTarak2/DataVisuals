@@ -7,7 +7,7 @@ import useChatHistoryStore from './chatHistoryStore';
 import { clearInsightsDataCache } from '../pages/insights/hooks/useInsightsData';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-const USER_SCOPED_STORAGE_KEYS = ['dataset-storage', 'datasage-chat-store', 'chat-history-storage'];
+const USER_SCOPED_STORAGE_KEYS = ['dataset-storage', 'signal-chat-store', 'chat-history-storage'];
 
 /**
  * Determine the storage backend based on the user's "Remember me" preference.
@@ -16,7 +16,7 @@ const USER_SCOPED_STORAGE_KEYS = ['dataset-storage', 'datasage-chat-store', 'cha
  */
 const getStorageBackend = () => {
     // Check if we previously chose sessionStorage
-    if (sessionStorage.getItem('datasage-auth')) {
+    if (sessionStorage.getItem('signal-auth')) {
         return sessionStorage;
     }
     return localStorage;
@@ -103,10 +103,10 @@ const useAuthStore = create(
                     // If "Remember me" is unchecked, migrate to sessionStorage
                     if (!rememberMe) {
                         // Clear any existing localStorage entry
-                        localStorage.removeItem('datasage-auth');
+                        localStorage.removeItem('signal-auth');
                     } else {
                         // Ensure we're using localStorage
-                        sessionStorage.removeItem('datasage-auth');
+                        sessionStorage.removeItem('signal-auth');
                     }
 
                     set({ token: access_token, user: userData, loading: false });
@@ -187,12 +187,12 @@ const useAuthStore = create(
                 set({ token: null, user: null, loading: false });
                 clearUserScopedClientState();
                 // Clear from both storage backends
-                localStorage.removeItem('datasage-auth');
-                sessionStorage.removeItem('datasage-auth');
+                localStorage.removeItem('signal-auth');
+                sessionStorage.removeItem('signal-auth');
             },
         }),
         {
-            name: 'datasage-auth',
+            name: 'signal-auth',
             // Use whichever storage backend has the auth data
             storage: createJSONStorage(() => getStorageBackend()),
             // Persist both token AND user for instant rehydration

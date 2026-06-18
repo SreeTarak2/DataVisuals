@@ -19,6 +19,7 @@ class DashboardDesignRequest(BaseModel):
     design_preference: Optional[str] = None
     force_regenerate: bool = False
     conversation_summary: Optional[str] = None
+    redesign_mode: str = "layout"  # "layout" = rearrange existing, "full" = re-compute everything
 
 
 @router.get("/{dataset_id}/dashboard")
@@ -93,6 +94,7 @@ async def design_dashboard(
             design_preference=body.design_preference,
             force_regenerate=body.force_regenerate,
             conversation_summary=body.conversation_summary,
+            redesign_mode=body.redesign_mode,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -120,7 +122,7 @@ async def generate_dashboard(
 
 
 @router.post("/{dataset_id}/retry-chart")
-@limiter.limit(RateLimits.AI_DASHBOARD)
+@limiter.limit(RateLimits.CHART_RETRY)
 async def retry_chart(
     request: Request,
     dataset_id: str,
@@ -159,8 +161,26 @@ async def retry_chart(
 
     # Validate component has required fields BEFORE the try block
     if not chart_config.get("chart_type") and not chart_config.get("columns"):
+        raise HTTPException(status_code=400, detail="component must have chart_type or columns")
+
+    # Check for missing y column (common issue with old dashboards)
+    chart_type = chart_config.get("type", "").lower()
+    requires_y = chart_type in [
+        "bar",
+        "line",
+        "grouped_bar",
+        "stacked_bar",
+        "multi_line",
+        "stacked_area",
+        "scatter",
+        "area",
+    ]
+    has_y = bool(chart_config.get("y") or chart_config.get("y_axis"))
+
+    if requires_y and not has_y:
         raise HTTPException(
-            status_code=400, detail="component must have chart_type or columns"
+            status_code=400,
+            detail=f"Chart type '{chart_type}' requires a 'y' column. Missing in config. Regenerate dashboard to fix.",
         )
 
     try:
@@ -217,11 +237,9 @@ async def retry_chart(
 
                 incoming_cfg = component.get("config") or {}
                 existing_cfg = comp.get("config") or {}
-                if incoming_cfg.get("chart_type") == existing_cfg.get(
-                    "chart_type"
-                ) and (incoming_cfg.get("columns") or []) == (
-                    existing_cfg.get("columns") or []
-                ):
+                if incoming_cfg.get("chart_type") == existing_cfg.get("chart_type") and (
+                    incoming_cfg.get("columns") or []
+                ) == (existing_cfg.get("columns") or []):
                     target_idx = idx
                     break
 
@@ -248,10 +266,59 @@ async def retry_chart(
             "chart_data": chart_data,
             "updated_config": chart_config,
         }
-    except Exception as exc:
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        error_msg = str(exc)
+        error_category = "render_error"
+        if "aggregation" in error_msg.lower():
+            error_category = "aggregation_error"
+            error_msg = f"Aggregation error: {error_msg}. Try changing the aggregation type (mean, sum, count, median)."
+        elif "column" in error_msg.lower() or "missing" in error_msg.lower():
+            error_category = "column_error"
+            error_msg = (
+                f"Column error: {error_msg}. The specified column may not exist in the dataset."
+            )
+        elif "empty" in error_msg.lower() or "no data" in error_msg.lower():
+            error_category = "data_error"
+            error_msg = f"No data available: {error_msg}. Try adjusting filters or selecting different columns."
+        elif "type" in error_msg.lower() or "numeric" in error_msg.lower():
+            error_category = "type_error"
+            error_msg = f"Data type error: {error_msg}. This aggregation requires numeric data."
+        else:
+            error_msg = f"Chart rendering failed: {error_msg}"
+
         raise HTTPException(
-            status_code=500, detail=f"Failed to retry chart: {str(exc)}"
+            status_code=500,
+            detail={
+                "message": error_msg,
+                "category": error_category,
+                "suggestion": _get_error_suggestion(error_category, chart_config),
+            },
         )
+    except Exception as exc:
+        error_msg = str(exc)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": f"Failed to retry chart: {error_msg}",
+                "category": "unknown_error",
+                "suggestion": "Try regenerating the dashboard or selecting a different chart type.",
+            },
+        )
+
+
+def _get_error_suggestion(category: str, chart_config: dict) -> str:
+    """Get user-friendly suggestion based on error category."""
+    suggestions = {
+        "aggregation_error": "Try changing aggregation to 'mean', 'sum', 'count', or 'median'. Some aggregations require numeric data.",
+        "column_error": "Check that the column names in the chart config match the dataset columns exactly.",
+        "data_error": "The filtered data may be empty. Try removing filters or selecting a different date range.",
+        "type_error": "Switch to 'count' or 'nunique' aggregation for categorical data, or select numeric columns.",
+        "render_error": "Try a simpler chart type like 'bar' or 'line' with fewer columns.",
+        "unknown_error": "Try regenerating the dashboard or selecting a different chart type.",
+    }
+    return suggestions.get(category, "Try regenerating the dashboard.")
 
 
 @router.get("/design-patterns")

@@ -1,6 +1,6 @@
 import React, { useEffect, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { Toaster } from "react-hot-toast";
+import { CustomToaster } from "./components/ui/custom-toaster";
 import { initAuth } from "./store/authStore";
 import useThemeStore from "./store/themeStore";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -9,10 +9,8 @@ import ErrorBoundary from "./components/common/ErrorBoundary";
 import { Loader2 } from "lucide-react";
 import lazyWithRetry from "./utils/lazyWithRetry";
 
-import "./assets/styles/App.css";
-
 // Lazy load pages with retry to avoid repeated "Failed to fetch dynamically imported module" loops.
-const Landing = lazyWithRetry(() => import("./pages/Landing.jsx"), "landing");
+const Landing = lazyWithRetry(() => import("./pages/LandingPage.jsx"), "landing");
 const Login = lazyWithRetry(() => import("./pages/Login.jsx"), "login");
 const Register = lazyWithRetry(() => import("./pages/Register.jsx"), "register");
 const GoogleCallback = lazyWithRetry(() => import("./pages/auth/GoogleCallbackPage.jsx"), "google-callback");
@@ -22,6 +20,11 @@ const Chat = lazyWithRetry(() => import("./pages/Chat.jsx"), "chat");
 const ChartsStudio = lazyWithRetry(() => import("./pages/ChartsStudio.jsx"), "charts");
 const Settings = lazyWithRetry(() => import("./pages/Settings.jsx"), "settings");
 const Insights = lazyWithRetry(() => import("./pages/insights/index.js"), "insights");
+const DataProfile = lazyWithRetry(() => import("./pages/DataProfile/index.js"), "data-profile");
+const UnderstandingReport = lazyWithRetry(() => import("./pages/datasets/UnderstandingReport.jsx"), "understanding-report");
+const Connectors = lazyWithRetry(() => import("./pages/ConnectorsPage.jsx"), "connectors");
+const ConnectorSetup = lazyWithRetry(() => import("./pages/ConnectorSetupPage.jsx"), "connector-setup");
+const DevKpiTest = lazyWithRetry(() => import("./pages/dev/KpiTest.jsx"), "dev-kpi-test");
 
 // Loading fallback component
 const PageLoader = () => (
@@ -50,6 +53,7 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/auth/google/callback" element={<GoogleCallback />} />
+            <Route path="/dev/kpi-test" element={<DevKpiTest />} />
 
             {/* Protected Routes */}
             <Route
@@ -67,41 +71,17 @@ function App() {
               <Route path="charts" element={<ChartsStudio />} />
               <Route path="analysis" element={<Insights />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="connectors" element={<Connectors />} />
+              <Route path="connectors/:id" element={<ConnectorSetup />} />
+              <Route path="datasets/:id/profile" element={<DataProfile />} />
+              <Route path="datasets/:id/understanding" element={<UnderstandingReport />} />
             </Route>
 
             {/* Catch all - redirect to landing */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
-        <Toaster
-          position="top-center"
-          reverseOrder={false}
-          gutter={8}
-          containerStyle={{}}
-          toastOptions={{
-            duration: 3000,
-            style: {
-              background: 'var(--background)',
-              color: 'var(--foreground)',
-              border: '1px solid var(--border)',
-              maxWidth: '500px',
-            },
-            success: {
-              duration: 3000,
-              iconTheme: {
-                primary: '#10b981',
-                secondary: '#fff',
-              },
-            },
-            error: {
-              duration: 4000,
-              iconTheme: {
-                primary: '#ef4444',
-                secondary: '#fff',
-              },
-            },
-          }}
-        />
+        <CustomToaster />
       </BrowserRouter>
     </ErrorBoundary>
   );

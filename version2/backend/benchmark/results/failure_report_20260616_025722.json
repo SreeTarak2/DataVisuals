@@ -1,0 +1,66 @@
+{
+  "timestamp": "20260616_025722",
+  "total_datasets": 22,
+  "failure_count": 6,
+  "failures": [
+    {
+      "dataset": "Bank_Churn_Classification_Dataset.csv",
+      "category": "abstention",
+      "expected_primary": "customer",
+      "predicted_primary": "bank",
+      "expected_participants": [],
+      "predicted_participants": [
+        "customer"
+      ],
+      "reason": "Expected no primary, got 'bank'"
+    },
+    {
+      "dataset": "SPY_close_price_5Y.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "spy",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'spy'"
+    },
+    {
+      "dataset": "ecommerce_orders.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "ecommerce",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'ecommerce'"
+    },
+    {
+      "dataset": "gold_prices_10y.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "gold",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'gold'"
+    },
+    {
+      "dataset": "saas_revenue.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "saas",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'saas'"
+    },
+    {
+      "dataset": "vehicle_listings.csv",
+      "category": "abstention",
+      "expected_primary": null,
+      "predicted_primary": "vehicle",
+      "expected_participants": [],
+      "predicted_participants": [],
+      "reason": "Expected no primary, got 'vehicle'"
+    }
+  ],
+  "failure_categories": {
+    "abstention": 6
+  }
+}

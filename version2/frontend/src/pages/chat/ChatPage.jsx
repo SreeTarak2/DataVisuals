@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
-import { Send, Plus, Database, Copy, ChevronDown, ChevronUp, RotateCcw, Pencil, Sparkles, BarChart3, TrendingUp, MessageSquare, Lightbulb, History, Maximize2, X, ArrowRight, Image, Loader2, Brain, Shield, Eye, Square, Table2 } from 'lucide-react';
+import { Send, Plus, Database, Copy, ChevronDown, ChevronUp, RotateCcw, Pencil, Sparkles, BarChart3, TrendingUp, MessageSquare, Lightbulb, History, Maximize2, X, ArrowRight, Image, Loader2, Brain, Shield, Eye, Square, Table2, Hash } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-hot-toast';
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
@@ -111,6 +111,73 @@ const QueryResultTable = ({ table }) => {
   );
 };
 
+/**
+ * KPI Card — renders when the AI returns a single-value answer (e.g. "Total revenue is £928K").
+ * Extracts the primary numeric value from the narrative and shows it prominently.
+ */
+const extractKpiValue = (content = '') => {
+  // Try to find the most prominent number: currency, percentage, or plain number
+  const patterns = [
+    // Currency: £928,555 or $1.2M or €45K
+    /([\u00a3\u0024\u20ac\u00a5]\s?[\d,]+(?:\.\d+)?(?:\s?[KMBkmb])?)/,
+    // Percentage: 12.3%
+    /([\d,]+(?:\.\d+)?\s?%)/,
+    // Bold number in markdown: **12,345**
+    /\*\*([\u00a3\u0024\u20ac]?[\d,]+(?:\.\d+)?(?:\s?[KMBkmb])?%?)\*\*/,
+    // Plain large number: 928,555
+    /([\d]{1,3}(?:,[\d]{3})+(?:\.\d+)?)/,
+    // Plain decimal: 12345.67
+    /\b([\d]+(?:\.\d+)?)\b/,
+  ];
+  for (const re of patterns) {
+    const m = content.replace(/`[^`]*`/g, '').match(re);
+    if (m) return m[1].trim();
+  }
+  return null;
+};
+
+const KpiCard = ({ content, query }) => {
+  const value = extractKpiValue(content);
+  if (!value) return null;
+
+  // Derive a short label from the query (first 5 words)
+  const label = query
+    ? query.replace(/[?!.]/g, '').split(' ').slice(0, 6).join(' ')
+    : 'Result';
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.96, y: 6 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+      className="my-4 w-full"
+    >
+      <div
+        className="relative overflow-hidden rounded-2xl border border-border bg-surface px-6 py-5 shadow-lg"
+        style={{ background: 'linear-gradient(135deg, var(--bg-surface) 0%, var(--bg-elevated) 100%)' }}
+      >
+        {/* Ambient glow */}
+        <div className="pointer-events-none absolute inset-0 rounded-2xl" style={{ background: 'radial-gradient(ellipse at 20% 50%, rgba(99,102,241,0.07) 0%, transparent 70%)' }} />
+
+        <div className="relative flex items-center gap-4">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-elevated text-secondary">
+            <Hash size={18} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-muted">{label}</p>
+            <p
+              className="mt-0.5 text-[2rem] font-bold leading-none tracking-tight"
+              style={{ color: 'var(--text-header)' }}
+            >
+              {value}
+            </p>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
 const getAxisTitleText = (axisTitle) => {
   if (!axisTitle) return '';
   if (typeof axisTitle === 'string') return axisTitle;
@@ -214,133 +281,9 @@ const withPointMarkers = (chartData = []) => {
   });
 };
 
-const extractFollowUpSuggestions = (content = '') => {
-  if (!content) return [];
+// stripFollowUpSection removed — backend now returns structured follow_up_suggestions
 
-  // ── Pre-processing: normalize inline separator formats ──
-  // Some models (Gemini) output: "text --- * Q1? * Q2? * Q3?"
-  // Normalize to multi-line: "text\n---\n- Q1?\n- Q2?\n- Q3?"
-  let normalized = content.replace(
-    /\s*---\s*\*\s*/g,
-    (match, offset) => offset === content.indexOf('---') ? '\n---\n- ' : '\n- '
-  );
-  // Also handle: "--- \n* Q1? * Q2?" or "* Q1? * Q2?" after ---
-  if (normalized.includes('---')) {
-    const parts = normalized.split(/^---$/m);
-    if (parts.length >= 2) {
-      const afterSep = parts.slice(1).join('---');
-      // Split on " * " patterns (inline bullets)
-      const fixed = afterSep.replace(/\s*\*\s+/g, '\n- ');
-      normalized = parts[0] + '\n---' + fixed;
-    }
-  }
 
-  const lines = normalized.split('\n');
-
-  // Try standard anchor first ("you might want to...", "next steps", etc.)
-  let anchorIndex = lines.findIndex((line) => /to explore.*further|you might want to|you could also|follow.?up|next.?steps|explore this/i.test(line));
-
-  // Fallback: look for a trailing "---" separator (SQL path uses this)
-  if (anchorIndex === -1) {
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (/^-{3,}$/.test(lines[i].trim())) {
-        anchorIndex = i;
-        break;
-      }
-    }
-  }
-
-  if (anchorIndex === -1) return [];
-
-  const suggestions = [];
-  for (let i = anchorIndex + 1; i < lines.length; i += 1) {
-    const line = lines[i].trim();
-    if (!line) {
-      if (suggestions.length > 0) break;
-      continue;
-    }
-    // Match bullet points: "- text", "* text", "• text", "1. text"
-    const bulletMatch = line.match(/^[-*•\d.]+\s+(.+?)$/);
-    if (bulletMatch) {
-      const suggestion = bulletMatch[1].replace(/`/g, '').replace(/\*\*/g, '').trim();
-      if (suggestion.length > 5) suggestions.push(suggestion);
-    } else if (suggestions.length === 0 && line.length > 10 && !line.startsWith('#')) {
-      // Non-bullet plain text follow-up (common in SQL path responses)
-      const cleaned = line.replace(/`/g, '').replace(/\*\*/g, '').replace(/^["']|["']$/g, '').trim();
-      if (cleaned.length > 10 && /\?|explore|try|look|compare|check|break|analyze/i.test(cleaned)) {
-        suggestions.push(cleaned);
-      }
-    } else if (suggestions.length > 0 && !bulletMatch) {
-      break;
-    }
-    if (suggestions.length >= 4) break;
-  }
-
-  return suggestions;
-};
-
-const stripFollowUpSection = (content = '') => {
-  if (!content) return '';
-
-  // ── Normalize inline separator formats (same as extractFollowUpSuggestions) ──
-  // Handles: "text --- * Q1? * Q2?" → multi-line
-  let normalized = content;
-  if (/---\s*\*/.test(normalized)) {
-    normalized = normalized.replace(
-      /\s*---\s*\*\s*/g,
-      (match, offset) => offset === normalized.indexOf('---') ? '\n---\n- ' : '\n- '
-    );
-  }
-  if (normalized.includes('---')) {
-    const parts = normalized.split(/^---$/m);
-    if (parts.length >= 2) {
-      const afterSep = parts.slice(1).join('---');
-      const fixed = afterSep.replace(/\s*\*\s+/g, '\n- ');
-      normalized = parts[0] + '\n---' + fixed;
-    }
-  }
-
-  const lines = normalized.split('\n');
-
-  // First, try anchor-phrase detection
-  let anchorIndex = lines.findIndex((line) => /to explore.*further|you might want to|you could also|follow.?up|next.?steps|explore this/i.test(line));
-
-  // Fallback: detect bare --- separator (used by SQL path responses)
-  if (anchorIndex === -1) {
-    anchorIndex = lines.findIndex((line) => /^---\s*$/.test(line.trim()));
-  }
-
-  if (anchorIndex === -1) return content;
-
-  let endIndex = anchorIndex + 1;
-  for (let i = anchorIndex + 1; i < lines.length; i += 1) {
-    const line = lines[i].trim();
-    if (!line) {
-      if (i > anchorIndex + 1) {
-        endIndex = i + 1;
-        break;
-      }
-      continue;
-    }
-    const isBullet = /^[-*•]\s+(.+?)$/.test(line);
-    if (isBullet) {
-      endIndex = i + 1;
-      continue;
-    }
-    // For --- separator, also consume non-bullet follow-up lines (plain text questions)
-    if (/\?|explore|try|look|compare|check|break|analyze/i.test(line)) {
-      endIndex = i + 1;
-      continue;
-    }
-    if (i > anchorIndex + 1) {
-      break;
-    }
-  }
-
-  // If --- was the separator, strip it too
-  const cleanedLines = [...lines.slice(0, anchorIndex), ...lines.slice(endIndex)];
-  return cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-};
 
 const LEGACY_SQL_DETAILS_REGEX = /<details>\s*<summary>[\s\S]*?View SQL Query[\s\S]*?<\/summary>\s*```sql\s*([\s\S]*?)```\s*<\/details>/i;
 
@@ -361,7 +304,7 @@ const extractLegacySqlBlock = (content = '') => {
 };
 
 // Memoized message component to prevent re-renders when typing
-const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, editContent, setEditContent, handleEditKeyDown, cancelEdit, saveEdit, startEditMessage, handleRerunMessage, copyToClipboard, toggleTechnicalDetails, expandedTechnicalDetails, highlightImportantText, onExpandChart, onCopyChart, onSuggestionClick, followUpOverride, onOpenAgenticPanel, isLastAiMessage }) => {
+const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, editContent, setEditContent, handleEditKeyDown, cancelEdit, saveEdit, startEditMessage, handleRerunMessage, copyToClipboard, toggleTechnicalDetails, expandedTechnicalDetails, highlightImportantText, onExpandChart, onCopyChart, onSuggestionClick, followUpOverride, onOpenAgenticPanel, isLastAiMessage, prevUserQuery }) => {
   if (isUser) {
     const isEditing = editingMessageId === msg.id;
 
@@ -478,18 +421,12 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
   // AI Message — keep existing design
   const { content: contentWithoutLegacySql, sql: legacySql } = extractLegacySqlBlock(msg.content || '');
   const sqlText = (msg.sql || legacySql || '').trim();
-  const canShowFollowUps = msg.show_follow_up_suggestions === true;
   const followUpSuggestions = followUpOverride?.length > 0
     ? followUpOverride
-    : canShowFollowUps && msg.follow_up_suggestions?.length > 0
+    : msg.follow_up_suggestions?.length > 0
       ? msg.follow_up_suggestions
-      : canShowFollowUps
-        ? extractFollowUpSuggestions(contentWithoutLegacySql)
-        : [];
-  const cleanedContent = (followUpOverride?.length > 0
-    ? contentWithoutLegacySql
-    : stripFollowUpSection(contentWithoutLegacySql)
-  ).replace(/^>\s*\*\*TL;DR:\*\*[^\n]*\n*/i, '').trimStart();
+      : [];
+  const cleanedContent = contentWithoutLegacySql.replace(/^>\s*\*\*TL;DR:\*\*[^\n]*\n*/i, '').trimStart();
 
   return (
     <motion.div
@@ -514,7 +451,7 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
       >
         {/* Name and Timestamp */}
         {/* <div className="flex items-center gap-2 mb-1.5">
-          <span className="text-xs font-medium text-secondary">DataSage AI</span>
+          <span className="text-xs font-medium text-secondary">Signal</span>
           {timestamp && (
             <span className="text-[10px] text-muted">{timestamp}</span>
           )}
@@ -544,9 +481,16 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
           )}
         </div>
 
-        <QueryResultTable table={msg.result_table} />
+        {/* KPI Card — for single-value answers (render_intent.response_mode === 'single_value') */}
+        {msg.render_intent?.response_mode === 'single_value' && (
+          <KpiCard content={cleanedContent} query={prevUserQuery} />
+        )}
 
-        {sqlText && (
+        {/* Table — rendered only when AI decided it's useful */}
+        {msg.render_intent?.show_table !== false && <QueryResultTable table={msg.result_table} />}
+
+        {/* SQL Block — only shown when AI explicitly decided to reveal the query */}
+        {msg.render_intent?.show_sql && sqlText && (
           <details className="group mt-1 mb-2 w-full overflow-hidden rounded-xl border border-border bg-surface shadow-lg">
             <summary className="flex list-none w-full cursor-pointer items-center justify-between px-4 py-2.5 text-left transition-colors hover:bg-elevated/30 [&::-webkit-details-marker]:hidden">
               <div className="flex items-center gap-2">
@@ -567,8 +511,8 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
           </details>
         )}
 
-        {/* Chart Block — Centered between text and suggestions */}
-        {msg.chart_config && (
+        {/* Chart Block — rendered only when AI decided it's useful */}
+        {msg.chart_config && msg.render_intent?.show_chart !== false && (
             <div className="my-5 w-full overflow-hidden rounded-2xl bg-surface shadow-lg border border-border">
             <div className="bg-elevated/30 px-4 py-2.5">
               <div className="flex items-center justify-between gap-3">
@@ -669,11 +613,11 @@ const ChatMessage = memo(({ msg, index, isUser, timestamp, editingMessageId, edi
             <button
               type="button"
               onClick={onOpenAgenticPanel}
-              className="group/snd flex items-center gap-2.5 w-full text-left rounded-xl border border-violet-500/20 bg-violet-500/5 px-4 py-2.5 text-[13px] text-violet-300/80 transition-all duration-200 hover:bg-violet-500/10 hover:border-violet-500/35 hover:text-violet-200"
+              className="group/snd flex items-center gap-2.5 w-full text-left rounded-xl border border-orange-500/20 bg-orange-500/5 px-4 py-2.5 text-[13px] text-orange-300/80 transition-all duration-200 hover:bg-orange-500/10 hover:border-orange-500/35 hover:text-orange-200"
             >
-              <Brain size={14} className="shrink-0 text-violet-400/70 group-hover/snd:text-violet-300 transition-colors" />
+              <Brain size={14} className="shrink-0 text-orange-400/70 group-hover/snd:text-orange-300 transition-colors" />
               <span className="flex-1">Run deep statistical analysis on this dataset</span>
-              <ArrowRight size={13} className="text-violet-400/50 group-hover/snd:translate-x-0.5 transition-transform" />
+              <ArrowRight size={13} className="text-orange-400/50 group-hover/snd:translate-x-0.5 transition-transform" />
             </button>
           </div>
         )}
@@ -773,7 +717,7 @@ const Chat = () => {
   const RATE_LIMIT_TOTAL = 30;
 
   // WebSocket connection for streaming
-  const { isConnected, connect, sendMessage: wsSendMessage, sendCancel } = useWebSocket({
+  const { isConnected, isConnecting, connect, disconnect, sendMessage: wsSendMessage, sendCancel } = useWebSocket({
     onToken: useCallback((token) => {
       appendStreamingToken(token);
       scrollToBottom();
@@ -804,7 +748,7 @@ const Chat = () => {
       setThinkingSteps(prev => [...prev, label]);
     }, [rerunState]),
 
-    onDone: useCallback(({ conversationId, chartConfig, sql, resultTable, insights = [], data_summary = '', follow_up_suggestions, show_follow_up_suggestions = false, rate_limit_remaining }) => {
+    onDone: useCallback(({ conversationId, chartConfig, sql, resultTable, insights = [], data_summary = '', follow_up_suggestions, show_follow_up_suggestions = false, rate_limit_remaining, render_intent }) => {
       const localConvId = pendingConvIdRef.current;
 
       // Reset rerun state to idle
@@ -844,7 +788,7 @@ const Chat = () => {
       const content = useChatStore.getState().streamingContent;
       // Use chartConfig from backend, or fall back to the most recent streamed chart (via ref)
       const finalChartConfig = chartConfig || streamingChartConfigRef.current || streamingChartConfig;
-      finishStreaming(content, finalChartConfig, sql, insights, data_summary, resultTable, follow_up_suggestions || [], show_follow_up_suggestions);
+      finishStreaming(content, finalChartConfig, sql, insights, data_summary, resultTable, follow_up_suggestions || [], show_follow_up_suggestions, render_intent);
       setStreamingChartConfig(null);
       streamingChartConfigRef.current = null;
       currentClientMessageIdRef.current = null;
@@ -860,6 +804,11 @@ const Chat = () => {
         setSearchParams(newParams, { replace: true });
       }
     }, [finishStreaming, streamingChartConfig, searchParams, selectedDataset, setSearchParams, setCurrentConversation]),
+
+    onRenderIntent: useCallback((intent) => {
+      // Currently used only for early UI setup — future: animate block placeholders
+      if (import.meta.env.DEV) console.debug('[render_intent]', intent);
+    }, []),
 
     onError: useCallback((error) => {
       cancelStreaming();
@@ -894,12 +843,27 @@ const Chat = () => {
     autoConnect: false
   });
 
-  // Connect WebSocket when dataset is selected
+  // Connect WebSocket when dataset is selected — use a ref to prevent
+  // reconnection loops caused by isConnected/isConnecting state changes
+  // from failed connection attempts (onerror fires before onclose, so
+  // isConnecting→false re-triggers the effect before onclose blocks reconnect).
+  const connectionInitiatedRef = useRef(false);
   useEffect(() => {
-    if (selectedDataset?.id && !isConnected) {
+    if (selectedDataset?.id && !connectionInitiatedRef.current) {
+      connectionInitiatedRef.current = true;
       connect();
     }
-  }, [selectedDataset?.id, isConnected, connect]);
+    if (!selectedDataset?.id) {
+      connectionInitiatedRef.current = false;
+    }
+  }, [selectedDataset?.id, connect]);
+
+  // Reset flag when WebSocket actually connects successfully
+  useEffect(() => {
+    if (isConnected) {
+      connectionInitiatedRef.current = true;
+    }
+  }, [isConnected]);
 
   // Fetch privacy settings when dataset is selected
   // useEffect(() => {
@@ -1016,9 +980,10 @@ const Chat = () => {
 
     if (!message || isAITyping || !datasetId) return;
 
-    if (!messageText) {
-      setInputMessage('');
-    }
+    // Clear the input immediately after capturing the message so the
+    // prompt box is empty regardless of whether the message came from
+    // the textarea or was passed in as an explicit `messageText`.
+    setInputMessage('');
 
     // Clear pending images and revoke blob URLs
     if (uploadedImages.length > 0) {
@@ -1254,28 +1219,36 @@ const Chat = () => {
   // ── Image upload helpers ──────────────────────────────────────────────
   const uploadImage = useCallback(async (file) => {
     const id = `img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const previewUrl = URL.createObjectURL(file);
+    console.log('[uploadImage] Starting upload:', id, file.name, file.size);
 
     // Validate on client side
     if (!file.type.startsWith('image/')) {
+      console.warn('[uploadImage] Invalid file type:', file.type);
       toast.error('Only image files are allowed');
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
+      console.warn('[uploadImage] File too large:', file.size);
       toast.error('Image must be under 5 MB');
       return;
     }
+
+    const previewUrl = URL.createObjectURL(file);
+    console.log('[uploadImage] Created preview URL:', previewUrl);
 
     // Add with loading state
     setPendingImages(prev => [...prev, { id, file, previewUrl, uploading: true, url: null }]);
 
     try {
+      console.log('[uploadImage] Uploading to server...');
       const res = await chatAPI.uploadChatImage(file);
       const url = res.data.url;
+      console.log('[uploadImage] Upload successful, server URL:', url);
       setPendingImages(prev =>
         prev.map(img => img.id === id ? { ...img, uploading: false, url } : img)
       );
     } catch (err) {
+      console.error('[uploadImage] Upload failed:', err);
       toast.error('Image upload failed');
       setPendingImages(prev => prev.filter(img => img.id !== id));
       URL.revokeObjectURL(previewUrl);
@@ -1290,23 +1263,13 @@ const Chat = () => {
     });
   }, []);
 
-  const handlePaste = useCallback(async (e) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    const imageItem = Array.from(items).find(
-      (item) => item.kind === 'file' && item.type.startsWith('image/')
-    );
-    if (!imageItem) {
-      // Normal text paste — just adjust height
-      setTimeout(adjustTextareaHeight, 0);
-      return;
+  const handlePaste = useCallback(async ({ file }) => {
+    console.log('[ChatPage] handlePaste called with file:', file?.name);
+    if (file) {
+      console.log('[ChatPage] Calling uploadImage with file:', file.name, file.size);
+      uploadImage(file);
     }
-
-    e.preventDefault();
-    const file = imageItem.getAsFile();
-    if (file) uploadImage(file);
-  }, [uploadImage, adjustTextareaHeight]);
+  }, [uploadImage]);
 
   const handleFileSelect = useCallback((e) => {
     const files = Array.from(e.target.files || []);
@@ -1487,7 +1450,7 @@ const Chat = () => {
         <button
           onClick={() => setShowAgenticPanel(p => !p)}
           className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border transition-colors shadow-inner cursor-pointer ${showAgenticPanel
-            ? 'border-violet-500/60 text-violet-400 bg-violet-500/10'
+            ? 'border-orange-500/60 text-orange-400 bg-orange-500/10'
             : 'border-border text-secondary hover:text-header hover:bg-elevated'
             }`}
           title="Subjective Novelty Detection — run analysis & view Belief Graph"
@@ -1583,6 +1546,10 @@ const Chat = () => {
               const timestamp = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
               // Show deep analysis nudge on last AI message only (not while AI is typing)
               const isLastAiMessage = !isUser && !isAITyping && index === messages.length - 1;
+              // Find the preceding user message to use as context label for KpiCard
+              const prevUserQuery = !isUser
+                ? messages.slice(0, index).reverse().find(m => m.role === 'user')?.content || ''
+                : '';
 
               return (
                 <ChatMessage
@@ -1609,6 +1576,7 @@ const Chat = () => {
                   followUpOverride={followUpMap[msg.id] || null}
                   isLastAiMessage={isLastAiMessage}
                   onOpenAgenticPanel={() => setShowAgenticPanel(true)}
+                  prevUserQuery={prevUserQuery}
                 />
               );
             })}
@@ -1667,7 +1635,7 @@ const Chat = () => {
         ref={composerRef}
         className="absolute bottom-0 left-0 right-0 px-4 py-3 pointer-events-none"
         style={{
-          background: 'linear-gradient(to top, var(--bg-primary) 0%, var(--bg-primary)/0.6 52%, transparent 100%)',
+          background: 'linear-gradient(to top, var(--bg-primary) 40%, transparent 100%)',
         }}
       >
         <div className="mx-auto max-w-[55rem] pointer-events-auto">
@@ -1714,6 +1682,7 @@ const Chat = () => {
           <PromptInputBox
             value={inputMessage}
             onChange={setInputMessage}
+            onPaste={handlePaste}
             onSend={(msg) => handleSendMessage(null, msg)}
             onStop={handleStopGeneration}
             isLoading={isAITyping}

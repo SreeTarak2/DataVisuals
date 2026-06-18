@@ -55,12 +55,12 @@ const ExplanationPanel = ({
       {/* Header Button */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between p-4 bg-purple-500/10 hover:bg-purple-500/20 
-                   border border-purple-500/30 rounded-lg transition-all duration-200 group"
+        className="w-full flex items-center justify-between p-4 bg-orange-500/10 hover:bg-orange-500/20 
+                   border border-orange-500/30 rounded-lg transition-all duration-200 group"
       >
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-purple-500/20 rounded-lg">
-            <Sparkles className="w-5 h-5 text-purple-400" />
+          <div className="p-2 bg-orange-500/20 rounded-lg">
+            <Sparkles className="w-5 h-5 text-orange-400" />
           </div>
           <div className="text-left">
             <h3 className="text-sm font-semibold text-white">AI Insights</h3>
@@ -74,9 +74,9 @@ const ExplanationPanel = ({
             </span>
           )}
           {expanded ? (
-            <ChevronUp className="w-5 h-5 text-gray-400 group-hover:text-purple-400 transition-colors" />
+            <ChevronUp className="w-5 h-5 text-gray-400 group-hover:text-orange-400 transition-colors" />
           ) : (
-            <ChevronDown className="w-5 h-5 text-gray-400 group-hover:text-purple-400 transition-colors" />
+            <ChevronDown className="w-5 h-5 text-gray-400 group-hover:text-orange-400 transition-colors" />
           )}
         </div>
       </button>
@@ -113,7 +113,7 @@ const ExplanationPanel = ({
                   <ul className="space-y-2">
                     {patterns.map((pattern, index) => (
                       <li key={index} className="flex items-start gap-2 text-sm">
-                        <span className="text-purple-400">•</span>
+                        <span className="text-orange-400">•</span>
                         <span className="text-gray-300">{pattern}</span>
                       </li>
                     ))}

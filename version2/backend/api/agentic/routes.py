@@ -4,7 +4,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from services.auth_service import get_current_user
-from services.agents.eda.orchestrator import run_eda_pipeline
+from agents import AgentRegistry
 from core.rate_limiter import limiter, RateLimits
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,8 @@ async def analyze_dataset(
     Frontend: use EventSource or fetch with ReadableStream.
     """
     async def event_stream():
-        async for chunk in run_eda_pipeline(
+        async for chunk in AgentRegistry.run_streaming(
+            "eda",
             dataset_id=body.dataset_id,
             user_id=current_user["id"],
             user_question=body.question,
