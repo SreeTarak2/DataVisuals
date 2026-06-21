@@ -1,298 +1,242 @@
-# DataSage - Context-Aware AI Analytics Platform
+# DataSage — Context-Aware AI Analytics Platform
 
-> **Status:** Architecture Research Complete | Ready for Implementation
-> **Last Updated:** April 2026
+> **Status:** In Production | v4.0.0
+> **Stack:** FastAPI + React + MongoDB + ChromaDB/FAISS + OpenRouter
 
----
-
-## Executive Summary
-
-DataSage is building a context-aware AI analytics platform that solves the 80% problem no competitor addresses: capturing, maintaining, and surfacing business context automatically. This README documents the market research, technical architecture, and implementation strategy.
-
-**The Core Bet:** Build the first analytics tool where context documentation is automatic (a byproduct of use), not manual. Every user interaction makes the system smarter — corrections become rules, query patterns become templates, and insights compound over time.
+DataSage is an AI-powered analytics platform that turns raw data into actionable insights. It captures business context automatically, surfaces intelligent KPIs, generates dashboards, and provides natural-language chat over your datasets.
 
 ---
 
-## Table of Contents
-
-1. [Market Research](#1-market-research)
-2. [The Problem Space](#2-the-problem-space)
-3. [Competitive Landscape](#3-competitive-landscape)
-4. [Technical Architecture](#4-technical-architecture)
-5. [Build Order](#5-build-order)
-6. [Risks & Mitigation](#6-risks--mitigation)
-
----
-
-## 1. Market Research
-
-### The Accuracy Gap
-
-Research consistently shows the context-to-accuracy relationship:
-
-| Context Level | Accuracy | Who Provides It |
-|---------------|----------|----------------|
-| Bare schemas only | 10-31% | Databases |
-| Technical metadata | 40-50% | Data catalogs |
-| Business definitions | 75-80% | Semantic layers |
-| **Full context graph** | **94-99%** | **Nobody captures this** |
-
-**Source:** Promethium/Moveworks research (2026), Fluree GraphRAG benchmarks
-
-### Why Current Tools Fail
-
-- **NL→SQL tools** (Julius AI, etc.): Solve query generation, not context capture. Accuracy plateaus at 80% because business context is missing.
-- **BI Copilots** (Power BI, Looker): Inherit metric inconsistency from legacy BI. No context capture.
-- **ThoughtSpot**: Answers questions you ask. Doesn't proactively surface insights.
-- **ChatGPT for data**: No persistent connections, no governance, no enterprise context layer.
-
-### The 80% Problem
-
-The AI analytics industry has spent years building better query engines. The other **80%** (business context) is unsolved:
-
-- Metric definitions (what "revenue" means — bookings vs. recognized vs. net?)
-- Fiscal calendars and business rules
-- "It depends" logic for edge cases
-- Tribal knowledge in analyst heads
-- Data source authoritative mappings
-
-**Result:** 95% of AI BI pilots fail to deliver ROI. Even the best tools plateau at 80% accuracy.
-
-### Market Validation
-
-- **Foundation Capital** called context graphs "AI's trillion-dollar opportunity" (December 2025)
-- **Gartner** predicts 50%+ of AI agent systems will leverage context graphs by 2028
-- **Knowledge Graph market** projected to reach $5.47B by 2033
-
----
-
-## 2. The Problem Space
-
-### The Five Levels of Context
-
-Context isn't monolithic — it stacks in layers:
-
-| Level | Context Type | Who Has It Today |
-|-------|--------------|------------------|
-| 1 | Technical metadata (schema, column types) | Databases, catalogs |
-| 2 | Relationship context (joins, foreign keys) | Partially in data models |
-| 3 | Business definitions (metrics, KPI formulas) | Some BI tools, dbt |
-| 4 | Semantic logic (fiscal calendars, rules) | Locked in BI tools |
-| 5 | **Tribal knowledge & memory** | **Nobody systematically** |
-
-**Most tools solve Level 1-3.** Level 5 (tribal knowledge + cross-session memory + proactive investigation) is completely unsolved.
-
-### Unsolved Technical Problems
-
-| Problem | Why It's Hard | State |
-|---------|--------------|-------|
-| Zero-effort context capture | Requires instrumenting use itself so corrections become rules | 🔴 Unsolved |
-| Cross-session memory | Session-based tools exist; persistent cross-session doesn't | 🔴 Unsolved |
-| Proactive investigation | Needs continuous monitoring + anomaly detection + trust framework | 🔴 Unsolved |
-| Schema evolution | Must auto-adapt to new columns without manual rebuilds | 🟡 Partially solved |
-| Explainable reasoning | Multi-level provenance from business logic to SQL execution | 🟡 Partially solved |
-
----
-
-## 3. Competitive Landscape
-
-### Direct Competitors (AI Analytics Chat)
-
-| Competitor | Strength | Weakness (Why They Don't Solve the Core Problem) |
-|------------|----------|-------------------------------------------------|
-| **Julius AI** | Strong NL→SQL | Generic query layer; no context capture |
-| **Power BI Copilot** | Microsoft integration | Inherits BI metric inconsistency |
-| **ThoughtSpot** | Excellent query tool | Reactive only; no proactive insights |
-| **Metabase AI** | Accessible to non-techs | Limited sophistication |
-| **Hex** | Analyst workspace | Requires someone to build analyses |
-| **Deepnote** | Collaborative notebooks | Not for ops teams |
-
-### Context Graph Players
-
-| Player | Focus | Gap |
-|--------|-------|-----|
-| **Promethium** | Federated queries + context graph | Ingestion-focused, not capture-focused |
-| **Atlan** | Data governance + context layer | Governance, not tribal knowledge capture |
-| **Graphlit** | Operational context for agents | Developer-focused, not business analytics |
-| **Cognee** ($7.5M seed) | AI memory for agents | Early stage, not analytics-specific |
-| **TrustGraph** | Open-source context graph | Technical tool, not a product |
-
-### Why They Don't Solve It
-
-None capture context **automatically as a byproduct of use**. Every solution requires manual documentation, which:
-- Is expensive
-- Is inconsistent
-- Never stays current
-- Creates cold-start problem (need users for context, need context to attract users)
-
----
-
-## 4. Technical Architecture
-
-### Service Overview
-
-The system is divided into 10 independent services across 5 domains:
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         ARCHITECTURE MAP                                │
-│                                                                     │
-│  INGESTION DOMAIN              CONTEXT DOMAIN         EXECUTION     │
-│  ───────────────              ──────────────         ────────────   │
-│                                                                     │
-│  1. Context Ingestion  ──▶  3. Context Graph     5. Query        │
-│     Service                   Store (Core)          Understanding  │
-│                                                                     │
-│  2. Feedback Capture    ──▶  4. Context Assembly   6. Query      │
-│     Service                   Service               Execution      │
-│                                                                     │
-│                           ────────────────────                    │
-│                                                                     │
-│                    INTELLIGENCE DOMAIN                             │
-│                                                                     │
-│  7. User Memory           8. Schema Discovery    9. Validation &   │
-│     Service                 Service              Enrichment            │
-│                                                                     │
-│                           ────────────────────                    │
-│                                                                     │
-│                    DELIVERY DOMAIN                                 │
-│                                                                     │
-│                    10. Proactive Insights                          │
-│                         Service + Analytics UI                    │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                          FRONTEND (React + Vite)                    │
+│  Landing · Dashboard · Chat · Charts Studio · Insights · Connectors│
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │ HTTP / WebSocket
+┌────────────────────────────────┴────────────────────────────────────┐
+│                        BACKEND (FastAPI)                            │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                     API ROUTES (30+)                         │   │
+│  │  Auth · Datasets · Chat · Dashboard · Charts · Insights     │   │
+│  │  Analysis · Agentic · Beliefs · Connectors · Feedback       │   │
+│  │  Knowledge Graph · Anomalies · Reports · Privacy            │   │
+│  └───────────────────────┬─────────────────────────────────────┘   │
+│                          │                                          │
+│  ┌───────────────────────┴─────────────────────────────────────┐   │
+│  │                     SERVICES LAYER                          │   │
+│  │                                                              │   │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │   │
+│  │  │ AI & Agents  │  │  Analytics   │  │  Knowledge Graph │   │   │
+│  │  │ · LLM Router │  │ · Profiling  │  │ · Entity Extract │   │   │
+│  │  │ · Multi-     │  │ · QUIS       │  │ · Graph RAG      │   │   │
+│  │  │   Agent      │  │   Analysis   │  │ · Relation Detec │   │   │
+│  │  │ · KPI Engine │  │ · EDA Pipe   │  │ · Confidence     │   │   │
+│  │  │ · Chart Gen  │  │ · Pattern    │  │   Scoring        │   │   │
+│  │  │ · Memory     │  │   Detection  │  └──────────────────┘   │   │
+│  │  └──────────────┘  └──────────────┘                         │   │
+│  │                                                              │   │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │   │
+│  │  │  Pipeline    │  │   Feedback   │  │  Infrastructure  │   │   │
+│  │  │ · Process    │  │ · Corrections│  │ · Rate Limiting  │   │   │
+│  │  │ · Compute    │  │ · User Memory│  │ · Caching (Redis)│   │   │
+│  │  │ · Classify   │  │ · Event Log  │  │ · Cost Tracking  │   │   │
+│  │  │ · Narrate    │  │ · Signal     │  │ · Audit Trail    │   │   │
+│  │  │ · Profiler   │  │   Classifier │  │ · Security       │   │   │
+│  │  └──────────────┘  └──────────────┘  └──────────────────┘   │   │
+│  └───────────────────────┬─────────────────────────────────────┘   │
+└──────────────────────────┼─────────────────────────────────────────┘
+                           │
+┌──────────────────────────┴─────────────────────────────────────────┐
+│                        DATA LAYER                                  │
+│  MongoDB  ·  ChromaDB (Belief Store)  ·  FAISS (Vector Index)      │
+│  DuckDB (Query Engine)  ·  Redis (Cache)  ·  File Storage          │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Service Dependencies
+## Tech Stack
 
-| Service | Input From | Output To | Independent? |
-|---------|-----------|-----------|-------------|
-| Context Ingestion | External tools | Graph Store | ✅ |
-| Feedback Capture | UI events | Graph, Memory | ✅ |
-| Context Graph Store | All ingestion | Assembly, Validation | ⬅️ FOUNDATION |
-| Query Understanding | User query | Execution, Assembly | ✅ |
-| Context Assembly | Graph + Query | Execution | ⚠️ |
-| Query Execution | Query Plan | Validation, Insights | ✅ |
-| User Memory | Feedback | Assembly, Understanding | ✅ |
-| Schema Discovery | Data sources | Validation | ✅ |
-| Validation | Execution + Discovery | Graph Store | ⚠️ |
-| Proactive Insights | Execution + Memory | UI | ✅ |
+### Backend
+| Component | Technology |
+|-----------|-----------|
+| Framework | FastAPI (Python 3.12) |
+| Database | MongoDB (Motor async driver) |
+| Vector Store | ChromaDB (belief/knowledge) + FAISS (search) |
+| LLM Gateway | OpenRouter (multi-model routing) |
+| Query Engine | DuckDB (SQL execution) |
+| Caching | Redis (optional, in-memory fallback) |
+| Auth | JWT + bcrypt + Google OAuth |
+| Rate Limiting | SlowAPI (Redis-backed) |
+| Embeddings | Sentence-Transformers (BAAI/bge-large-en-v1.5) |
 
-### Build Phases
+### Frontend
+| Component | Technology |
+|-----------|-----------|
+| Framework | React 19 + Vite |
+| Styling | Tailwind CSS 4 + CSS Modules |
+| State | Zustand |
+| Routing | React Router v7 |
+| Charts | Plotly.js + react-plotly.js |
+| Animations | Framer Motion |
+| HTTP | Axios |
+| WebSocket | Native WebSocket API |
 
-#### Phase 1: Foundation (Weeks 1-6)
-- **Team A:** Context Graph Store (Neo4j/FalkorDB)
-- **Team B:** Context Ingestion Service
-- **Output:** Populated graph with ingested context
-
-#### Phase 2: Core Loop (Weeks 4-10)
-- **Team C:** Query Understanding + Context Assembly
-- **Team D:** Query Execution Service
-- **Team E:** Feedback Capture Service
-- **Output:** End-to-end query pipeline
-
-#### Phase 3: Intelligence (Weeks 8-14)
-- **Team F:** User Memory Service
-- **Team G:** Schema Discovery Service
-- **Team H:** Context Validation & Enrichment Service
-- **Output:** Self-improving system
-
-#### Phase 4: Delivery (Weeks 10-16)
-- **Team I:** Proactive Insights Service
-- **Team J:** Analytics UI + API Gateway
-- **Output:** Production user experience
+### Supported Models (OpenRouter)
+- **Gemini 2.5 Flash Lite** — Chat & streaming (primary)
+- **DeepSeek V3.2** — Complex analysis & SQL generation
+- **DeepSeek V4 Flash** — JSON/structured outputs, dashboard design
+- **Mistral Small 3.2** — Validation & lightweight tasks
+- **Qwen 2.5 72B** — Narrative/storytelling & plain-English explanations
+- **MiniMax M2.5** — System design & planning
+- **DeepSeek R1T2 Chimera** — Deep reasoning & insight generation
+- **Mistral Nemo 12B** — Conversation naming & fast classification
 
 ---
 
-## 5. Build Order
+## Key Features
 
-### Parallelization Strategy
+### 🤖 AI Chat with Streaming
+Natural-language querying over datasets with real-time token streaming, follow-up suggestions, and chart generation.
 
-**7 out of 10 services can start immediately.** The only hard dependency is Context Graph Store.
+### 📊 Intelligent KPIs
+Auto-generated KPI cards with anomaly detection, trend analysis, period-over-period comparison, and driver identification.
 
-**Recommended parallel teams (8 teams total):**
+### 📈 Dashboard Designer
+AI-generated dashboard layouts with drag-and-drop customization, KPI overrides, and component priority management.
 
-1. **Team A:** Context Graph Store — Infrastructure foundation
-2. **Team B:** Context Ingestion Service — Populates graph
-3. **Team C:** Query Understanding + Context Assembly — Query pipeline
-4. **Team D:** Query Execution Service — Data execution
-5. **Team E:** Feedback Capture + User Memory — Learning loop
-6. **Team F:** Schema Discovery + Validation — Quality
-7. **Team G:** Proactive Insights — Intelligence
-8. **Team H:** Analytics UI + API Gateway — Frontend
+### 🔍 Dataset Understanding
+Entity discovery, primary object identification, relationship detection, and reference signal analysis — all deterministic, no LLM calls.
 
-### Interface Contracts (Critical)
+### 🔗 Knowledge Graph
+Graph-RAG for cross-dataset context, entity extraction, and relationship discovery with confidence scoring.
 
-Before any team starts, define:
+### 🧠 Multi-Agent System
+Specialized agents (Analyst, KPI, Chart, Profile, EDA) coordinated by an orchestrator for complex analysis workflows.
 
-1. **Event schemas** for message queue (Kafka topics)
-2. **REST API schemas** for synchronous calls
-3. **Data schemas** for shared models
-4. **Contract tests** — automated interface verification
+### 📝 Feedback Loop
+Correction capture, user memory, signal classification, and belief store — the system learns from every interaction.
 
-**Rule:** Interface changes must be backward-compatible for 2 sprints.
+### 🛡️ Privacy & Security
+PII detection/redaction, encrypted database credentials, rate limiting, security headers (CSP, HSTS), audit logging.
 
 ---
 
-## 6. Risks & Mitigation
+## Getting Started
 
-### Risk 1: Cold-Start Problem
-**Risk:** Need users for context, need context to attract users.
-**Mitigation:** 
-- Start with small, high-intent user group
-- Pre-seed context from public sources (dbt docs, industry metrics)
-- Make first users' answers visibly better to prove value
+### Prerequisites
+- Python 3.12+
+- Node.js 20+
+- MongoDB (local or Atlas)
+- OpenRouter API key
 
-### Risk 2: Model Commoditization
-**Risk:** LLMs get better at zero-shot, reducing urgency of context.
-**Mitigation:**
-- Business context lives in organizations, not models
-- Context capture from organizational usage is defensible moat
-- Models improve; organizational context compounds
+### Backend Setup
 
-### Risk 3: Competition from Incumbents
-**Risk:** Google, Microsoft, Palantir move into context layers.
-**Mitigation:**
-- Focus on capture problem they're ignoring
-- Build faster in niche (mid-market analytics)
-- Acquire or be acquired is a valid exit
+```bash
+cd version2/backend
+pip install -r requirements.txt
 
-### Risk 4: Data Governance Sensitivity
-**Risk:** Enterprises paranoid about where context lives.
-**Mitigation:**
-- Offer on-premise or encrypted deployment
-- Clear data residency controls
-- SOC 2 Type II + HIPAA compliance path
+# Set up environment
+cp .env.example .env  # Edit with your keys
+# Required: OPENROUTER_API_KEY, SECRET_KEY, MONGODB_URL
 
-### Risk 5: Accuracy Claims
-**Risk:** 94-99% accuracy is research benchmark, not production guarantee.
-**Mitigation:**
-- Measure accuracy in production from day one
-- Publish real numbers, not aspirational ones
-- Start with narrow domains where context is highest quality
+uvicorn main:app --reload --port 8000
+```
 
----
+### Frontend Setup
 
-## Summary
+```bash
+cd version2/frontend
+pnpm install
+pnpm dev
+```
 
-**The bet:** Build the first analytics tool where context capture is automatic, not manual. Every tool in the market (Julius AI, Power BI Copilot, ThoughtSpot) fails in production because they don't solve the 80% problem. Their accuracy plateaus at 80%. We can reach 94-99% by solving contexts Levels 4-5.
+The app runs at `http://localhost:3000` with API proxied to `http://localhost:8000`.
 
-**The moat:** Compounding organizational context — more users, more corrections, more query patterns → smarter context that competitors cannot replicate.
+### Environment Variables
 
-**The metrics:**
-- First milestone: 80% accuracy on single-source queries
-- Second milestone: 90% accuracy on federated queries with ingest
-- Third milestone: 95%+ accuracy with feedback loop + memory
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `OPENROUTER_API_KEY` | — | ✅ | LLM API key |
+| `SECRET_KEY` | — | ✅ | JWT signing key |
+| `MONGODB_URL` | `mongodb://localhost:27017` | — | MongoDB connection |
+| `DATABASE_NAME` | `signal_ai` | — | Database name |
+| `GOOGLE_CLIENT_ID` | — | — | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | — | — | Google OAuth secret |
+| `DB_ENCRYPTION_KEY` | — | — | Fernet key for DB credentials |
+| `REDIS_URL` | — | — | Redis connection (optional) |
+| `LLM_DAILY_BUDGET_CENTS` | `500` | — | Per-user daily LLM budget |
+| `LLM_GLOBAL_DAILY_BUDGET_CENTS` | `10000` | — | Global daily LLM budget |
 
----
+### Docker Deployment
 
-## Next Steps
-
-1. **Define interface contracts** — API schemas, event schemas, shared models
-2. **Select graph database** — Neo4j (mature) vs. TigerGraph (scale) vs. FalkorDB (speed)
-3. **Select LLM provider** — GPT-4o (cost/quality balance) vs. Claude Sonnet (long context)
-4. **Build Phase 1 services** — Graph Store + Ingestion in parallel
-5. **Validate with users** — A/B test against Julius AI on narrow query set
+```bash
+cd version2/backend
+docker build -t signal-backend .
+docker run -p 8080:8080 -e OPENROUTER_API_KEY=... -e SECRET_KEY=... signal-backend
+```
 
 ---
 
-*Documentation generated from market research, competitive analysis, and architecture design sessions.*
+## Project Structure
+
+```
+version2/
+├── backend/
+│   ├── main.py                 # FastAPI app entry point
+│   ├── core/                   # Config, rate limiting, prompts, exceptions
+│   ├── api/                    # Route handlers (auth, datasets, chat, etc.)
+│   ├── services/               # Business logic (AI, pipeline, KG, cache, etc.)
+│   ├── agents/                 # AI agents (chat, EDA, multi-agent orchestrator)
+│   ├── db/                     # MongoDB schemas and connection
+│   ├── llm/                    # LLM router and cost tracking
+│   ├── prompts/                # Token budgeting and prompt templates
+│   ├── pipeline/               # Dataset processing pipeline
+│   ├── migrations/             # Database migrations
+│   ├── scripts/                # CLI tools and benchmarks
+│   └── tests/                  # Test suites
+│
+└── frontend/
+    ├── src/
+    │   ├── App.jsx             # Root with routing
+    │   ├── pages/              # Route pages (Dashboard, Chat, Insights, etc.)
+    │   ├── components/         # Reusable UI components
+    │   ├── store/              # Zustand state stores
+    │   ├── services/           # API client
+    │   ├── hooks/              # Custom React hooks
+    │   └── assets/             # Styles and static assets
+    ├── index.html
+    └── vite.config.js
+```
+
+---
+
+## API Overview
+
+The backend exposes **30+ route modules** across the following domains:
+
+| Prefix | Module | Description |
+|--------|--------|-------------|
+| `/api/auth` | Auth | Registration, login, Google OAuth |
+| `/api/datasets` | Datasets | Upload, CRUD, import Google Sheets |
+| `/api/chat` | Chat | Conversation management, WebSocket streaming |
+| `/api/dashboard` | Dashboard | KPI cards, chart configs, insights, layout |
+| `/api/charts` | Charts | Chart rendering, recommendations, overlays |
+| `/api/ai` | AI | Dashboard design, KPI generation, analysis |
+| `/api/insights` | Insights | Deep analysis, executive summaries |
+| `/api/databases` | Databases | Connect external DBs (Postgres, MySQL, MongoDB) |
+| `/api/agentic` | Agentic | Multi-agent orchestration |
+| `/api/beliefs` | Beliefs | Business rules, user memory |
+| `/api/anomalies` | Anomalies | Anomaly investigation |
+| `/api/feedback` | Feedback | Corrections, signals, event log |
+| `/api/privacy` | Privacy | PII detection, redaction, audit |
+| `/api/reports` | Reports | PDF report generation |
+
+Full API docs available at `http://localhost:8000/docs` (Swagger).
+
+---
+
+## License
+
+Proprietary — All rights reserved.
