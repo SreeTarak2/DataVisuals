@@ -91,18 +91,105 @@ OUTPUT (valid JSON only):
 Return ONLY valid JSON. No markdown fences. No text before or after."""
 
 
+# ── Column ranking by informativeness for LLM domain detection ──────────────
+
+
+def _column_informativeness_score(c: RawColumnProfile) -> float:
+    """Score how informative a column is for domain classification (0–10).
+
+    Higher scores mean the column carries strong signals about what kind of
+    data this is.  Numeric ranges, categorical distributions, and patterns
+    are highly informative.  High-cardinality IDs and null-heavy columns
+    score low.
+    """
+    score = 0.0
+    unique = c.cardinality.unique_count
+    total = c.cardinality.total_count
+    cardinality_ratio = c.cardinality.cardinality_ratio if total > 0 else 1.0
+    null_pct = c.cardinality.null_pct
+
+    # Numeric with stats — tells us about price ranges, ages, scores etc.
+    if c.stats and c.stats.col_min is not None:
+        score += 6.0
+        if c.stats.col_max > c.stats.col_min:
+            score += 2.0  # Non-trivial range
+        if c.stats.col_std and c.stats.col_std > 1e-9:
+            score += 1.0  # Has variance
+
+    # Low-cardinality categorical — strongest signal (e.g. fuelType, transmission)
+    if 2 <= unique <= 15 and cardinality_ratio < 0.5:
+        score += 5.0
+        if c.top_values:
+            score += 1.0  # Distribution available
+    elif 15 < unique <= 50:
+        score += 2.5
+    elif 50 < unique <= 200:
+        score += 1.0
+
+    # Very high cardinality text — likely IDs or free-text names (low signal)
+    if cardinality_ratio > 0.95 and ("Utf8" in c.dtype or "String" in c.dtype):
+        score -= 3.0
+
+    # Boolean columns are moderate signal
+    if "Bool" in c.dtype:
+        score += 3.0
+
+    # Pattern match (email, phone, UUID, etc.) reduces domain uncertainty
+    if c.patterns:
+        score += 2.0
+
+    # Date/datetime — useful for understanding temporal scope
+    if "Date" in c.dtype or "Datetime" in c.dtype or "Duration" in c.dtype:
+        score += 3.0
+
+    # Heavy nulls = weak signal
+    if null_pct > 50:
+        score -= 1.0
+
+    return max(score, 0.0)
+
+
 # ── Helpers to build column info from RawProfilingResult ─────────────────────
 
 
-def _build_column_lines(result: RawProfilingResult) -> str:
+def _build_column_lines(
+    result: RawProfilingResult,
+    max_columns: int = 40,
+) -> str:
     """Build the column info string for the LLM prompt from RawProfilingResult.
+
+    If the dataset has more than *max_columns*, they are ranked by
+    informativeness and the top *max_columns* are kept.  This avoids burning
+    LLM tokens on low-signal columns (IDs, high-cardinality text, etc.)
+    while retaining the most valuable signals for domain classification.
 
     Uses stats, sample_values, and top_values already computed by the
     profiling engine — no DataFrame access needed.
     """
     lines: list[str] = []
 
-    for c in result.columns:
+    # ── Rank and truncate columns if needed ──────────────────────────────
+    all_columns = result.columns
+    if len(all_columns) > max_columns:
+        scored = [(c, _column_informativeness_score(c)) for c in all_columns]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        columns = [c for c, _ in scored[:max_columns]]
+        dropped = len(all_columns) - len(columns)
+        lines.append(
+            f"[Showing {len(columns)} of {len(all_columns)} columns — "
+            f"{dropped} low-information columns omitted]"
+        )
+        lines.append("")
+        logger.info(
+            "[LLMDomain] Truncated %d → %d columns for LLM prompt (dropped %d low-info cols)",
+            len(all_columns),
+            len(columns),
+            dropped,
+        )
+    else:
+        columns = list(all_columns)
+
+    for c in columns:
         dtype_short = _dtype_abbrev(c.dtype)
         null_pct = round(c.cardinality.null_pct, 1)
         unique = c.cardinality.unique_count
@@ -194,7 +281,7 @@ class LLMDomainDetector:
             ALL_TEMPLATES = {}
 
         try:
-            from services.llm_router import llm_router
+            from llm.router import llm_router
 
             response = await llm_router.call(
                 prompt=prompt,

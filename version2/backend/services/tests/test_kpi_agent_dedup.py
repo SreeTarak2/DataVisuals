@@ -20,7 +20,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-from services.multi_agent.kpi_agent import _dedup_kpis_by_slug
+from agents.multi.kpi_agent import _dedup_kpis_by_slug
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────

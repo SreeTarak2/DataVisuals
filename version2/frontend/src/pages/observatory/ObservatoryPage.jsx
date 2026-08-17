@@ -8,7 +8,7 @@ import DOMPurify from 'dompurify'; // Ensure this is installed
 
 import GlassPanel from '@/components/ui/GlassPanel';
 import NeonButton from '@/components/ui/NeonButton';
-import PlotlyChart from '@/components/features/charts/PlotlyChart';
+import ChartRenderer from '@/components/features/charts/ChartRenderer';
 
 import useChatStore from '@/store/chatStore';
 import useDatasetStore from '@/store/datasetStore';
@@ -294,7 +294,7 @@ const Observatory = () => {
                                     CLOSE CHART
                                 </NeonButton>
                             </div>
-                            <PlotlyChart
+                            <ChartRenderer
                                 data={activeChart.data}
                                 layout={activeChart.layout}
                                 config={{ responsive: true, displayModeBar: false }}

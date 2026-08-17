@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from bson import ObjectId
 import json
@@ -37,7 +37,7 @@ class BeliefService:
         user_message: str,
         previous_ai_response: str,
     ) -> Optional[Dict]:
-        from services.llm.router import llm_router
+        from llm.router import llm_router
 
         prompt = f"""Analyze if this user message is correcting or refining an AI analysis.
 
@@ -91,7 +91,7 @@ rule_type: metric_definition | filter_rule | join_rule | exclusion_rule | busine
                     {"_id": existing["_id"]},
                     {
                         "$inc": {"confidence": 0.05, "reinforcement_count": 1},
-                        "$set": {"updated_at": datetime.utcnow()},
+                        "$set": {"updated_at": datetime.now(timezone.utc).replace(tzinfo=None)},
                     },
                 )
                 existing["_id"] = str(existing["_id"])
@@ -108,8 +108,8 @@ rule_type: metric_definition | filter_rule | join_rule | exclusion_rule | busine
                 "usage_count": 0,
                 "reinforcement_count": 1,
                 "active": True,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+                "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
                 "source_message": user_message[:200],
             }
             res = await self.collection.insert_one(doc)
@@ -152,8 +152,8 @@ rule_type: metric_definition | filter_rule | join_rule | exclusion_rule | busine
             "usage_count": 0,
             "reinforcement_count": 1,
             "active": True,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+            "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
             "source_message": "manual",
         }
         res = await self.collection.insert_one(doc)
@@ -163,13 +163,13 @@ rule_type: metric_definition | filter_rule | join_rule | exclusion_rule | busine
     async def update(self, belief_id: str, user_id: str, content: str) -> bool:
         r = await self.collection.update_one(
             {"_id": ObjectId(belief_id), "user_id": user_id},
-            {"$set": {"content": content, "updated_at": datetime.utcnow()}},
+            {"$set": {"content": content, "updated_at": datetime.now(timezone.utc).replace(tzinfo=None)}},
         )
         return r.modified_count > 0
 
     async def deactivate(self, belief_id: str, user_id: str) -> bool:
         r = await self.collection.update_one(
             {"_id": ObjectId(belief_id), "user_id": user_id},
-            {"$set": {"active": False, "updated_at": datetime.utcnow()}},
+            {"$set": {"active": False, "updated_at": datetime.now(timezone.utc).replace(tzinfo=None)}},
         )
         return r.modified_count > 0

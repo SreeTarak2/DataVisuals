@@ -87,13 +87,11 @@ class InsightsCacheService:
     async def get_cache(self, dataset_id: str, user_id: str) -> Optional[Dict]:
         """Get the entire insights cache for a dataset."""
         try:
-            db = get_database()
-            try:
-                query = {"_id": dataset_id, "user_id": user_id}
-            except Exception:
-                query = {"_id": dataset_id, "user_id": user_id}
+            from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 
-            dataset = await db.uploads.find_one(query, {"insights_cache": 1})
+            dataset = await enhanced_dataset_service.get_dataset_doc(
+                dataset_id, user_id, projection={"insights_cache": 1}
+            )
             return dataset.get("insights_cache") if dataset else None
         except Exception as e:
             logger.warning(f"Failed to get insights cache: {e}")
@@ -102,16 +100,18 @@ class InsightsCacheService:
     async def get_dataset(self, dataset_id: str, user_id: str) -> Optional[Dict]:
         """Get dataset for hash comparison."""
         try:
-            db = get_database()
-            try:
-                query = {"_id": dataset_id, "user_id": user_id}
-            except Exception:
-                query = {"_id": dataset_id, "user_id": user_id}
+            from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 
-            dataset = await db.uploads.find_one(
-                query, {"metadata": 1, "file_size": 1, "updated_at": 1, "columns": 1}
+            return await enhanced_dataset_service.get_dataset_doc(
+                dataset_id,
+                user_id,
+                projection={
+                    "metadata": 1,
+                    "file_size": 1,
+                    "updated_at": 1,
+                    "columns": 1,
+                },
             )
-            return dataset
         except Exception as e:
             logger.warning(f"Failed to get dataset: {e}")
             return None

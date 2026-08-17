@@ -58,7 +58,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -265,6 +265,65 @@ Return your response as JSON:
 """
 
 
+def _build_next_question_prompt(
+    problem: str,
+    components: list[dict[str, Any]],
+    answered: list[dict[str, Any]],
+    beliefs_context: str = "",
+) -> str:
+    """
+    Build the "derive the next pivotal question" prompt.
+
+    The strongest questions in an analysis journey are DERIVED from evidence,
+    not pre-generated: the next question must follow from what the previous
+    answers just revealed ("the West dropped — is it one product or across
+    the board?"), not repeat the decomposition.
+    """
+    components_block = json.dumps(components, indent=2, default=str) if components else "[]"
+    answered_block = json.dumps(answered, indent=2, default=str) if answered else "[]"
+    beliefs_block = beliefs_context if beliefs_context else "(none)"
+
+    return f"""\
+You are a senior data analyst guiding another analyst through a problem.
+You are mid-journey: the problem has been decomposed and some questions have
+already been answered. Your job is to surface the ONE most pivotal question
+to ask the data NEXT.
+
+RULES:
+1. DERIVE from evidence: the next question must follow from what the
+   previous answers just revealed. If an answer showed a drop in the West,
+   the next question is "is it one product or across the board?" — NOT a
+   generic "what is revenue by region?".
+2. HARD questions only: prefer questions that would change a decision,
+   expose a confound, or test a causal hypothesis — not descriptive queries
+   that just restate the data.
+3. If nothing has been answered yet, return the single most critical
+   sub-question of the decomposition (the one that unblocks the rest).
+4. Do NOT repeat an already-answered question, even reworded.
+5. Do NOT return a list. ONE question, with a short rationale.
+
+PROBLEM: {problem}
+
+DECOMPOSITION (MECE components):
+{components_block}
+
+ALREADY ANSWERED:
+{answered_block}
+
+BUSINESS RULES / BELIEFS (use these as hard constraints):
+{beliefs_block}
+
+Return JSON:
+{{
+  "question": "The next pivotal question to ask the data",
+  "rationale": "Why this question now, grounded in the evidence above",
+  "component": "Which decomposition component it belongs to (or 'cross-cutting')",
+  "priority": "high|medium|low",
+  "confidence": 0.0
+}}
+"""
+
+
 def _build_file_review_prompt(
     target_name: str,
     content: str,
@@ -374,7 +433,7 @@ class ThinkerAgent:
     def llm_router(self) -> Any:
         """Lazy import of the LLM router to avoid circular imports."""
         if self._llm_router is None:
-            from services.llm_router import llm_router as _router
+            from llm.router import llm_router as _router
             self._llm_router = _router
         return self._llm_router
 
@@ -493,6 +552,87 @@ class ThinkerAgent:
             }
 
         return extract_json(raw)
+
+    # ------------------------------------------------------------------
+    # 2.5 DERIVE NEXT PIVOTAL QUESTION (journey loop)
+    # ------------------------------------------------------------------
+
+    async def derive_next_question(
+        self,
+        problem: str,
+        components: list[dict[str, Any]] | None = None,
+        answered: list[dict[str, Any]] | None = None,
+        beliefs_context: str = "",
+        model_role: str = "complex_analysis",
+    ) -> dict[str, Any]:
+        """
+        Surface the next pivotal question in an analysis journey.
+
+        Derived from evidence — the answer to the last question sharpens the
+        next one. Replaces generic follow-up suggestions with questions a
+        senior analyst would actually ask.
+
+        Args:
+            problem: The problem statement driving the journey.
+            components: MECE decomposition components (optional).
+            answered: Previously answered questions with their findings.
+            beliefs_context: Business rules / corrections (hard constraints).
+            model_role: LLM role to use.
+
+        Returns:
+            Dict with question, rationale, component, priority, confidence.
+            On failure returns a safe fallback rather than raising.
+        """
+        prompt = _build_next_question_prompt(
+            problem=problem,
+            components=components or [],
+            answered=answered or [],
+            beliefs_context=beliefs_context,
+        )
+
+        try:
+            raw = await self.llm_router.call(
+                prompt=prompt,
+                model_role=model_role,
+                expect_json=True,
+                temperature=0.3,
+                max_tokens=1024,
+            )
+        except Exception as e:
+            logger.error(f"[ThinkerAgent] derive_next_question failed: {e}", exc_info=True)
+            return {
+                "question": (
+                    "What does the most recent finding imply for the next step "
+                    "of this analysis?"
+                ),
+                "rationale": f"Could not derive a grounded question: {e}",
+                "component": "cross-cutting",
+                "priority": "medium",
+                "confidence": 0.0,
+            }
+
+        parsed = extract_json(raw)
+        if not isinstance(parsed, dict) or not parsed.get("question"):
+            return {
+                "question": (
+                    "What does the most recent finding imply for the next step "
+                    "of this analysis?"
+                ),
+                "rationale": "LLM returned an unparseable next-question payload.",
+                "component": "cross-cutting",
+                "priority": "medium",
+                "confidence": 0.0,
+            }
+
+        return {
+            "question": str(parsed.get("question", "")).strip(),
+            "rationale": str(parsed.get("rationale", "")).strip(),
+            "component": str(parsed.get("component", "cross-cutting")).strip(),
+            "priority": str(parsed.get("priority", "medium")).strip()
+            if str(parsed.get("priority", "medium")).strip() in ("high", "medium", "low")
+            else "medium",
+            "confidence": float(parsed.get("confidence", 0.5) or 0.5),
+        }
 
     # ------------------------------------------------------------------
     # 3. FILE / CODE / OUTPUT REVIEW
@@ -661,7 +801,7 @@ class ThinkerAgent:
         Returns:
             ReasoningResult with complete reasoning
         """
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc).replace(tzinfo=None)
 
         # Step 1: Chain of thought
         result = await self.chain_of_thought(question, context, observations)
@@ -683,7 +823,7 @@ class ThinkerAgent:
             if synthesis.get("uncertainties"):
                 result.uncertainties = synthesis.get("uncertainties", [])
 
-        elapsed = (datetime.utcnow() - start).total_seconds()
+        elapsed = (datetime.now(timezone.utc).replace(tzinfo=None) - start).total_seconds()
         result.metadata["elapsed_seconds"] = elapsed
         logger.info(
             f"[ThinkerAgent] think() completed in {elapsed:.1f}s — "

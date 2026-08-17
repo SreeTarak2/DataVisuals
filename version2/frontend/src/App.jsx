@@ -11,20 +11,25 @@ import lazyWithRetry from "./utils/lazyWithRetry";
 
 // Lazy load pages with retry to avoid repeated "Failed to fetch dynamically imported module" loops.
 const Landing = lazyWithRetry(() => import("./pages/LandingPage.jsx"), "landing");
+const Features = lazyWithRetry(() => import("./pages/FeaturesPage.jsx"), "features");
+const Pricing = lazyWithRetry(() => import("./pages/PricingPage.jsx"), "pricing");
+const Docs = lazyWithRetry(() => import("./pages/DocsPage.jsx"), "docs");
+const Blog = lazyWithRetry(() => import("./pages/BlogPage.jsx"), "blog");
+const Demo = lazyWithRetry(() => import("./pages/DemoPage.jsx"), "demo");
+const Playground = lazyWithRetry(() => import("./pages/playground/PlaygroundPage.jsx"), "playground");
+const Projects = lazyWithRetry(() => import("./pages/projects/ProjectsPage.jsx"), "projects");
+const ProjectNotebook = lazyWithRetry(() => import("./pages/projects/ProjectNotebookPage.jsx"), "project-notebook");
 const Login = lazyWithRetry(() => import("./pages/Login.jsx"), "login");
 const Register = lazyWithRetry(() => import("./pages/Register.jsx"), "register");
 const GoogleCallback = lazyWithRetry(() => import("./pages/auth/GoogleCallbackPage.jsx"), "google-callback");
 const Dashboard = lazyWithRetry(() => import("./pages/Dashboard/index.js"), "dashboard");
+const MainDashboard = lazyWithRetry(() => import("./pages/Dashboard/MainDashboard.jsx"), "main-dashboard");
 const Datasets = lazyWithRetry(() => import("./pages/Datasets.jsx"), "datasets");
-const Chat = lazyWithRetry(() => import("./pages/Chat.jsx"), "chat");
-const ChartsStudio = lazyWithRetry(() => import("./pages/ChartsStudio.jsx"), "charts");
 const Settings = lazyWithRetry(() => import("./pages/Settings.jsx"), "settings");
-const Insights = lazyWithRetry(() => import("./pages/insights/index.js"), "insights");
-const DataProfile = lazyWithRetry(() => import("./pages/DataProfile/index.js"), "data-profile");
-const UnderstandingReport = lazyWithRetry(() => import("./pages/datasets/UnderstandingReport.jsx"), "understanding-report");
 const Connectors = lazyWithRetry(() => import("./pages/ConnectorsPage.jsx"), "connectors");
 const ConnectorSetup = lazyWithRetry(() => import("./pages/ConnectorSetupPage.jsx"), "connector-setup");
-const DevKpiTest = lazyWithRetry(() => import("./pages/dev/KpiTest.jsx"), "dev-kpi-test");
+const DataBriefing = lazyWithRetry(() => import("./pages/DataBriefing.jsx"), "data-briefing");
+const SqlEditorPage = lazyWithRetry(() => import("./pages/sql/SqlEditorPage.jsx"), "sql");
 
 // Loading fallback component
 const PageLoader = () => (
@@ -36,9 +41,16 @@ const PageLoader = () => (
   </div>
 );
 
+// Module-level guard prevents double init in React StrictMode (dev mode).
+// React 18 StrictMode unmounts and remounts components with fresh useRefs,
+// so a module-level variable is the only reliable guard outside the component.
+let _appInitialized = false;
+
 function App() {
   // Initialize auth and theme on app load
   useEffect(() => {
+    if (_appInitialized) return;
+    _appInitialized = true;
     initAuth();
     useThemeStore.getState().initTheme();
   }, []);
@@ -53,8 +65,11 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/auth/google/callback" element={<GoogleCallback />} />
-            <Route path="/dev/kpi-test" element={<DevKpiTest />} />
-
+            <Route path="/features" element={<Features />} />
+            <Route path="/pricing" element={<Pricing />} />
+            <Route path="/docs" element={<Docs />} />
+            <Route path="/blog" element={<Blog />} />
+            <Route path="/demo" element={<Demo />} />
             {/* Protected Routes */}
             <Route
               path="/app"
@@ -65,16 +80,17 @@ function App() {
               }
             >
               <Route index element={<Navigate to="/app/dashboard" replace />} />
-              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="dashboard" element={<MainDashboard />} />
               <Route path="workspace" element={<Datasets />} />
-              <Route path="chat" element={<Chat />} />
-              <Route path="charts" element={<ChartsStudio />} />
-              <Route path="analysis" element={<Insights />} />
+              <Route path="datasets" element={<Datasets />} />
               <Route path="settings" element={<Settings />} />
               <Route path="connectors" element={<Connectors />} />
               <Route path="connectors/:id" element={<ConnectorSetup />} />
-              <Route path="datasets/:id/profile" element={<DataProfile />} />
-              <Route path="datasets/:id/understanding" element={<UnderstandingReport />} />
+              <Route path="datasets/:id/briefing" element={<DataBriefing />} />
+              <Route path="playground" element={<Playground />} />
+              <Route path="projects" element={<Projects />} />
+              <Route path="projects/:projectId" element={<ProjectNotebook />} />
+              <Route path="sql" element={<SqlEditorPage />} />
             </Route>
 
             {/* Catch all - redirect to landing */}

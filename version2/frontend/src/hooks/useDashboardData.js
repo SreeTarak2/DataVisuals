@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'react-hot-toast'
-import { getAuthToken } from '../services/api'
+
 
 const useDashboardData = (selectedDataset) => {
   const [dashboardData, setDashboardData] = useState({
@@ -179,23 +179,16 @@ const useDashboardData = (selectedDataset) => {
     setDashboardData(prev => ({ ...prev, loading: true, error: null }))
 
     try {
-      const token = getAuthToken()
-      if (!token) {
-        throw new Error('No authentication token found')
-      }
-
-      const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
+      const headers = { 'Content-Type': 'application/json' }
+      const fetchOpts = (extra = {}) => ({ headers, credentials: 'include', ...extra })
 
       // Load all dashboard data in parallel
       const [overviewRes, insightsRes, chartsRes, previewRes, aiLayoutRes] = await Promise.allSettled([
-        fetch(`/api/dashboard/${selectedDataset.id}/overview`, { headers }),
-        fetch(`/api/dashboard/${selectedDataset.id}/insights`, { headers }),
-        fetch(`/api/dashboard/${selectedDataset.id}/charts`, { headers }),
-        fetch(`/api/datasets/${selectedDataset.id}/preview?limit=10`, { headers }),
-        fetch(`/api/dashboard/${selectedDataset.id}/ai-layout`, { headers })
+        fetch(`/api/dashboard/${selectedDataset.id}/overview`, fetchOpts()),
+        fetch(`/api/dashboard/${selectedDataset.id}/insights`, fetchOpts()),
+        fetch(`/api/dashboard/${selectedDataset.id}/charts`, fetchOpts()),
+        fetch(`/api/datasets/${selectedDataset.id}/preview?limit=10`, fetchOpts()),
+        fetch(`/api/dashboard/${selectedDataset.id}/ai-layout`, fetchOpts())
       ])
 
       // Process overview data

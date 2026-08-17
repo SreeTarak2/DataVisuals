@@ -1,17 +1,9 @@
 import React, { useState } from 'react'
-import { Upload } from 'lucide-react'
-import UploadModal from './features/datasets/UploadModal'
-import useDatasetStore from '../store/datasetStore'
+import { FolderPlus } from 'lucide-react'
+import CreateProjectModal from './features/projects/CreateProjectModal'
 
 const GlobalUploadButton = ({ className = '', variant = 'default' }) => {
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const { fetchDatasets } = useDatasetStore()
-
-  const handleUploadSuccess = (newDataset) => {
-    // Refresh the datasets list
-    fetchDatasets()
-    setIsModalOpen(false)
-  }
 
   const buttonVariants = {
     default: "bg-blue-500 hover:bg-blue-600 text-white",
@@ -25,19 +17,17 @@ const GlobalUploadButton = ({ className = '', variant = 'default' }) => {
         onClick={() => setIsModalOpen(true)}
         className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 hover:shadow-lg hover:scale-105 ${buttonVariants[variant]} ${className}`}
       >
-        <Upload className="w-4 h-4" />
-        Upload Data
+        <FolderPlus className="w-4 h-4" />
+        New project
       </button>
 
-      <UploadModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onUploadSuccess={handleUploadSuccess}
-      />
+      {isModalOpen && (
+        <CreateProjectModal
+          onClose={() => setIsModalOpen(false)}
+        />
+      )}
     </>
   )
 }
 
 export default GlobalUploadButton
-
-

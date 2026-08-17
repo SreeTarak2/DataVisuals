@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request, HTTPException, status
+from fastapi import APIRouter, Depends, Request, HTTPException, status, Response
 from fastapi.responses import RedirectResponse
 from urllib.parse import urlencode
 import httpx
@@ -11,8 +11,72 @@ from db.schemas import (
     PasswordChange,
 )
 from services.auth_service import auth_service, get_current_user
+from services.notifications.hub import notification_hub
 from core.rate_limiter import limiter, RateLimits
 from core.config import settings
+
+
+# ── Cookie helpers (HttpOnly JWT cookie + HttpOnly refresh cookie) ───────
+# The access token cookie is sent on every API request; the refresh token
+# cookie is path-scoped to /api/auth so it is only ever sent to auth
+# endpoints (least privilege — the value never reaches other routes).
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+    """Set the HttpOnly JWT access-token cookie on the response."""
+    max_age = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    response.set_cookie(
+        key="access_token",
+        value=f"Bearer {token}",
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=max_age,
+        path=settings.COOKIE_PATH,
+        domain=settings.COOKIE_DOMAIN or None,
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    """Clear the HttpOnly JWT cookie (used on logout)."""
+    response.set_cookie(
+        key="access_token",
+        value="",
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=0,  # Expire immediately
+        path=settings.COOKIE_PATH,
+        domain=settings.COOKIE_DOMAIN or None,
+    )
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    """Set the HttpOnly refresh-token cookie (long-lived, rotation-managed)."""
+    max_age = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
+    response.set_cookie(
+        key=settings.REFRESH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=max_age,
+        path=settings.REFRESH_COOKIE_PATH,
+        domain=settings.COOKIE_DOMAIN or None,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    """Clear the HttpOnly refresh-token cookie (used on logout)."""
+    response.set_cookie(
+        key=settings.REFRESH_COOKIE_NAME,
+        value="",
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=0,  # Expire immediately
+        path=settings.REFRESH_COOKIE_PATH,
+        domain=settings.COOKIE_DOMAIN or None,
+    )
 
 router = APIRouter()
 
@@ -81,10 +145,22 @@ async def google_callback(request: Request, code: str):
                 name=userinfo.get("name"),
                 google_id=userinfo.get("id"),
                 picture=userinfo.get("picture"),
+                device_name=(
+                    request.headers.get("X-Device-Name") or "Web browser"
+                ),
+                ip=request.client.host if request.client else None,
+                user_agent=request.headers.get("User-Agent"),
             )
 
-            redirect_url = f"{settings.FRONTEND_URL}/auth/google/callback?{urlencode({'token': result.access_token, 'type': result.token_type})}"
-            return RedirectResponse(url=redirect_url)
+            # Set HttpOnly cookies AND pass token in URL (frontend callback reads it)
+            redirect_url = (
+                f"{settings.FRONTEND_URL}/auth/google/callback"
+                f"?{urlencode({'token': result.access_token, 'type': result.token_type})}"
+            )
+            redirect = RedirectResponse(url=redirect_url)
+            _set_auth_cookie(redirect, result.access_token)
+            _set_refresh_cookie(redirect, result.refresh_token)
+            return redirect
 
     except httpx.HTTPError as e:
         raise HTTPException(
@@ -101,8 +177,21 @@ async def register_user(request: Request, user_data: UserCreate):
 
 @router.post("/login", response_model=LoginResponse)
 @limiter.limit(RateLimits.AUTH_LOGIN)
-async def login_user(request: Request, login_data: UserLogin):
-    return await auth_service.login_user(login_data)
+async def login_user(request: Request, login_data: UserLogin, response: Response):
+    """
+    Authenticate user and return JWT in both:
+    - JSON response body (backward compatible with existing clients)
+    - HttpOnly cookies (access token + refresh token)
+    """
+    result = await auth_service.login_user(
+        login_data,
+        device_name=request.headers.get("X-Device-Name") or "Web browser",
+        ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent"),
+    )
+    _set_auth_cookie(response, result.access_token)
+    _set_refresh_cookie(response, result.refresh_token)
+    return result
 
 
 @router.get("/me", response_model=User)
@@ -140,6 +229,117 @@ async def update_profile(
 
     updated_user.pop("hashed_password", None)
     return updated_user
+
+@router.post("/logout")
+@limiter.limit(RateLimits.AUTH_LOGIN)
+async def logout_user(
+    request: Request,
+    response: Response,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Log out the current device: revoke this session server-side (so its
+    access token dies instantly via the denylist), clear both cookies, and
+    push ``session_revoked`` so any live WebSocket on this account closes.
+    """
+    jti = current_user.get("jti")
+    if jti:
+        await auth_service.revoke_session_by_jti(jti, current_user["id"])
+    _clear_auth_cookie(response)
+    _clear_refresh_cookie(response)
+    # Force any open sockets (other devices/tabs) to drop their session state
+    notification_hub.schedule_push(
+        current_user["id"], {"type": "session_revoked"}
+    )
+    return {"message": "Logged out successfully"}
+
+
+@router.post("/logout-all")
+@limiter.limit(RateLimits.AUTH_LOGIN)
+async def logout_all(
+    request: Request,
+    response: Response,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Log out every device except this one: revoke all other active sessions.
+    The current device keeps its session (access token stays valid); other
+    devices are denied on their next request/refresh.
+    """
+    count = await auth_service.revoke_all_other_sessions(
+        current_user["id"], current_user.get("jti")
+    )
+    return {"message": "Logged out everywhere else", "revoked": count}
+
+
+@router.post("/refresh")
+@limiter.limit(RateLimits.AUTH_LOGIN)
+async def refresh_session(
+    request: Request,
+    response: Response,
+):
+    """
+    Rotate the refresh token and mint a fresh access token.
+
+    The refresh token is read from its HttpOnly cookie (path-scoped to
+    /api/auth). Rotation: every call issues a new refresh token and marks
+    the old one as used; presenting a used token revokes the session.
+    """
+    refresh_token = request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No refresh token",
+        )
+
+    access_token, new_refresh_token = await auth_service.refresh_session(
+        refresh_token, ip=request.client.host if request.client else None
+    )
+    _set_auth_cookie(response, access_token)
+    _set_refresh_cookie(response, new_refresh_token)
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    }
+
+
+@router.get("/sessions")
+@limiter.limit(RateLimits.AUTH_LOGIN)
+async def list_sessions(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """List active sessions (devices) for the current user, newest first."""
+    sessions = await auth_service.list_sessions(current_user["id"])
+    current_jti = current_user.get("jti")
+    for s in sessions:
+        s["is_current"] = s.get("jti") == current_jti
+    return {"sessions": sessions}
+
+
+@router.delete("/sessions/{session_id}")
+@limiter.limit(RateLimits.AUTH_LOGIN)
+async def revoke_session(
+    request: Request,
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Revoke a specific session (device) — cannot revoke the current one."""
+    session = await auth_service.get_session_by_jti(session_id)
+    if not session or session.get("user_id") != current_user["id"]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+    if session.get("jti") == current_user.get("jti"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot revoke the current session — use logout instead",
+        )
+    await auth_service.revoke_session_by_jti(session_id, current_user["id"])
+    return {"message": "Session revoked", "session_id": session_id}
+
 
 # Token refresh endpoint for WebSocket connections
 @router.post("/refresh-token")

@@ -24,7 +24,7 @@ import os
 import time
 from typing import Dict, List, Optional, Any, Set
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from contextlib import contextmanager
 
 from .exceptions import (
@@ -170,7 +170,7 @@ class FalkorDBClient:
                 # Test connection
                 self._client.ping()
                 self._connected = True
-                self._connection_time = datetime.utcnow()
+                self._connection_time = datetime.now(timezone.utc).replace(tzinfo=None)
                 logger.info(f"Connected to FalkorDB at {self.host}:{self.port}")
                 return True
             else:
@@ -217,7 +217,7 @@ class FalkorDBClient:
                 "host": self.host,
                 "port": self.port,
                 "uptime_seconds": (
-                    (datetime.utcnow() - self._connection_time).total_seconds()
+                    (datetime.now(timezone.utc).replace(tzinfo=None) - self._connection_time).total_seconds()
                     if self._connection_time
                     else 0
                 ),
@@ -263,7 +263,7 @@ class FalkorDBClient:
                 properties["dataset_id"] = dataset_id
 
             # Add timestamp
-            properties["created_at"] = datetime.utcnow().isoformat()
+            properties["created_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
             # Create node using FalkorDB
             node = self._client.graph(labels_str).node.create(properties)
@@ -394,7 +394,7 @@ class FalkorDBClient:
 
         try:
             # Add update timestamp
-            properties["updated_at"] = datetime.utcnow().isoformat()
+            properties["updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
             # Build and execute update
             props_str = ", ".join([f"n.{k} = ${k}" for k in properties.keys()])
@@ -466,7 +466,7 @@ class FalkorDBClient:
 
         try:
             props = properties or {}
-            props["created_at"] = datetime.utcnow().isoformat()
+            props["created_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
             # Build query - use SET for properties after CREATE (valid Cypher)
             query = f"""

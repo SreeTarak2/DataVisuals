@@ -12,7 +12,7 @@ import {
     BookOpen,
 } from 'lucide-react';
 import GlassPanel from '@/components/ui/GlassPanel';
-import PlotlyChart from '@/components/features/charts/PlotlyChart';
+import ChartRenderer from '@/components/features/charts/ChartRenderer';
 import ReactMarkdown from 'react-markdown';
 import InsightFeedback from '@/components/features/feedback/InsightFeedback';
 
@@ -188,7 +188,7 @@ const DeepAnalysisStory = ({ analysisResult, isLoading }) => {
                                                 </div>
                                             </div>
                                             <div className="h-[400px] w-full p-4">
-                                                <PlotlyChart
+                                                <ChartRenderer
                                                     data={chart.data}
                                                     layout={{
                                                         ...chart.layout,

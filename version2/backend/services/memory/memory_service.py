@@ -20,10 +20,12 @@ embedding model, with keyword-overlap fallback when embeddings are unavailable.
 import asyncio
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
+
+import numpy as np
 
 from db.database import get_database
-from services.llm_router import llm_router
+from llm.router import llm_router
 
 logger = logging.getLogger(__name__)
 
@@ -178,11 +180,10 @@ class MemoryService:
             else:
                 query_emb = await store._embed(query)
 
-            # Dot product against each stored embedding (fast, no model calls)
-            similarities = []
-            for _fact_id, fact_emb in memory_embeddings:
-                dot = sum(q * f for q, f in zip(query_emb, fact_emb))
-                similarities.append(max(0.0, float(dot)))
+            # Batch dot product via NumPy (~100x faster than pure Python loop)
+            fact_matrix = np.array([emb for _, emb in memory_embeddings])
+            query_np = np.asarray(query_emb)
+            similarities = np.dot(fact_matrix, query_np).clip(min=0.0).tolist()
 
             return similarities
 
@@ -221,7 +222,7 @@ class MemoryService:
         """
         try:
             # Step 1: Extract candidate memories via LLM
-            from core.prompt_templates import get_memory_extraction_prompt
+            from prompts.sql import get_memory_extraction_prompt
 
             message_pair = (
                 f"User: {user_query}\n"
@@ -350,7 +351,7 @@ class MemoryService:
                     update_doc = {
                         "fact": fact,
                         "source_query": source_query,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
                     }
                     if embedding is not None:
                         update_doc["embedding"] = embedding
@@ -364,6 +365,24 @@ class MemoryService:
                     )
                     return {"action": "updated", "fact": fact, "category": category}
 
+            # FIX §8: Check ChromaDB for similar beliefs before inserting.
+            # Both PassiveBeliefIngestion and MemoryService extract facts from
+            # the same AI responses — this prevents duplicate storage.
+            try:
+                from agents.belief.belief_store import get_belief_store
+                chroma = get_belief_store()
+                similar_beliefs = await chroma.query_similar_beliefs(
+                    user_id, fact, n_results=1, min_confidence=0.2
+                )
+                if similar_beliefs and similar_beliefs[0]["similarity"] > 0.85:
+                    logger.debug(
+                        f"Memory NOOP (ChromaDB dedup): '{fact[:50]}' "
+                        f"similar to existing belief (sim={similar_beliefs[0]['similarity']:.2f})"
+                    )
+                    return None
+            except Exception:
+                pass
+
             # ADD: No similar memory found — pre-compute embedding
             embedding = await self._compute_embedding(fact)
             memory_doc = {
@@ -372,8 +391,8 @@ class MemoryService:
                 "fact": fact,
                 "category": category,
                 "source_query": source_query,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+                "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
                 "relevance_count": 0,
             }
             if embedding is not None:
@@ -500,7 +519,7 @@ class MemoryService:
                         {"$inc": {"relevance_count": 1}},
                     )
 
-            method = "vector" if use_vector else "keyword"
+            method = "vector" if use_stored else "keyword"
             if scored and scored[0][0] > 0:
                 logger.debug(
                     f"Memory retrieval ({method}): {len(top_memories)} relevant "

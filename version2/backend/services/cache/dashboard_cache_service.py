@@ -81,39 +81,47 @@ class DashboardCacheService:
         return datetime.now(timezone.utc) < expiry_time
 
     async def _get_dataset_cache(self, dataset_id: str, user_id: str) -> Optional[Dict]:
-        """Get the dashboard_cache field from dataset document."""
-        db = self._get_db()
-
+        """Get the dashboard_cache field from dataset document (workspace-scoped)."""
         try:
-            dataset_oid = ObjectId(dataset_id)
-            query = {"_id": dataset_oid, "user_id": user_id}
-        except Exception:
-            query = {"_id": dataset_id, "user_id": user_id}
+            from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 
-        dataset = await db.uploads.find_one(query, {"dashboard_cache": 1})
-        return dataset.get("dashboard_cache") if dataset else None
+            dataset = await enhanced_dataset_service.get_dataset_doc(
+                dataset_id, user_id, projection={"dashboard_cache": 1}
+            )
+            return dataset.get("dashboard_cache") if dataset else None
+        except Exception as e:
+            logger.warning(f"Failed to get dashboard cache for {dataset_id}: {e}")
+            return None
 
     async def _update_cache(
         self, dataset_id: str, user_id: str, cache_key: str, data: Any
     ) -> bool:
         """Update a specific cache key in the dashboard_cache field."""
-        db = self._get_db()
-
         try:
-            dataset_oid = ObjectId(dataset_id)
-            query = {"_id": dataset_oid, "user_id": user_id}
-        except Exception:
-            query = {"_id": dataset_id, "user_id": user_id}
+            from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 
-        cache_entry = {
-            "data": data,
-            "generated_at": datetime.utcnow(),
-            "version": self._cache_version,
-        }
+            # Workspace-scoped update: resolves the effective workspace and pins
+            # the filter, so the write can never touch another tenant's doc.
+            from db.tenant_guard import enforce_workspace_filter, tenant_scope_query
+            from services.workspace import workspace_service
 
-        result = await db.uploads.update_one(
-            query, {"$set": {f"dashboard_cache.{cache_key}": cache_entry}}
-        )
+            wid = await workspace_service.resolve_effective_workspace_id(None, user_id)
+
+            query = tenant_scope_query("uploads", {"_id": dataset_id}, wid, user_id)
+            enforce_workspace_filter("uploads", query, wid, "write")
+
+            cache_entry = {
+                "data": data,
+                "generated_at": datetime.now(timezone.utc).replace(tzinfo=None),
+                "version": self._cache_version,
+            }
+
+            result = await self._get_db().uploads.update_one(
+                query, {"$set": {f"dashboard_cache.{cache_key}": cache_entry}}
+            )
+        except Exception as e:
+            logger.warning(f"Failed to update dashboard cache for {dataset_id}: {e}")
+            return False
 
         if result.modified_count > 0:
             logger.info(f"✅ Cached {cache_key} for dataset {dataset_id}")
@@ -250,7 +258,7 @@ class DashboardCacheService:
 
         cache_entry = {
             "data": explanation,
-            "generated_at": datetime.utcnow(),
+            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None),
             "version": self._cache_version,
         }
 

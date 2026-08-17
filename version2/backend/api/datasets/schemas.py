@@ -158,6 +158,50 @@ class ReportMetadata(BaseModel):
         pass
 
 
+class CorrectionRequest(BaseModel):
+    """User-submitted semantic correction for a column."""
+
+    column: str = Field(..., description="Column name to correct")
+    corrected_role: str = Field(
+        ..., description="Corrected SemanticRole: MEASURE, DIMENSION, TIME, IDENTITY, RATE, COUNT"
+    )
+    corrected_behavioral_role: Optional[str] = Field(
+        None, description="Corrected BehavioralRole (optional)"
+    )
+    aggregation_overrides: Optional[Dict[str, bool]] = Field(
+        None,
+        description="Override aggregation permissions: {sum_allowed, avg_allowed, count_allowed, ...}",
+    )
+
+    class Config(_Config):
+        pass
+
+
+class CorrectionResponse(BaseModel):
+    """Response after applying a correction."""
+
+    success: bool
+    dataset_id: str
+    column: str
+    previous_role: str
+    new_role: str
+    message: str
+
+    class Config(_Config):
+        pass
+
+
+class CorrectionListResponse(BaseModel):
+    """List of all corrections for a dataset."""
+
+    dataset_id: str
+    corrections: List[Dict[str, Any]]
+    count: int
+
+    class Config(_Config):
+        pass
+
+
 class ReportMetadataResponse(BaseModel):
     id: str
     dataset_id: str

@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from typing import Optional
 import logging
 
-from services.llm_router import llm_router
+from llm.router import llm_router
 
 logger = logging.getLogger(__name__)
 

@@ -528,7 +528,7 @@ class PIIDetector:
             total_pii_detections=len(columns_with_pii),
             high_confidence_count=high_count,
             medium_confidence_count=medium_count,
-            scan_timestamp=datetime.utcnow().isoformat(),
+            scan_timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             recommendations=recommendations,
         )
 

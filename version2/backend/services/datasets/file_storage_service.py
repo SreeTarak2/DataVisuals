@@ -14,17 +14,19 @@ from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
+
 class FileStorageService:
     """
     A comprehensive service for all physical file operations: validation,
     saving, reading, and deletion. This is the single source of truth for file I/O.
     """
+
     def __init__(self, base_path: str = "uploads"):
         self.base_path = Path(base_path)
         self.base_path.mkdir(exist_ok=True)
         (self.base_path / "datasets").mkdir(exist_ok=True)
 
-        self.allowed_extensions = {'csv', 'xlsx', 'xls', 'json'}
+        self.allowed_extensions = {"csv", "xlsx", "xls", "json"}
         self.max_size_mb = 500  # Increased to support large datasets
         self.max_size_bytes = self.max_size_mb * 1024 * 1024
 
@@ -33,25 +35,26 @@ class FileStorageService:
         # 1. Check file size
         if len(content) > self.max_size_bytes:
             raise HTTPException(
-                status_code=413,
-                detail=f"File too large. Maximum size is {self.max_size_mb}MB."
+                status_code=413, detail=f"File too large. Maximum size is {self.max_size_mb}MB."
             )
-        
+
         # 2. Check file extension
-        file_ext = filename.split('.')[-1].lower() if '.' in filename else ''
+        file_ext = filename.split(".")[-1].lower() if "." in filename else ""
         if file_ext not in self.allowed_extensions:
             raise HTTPException(
                 status_code=400,
-                detail=f"File type not supported. Allowed types: {', '.join(self.allowed_extensions)}"
+                detail=f"File type not supported. Allowed types: {', '.join(self.allowed_extensions)}",
             )
-        
+
         # 3. Check MIME type (content-based check) for basic verification
         try:
             mime_type = magic.from_buffer(content, mime=True)
-            if 'csv' in file_ext and 'text' not in mime_type and 'csv' not in mime_type:
-                 logger.warning(f"Possible MIME mismatch for CSV '{filename}': detected {mime_type}")
-            if 'xls' in file_ext and 'excel' not in mime_type and 'spreadsheet' not in mime_type:
-                 logger.warning(f"Possible MIME mismatch for Excel '{filename}': detected {mime_type}")
+            if "csv" in file_ext and "text" not in mime_type and "csv" not in mime_type:
+                logger.warning(f"Possible MIME mismatch for CSV '{filename}': detected {mime_type}")
+            if "xls" in file_ext and "excel" not in mime_type and "spreadsheet" not in mime_type:
+                logger.warning(
+                    f"Possible MIME mismatch for Excel '{filename}': detected {mime_type}"
+                )
         except Exception as e:
             logger.warning(f"Could not perform MIME type check on '{filename}': {e}")
 
@@ -61,7 +64,7 @@ class FileStorageService:
         """Validates and saves an uploaded file, returning its essential metadata."""
         try:
             file_ext = self._validate_file(file_content, filename)
-            
+
             file_id = str(uuid.uuid4())
             # Use a consistent naming scheme for security (no original filename)
             new_filename = f"{file_id}.{file_ext}"
@@ -69,10 +72,10 @@ class FileStorageService:
             user_dir = self.base_path / "datasets" / user_id
             user_dir.mkdir(exist_ok=True)
             file_path = user_dir / new_filename
-            
-            async with aiofiles.open(file_path, 'wb') as f:
+
+            async with aiofiles.open(file_path, "wb") as f:
                 await f.write(file_content)
-            
+
             logger.info(f"File saved for user {user_id} at {file_path}")
 
             return {
@@ -95,16 +98,19 @@ class FileStorageService:
         """
         try:
             import magic
-            with open(file_path, 'rb') as f:
+
+            with open(file_path, "rb") as f:
                 header = f.read(4096)
             mime = magic.from_buffer(header, mime=True)
 
             ext_to_mime = {
-                'csv':  ('text/csv', 'text/plain', 'text/comma-separated-values', 'application/csv'),
-                'xlsx': ('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                         'application/octet-stream'),  # some systems return octet-stream for xlsx
-                'xls':  ('application/vnd.ms-excel', 'application/octet-stream'),
-                'json': ('application/json', 'text/plain'),
+                "csv": ("text/csv", "text/plain", "text/comma-separated-values", "application/csv"),
+                "xlsx": (
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "application/octet-stream",
+                ),  # some systems return octet-stream for xlsx
+                "xls": ("application/vnd.ms-excel", "application/octet-stream"),
+                "json": ("application/json", "text/plain"),
             }
             allowed = ext_to_mime.get(expected_ext, ())
             if allowed and mime not in allowed:
@@ -130,20 +136,20 @@ class FileStorageService:
         This is a soft check — we read the file but don't reject it.
         """
         try:
-            dangerous_prefixes = ('=', '+', '-', '@', '\t', '\r')
-            with open(file_path, 'r', errors='replace') as f:
+            dangerous_prefixes = ("=", "+", "-", "@", "\t", "\r")
+            with open(file_path, "r", errors="replace") as f:
                 chunk = f.read(10240)  # first ~10KB
 
-            lines = chunk.split('\n')
+            lines = chunk.split("\n")
             suspicious_cells = []
             for i, line in enumerate(lines[:200]):  # check first 200 lines
                 if not line.strip():
                     continue
-                cells = line.split(',')
+                cells = line.split(",")
                 for j, cell in enumerate(cells):
                     cell_stripped = cell.strip()
                     if cell_stripped and cell_stripped[0] in dangerous_prefixes:
-                        suspicious_cells.append(f"row {i+1}, col {j+1}: '{cell_stripped[:30]}'")
+                        suspicious_cells.append(f"row {i + 1}, col {j + 1}: '{cell_stripped[:30]}'")
                         if len(suspicious_cells) >= 10:
                             break
                 if len(suspicious_cells) >= 10:
@@ -157,37 +163,39 @@ class FileStorageService:
         except Exception as e:
             logger.debug(f"CSV formula injection check skipped ({e})")
 
-    async def save_file_from_path(self, source_path: str, filename: str, user_id: str) -> Dict[str, Any]:
+    async def save_file_from_path(
+        self, source_path: str, filename: str, user_id: str
+    ) -> Dict[str, Any]:
         """Moves a file from a temp path to permanent storage. Used by streaming uploads."""
         try:
-            file_ext = filename.split('.')[-1].lower() if '.' in filename else ''
+            file_ext = filename.split(".")[-1].lower() if "." in filename else ""
             if file_ext not in self.allowed_extensions:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"File type not supported. Allowed types: {', '.join(self.allowed_extensions)}"
+                    detail=f"File type not supported. Allowed types: {', '.join(self.allowed_extensions)}",
                 )
 
             # Validate content against expected extension
             self._check_content_magic(source_path, file_ext)
 
             # Check CSV formula injection risk
-            if file_ext == 'csv':
+            if file_ext == "csv":
                 self._check_csv_formula_injection(source_path)
 
             source = Path(source_path)
             file_size = source.stat().st_size
-            
+
             file_id = str(uuid.uuid4())
             new_filename = f"{file_id}.{file_ext}"
             user_dir = self.base_path / "datasets" / user_id
             user_dir.mkdir(exist_ok=True)
             file_path = user_dir / new_filename
-            
+
             # Move file (uses rename if same filesystem, copy+delete otherwise)
             shutil.move(str(source), str(file_path))
-            
+
             logger.info(f"File moved for user {user_id} at {file_path}")
-            
+
             return {
                 "file_id": file_id,
                 "file_path": str(file_path),
@@ -215,9 +223,24 @@ class FileStorageService:
                 try:
                     total_rows = pl.scan_csv(file_path).select(pl.count()).collect().item()
                     df = pl.read_csv(file_path, skip_rows=offset, n_rows=limit)
-                except Exception as e: # Handle empty file or parse error
-                    logger.error(f"Polars failed to read CSV {file_path}: {e}")
-                    return [], 0
+                except Exception as e:
+                    try:
+                        total_rows = (
+                            pl.scan_csv(file_path, encoding="utf8-lossy", ignore_errors=True)
+                            .select(pl.count())
+                            .collect()
+                            .item()
+                        )
+                        df = pl.read_csv(
+                            file_path,
+                            skip_rows=offset,
+                            n_rows=limit,
+                            encoding="utf8-lossy",
+                            ignore_errors=True,
+                        )
+                    except Exception as e2:
+                        logger.error(f"Polars failed to read CSV {file_path}: {e} / {e2}")
+                        return [], 0
             # For other file types, we might need to read more data to get the count.
             elif ".xlsx" in file_path or ".xls" in file_path:
                 # This is less efficient but necessary for Excel files.
@@ -235,7 +258,7 @@ class FileStorageService:
         except Exception as e:
             logger.error(f"Error reading file data from {file_path}: {e}")
             return [], 0
-            
+
     async def delete_file(self, file_path: str) -> bool:
         """Permanently deletes a file from the disk."""
         try:
@@ -249,6 +272,7 @@ class FileStorageService:
         except Exception as e:
             logger.error(f"Error deleting file {file_path}: {e}")
             return False
+
 
 # Create a singleton instance for easy import and consistent use across the application
 file_storage_service = FileStorageService()

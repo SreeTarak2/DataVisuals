@@ -136,7 +136,7 @@ async def plan(
     if not candidate_specs:
         return []
 
-    from services.llm_router import llm_router
+    from llm.router import llm_router
 
     prompt = _build_prompt(profile, candidate_specs)
 

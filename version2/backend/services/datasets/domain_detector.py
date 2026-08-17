@@ -213,8 +213,8 @@ OUTPUT (valid JSON only):
 {{"domain":"<domain>","confidence":0.85,"key_metrics":["col1","col2"],"reasoning":"brief explanation"}}"""
         
         try:
-            from services.llm_router import llm_router
-            from core.prompt_templates import get_domain_detection_prompt
+            from llm.router import llm_router
+            from prompts.sql import get_domain_detection_prompt
             response = await llm_router.call(
                 get_domain_detection_prompt(columns_str, samples_str),
                 model_role="summary_engine",

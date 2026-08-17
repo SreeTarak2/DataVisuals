@@ -143,6 +143,7 @@ async def extract_table(
             custom_query=body.custom_query,
             dataset_name=body.dataset_name,
             row_limit=body.row_limit,
+            workspace_id=current_user.get("workspace_id", current_user["id"]),
         )
         return result
     except ValueError as e:

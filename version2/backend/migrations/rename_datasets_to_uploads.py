@@ -19,7 +19,7 @@ Version: 1.0
 
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pymongo import MongoClient
 from bson import ObjectId
 import logging
@@ -131,14 +131,14 @@ def migrate_analytics_to_separate_collection(db):
             "domain_intelligence": metadata.get("domain_intelligence", {}),
             "data_quality": metadata.get("data_quality", {}),
             "computed_at": metadata.get("processing_info", {}).get(
-                "processed_at", datetime.utcnow()
+                "processed_at", datetime.now(timezone.utc).replace(tzinfo=None)
             ),
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
             "pipeline_version": metadata.get("processing_info", {}).get(
                 "pipeline_version", "2.0"
             ),
             "migrated_from": "datasets.metadata",
-            "migrated_at": datetime.utcnow(),
+            "migrated_at": datetime.now(timezone.utc).replace(tzinfo=None),
         }
 
         db.dataset_analytics.insert_one(analytics_doc)
@@ -172,7 +172,7 @@ def rename_datasets_to_uploads(db):
 def backup_collection(db, collection_name):
     """Create a backup of a collection."""
     backup_name = (
-        f"{collection_name}_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        f"{collection_name}_backup_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d_%H%M%S')}"
     )
 
     # Copy all documents to backup collection

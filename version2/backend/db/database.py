@@ -91,6 +91,75 @@ async def create_indexes():
         )
 
         # ============================================================
+        # Tenant Scoping Indexes (workspace_id first)
+        # ------------------------------------------------------------
+        # Every tenant-scoped collection is indexed with workspace_id leading
+        # so workspace-isolated reads/writes never degrade to collection scans.
+        # See db/tenant_guard.py for the fail-closed enforcement layer.
+        # ============================================================
+        await db.database.uploads.create_index(
+            [("workspace_id", 1), ("is_active", 1)], name="idx_workspace_active_uploads"
+        )
+        await db.database.uploads.create_index(
+            [("workspace_id", 1), ("upload_date", -1)], name="idx_workspace_uploads_sorted"
+        )
+        await db.database.uploads.create_index(
+            [("workspace_id", 1), ("content_hash", 1)], name="idx_workspace_content_hash"
+        )
+        await db.database.dataset_profiles.create_index(
+            [("workspace_id", 1)], name="idx_dataset_profiles_workspace"
+        )
+        await db.database.dataset_intelligence.create_index(
+            [("workspace_id", 1)], name="idx_dataset_intelligence_workspace"
+        )
+        await db.database.dataset_analytics.create_index(
+            [("workspace_id", 1)], name="idx_dataset_analytics_workspace"
+        )
+        await db.database.pipeline_stages.create_index(
+            [("workspace_id", 1)], name="idx_pipeline_stages_workspace"
+        )
+
+        # ============================================================
+        # Projects Collection (analysis containers — tenant-scoped)
+        # ============================================================
+        await db.database.projects.create_index(
+            [("workspace_id", 1), ("updated_at", -1)],
+            name="idx_projects_workspace_recent",
+        )
+        await db.database.projects.create_index(
+            [("workspace_id", 1), ("owner_id", 1)],
+            name="idx_projects_workspace_owner",
+        )
+
+        # ============================================================
+        # Project Sources Collection (bindings — tenant-scoped)
+        # ============================================================
+        await db.database.project_sources.create_index(
+            [("workspace_id", 1), ("project_id", 1)],
+            name="idx_project_sources_workspace_project",
+        )
+
+        # ============================================================
+        # Project Cells Collection (journey — tenant-scoped)
+        # ============================================================
+        await db.database.project_cells.create_index(
+            [("workspace_id", 1), ("project_id", 1), ("order", 1)],
+            name="idx_project_cells_workspace_order",
+        )
+
+        # ============================================================
+        # Semantic Assumptions Collection (ontology state machine)
+        # ============================================================
+        await db.database.semantic_assumptions.create_index(
+            [("workspace_id", 1), ("dataset_id", 1), ("state", 1)],
+            name="idx_assumptions_ws_dataset_state",
+        )
+        await db.database.semantic_assumptions.create_index(
+            [("workspace_id", 1), ("dataset_id", 1), ("type", 1)],
+            name="idx_assumptions_ws_dataset_type",
+        )
+
+        # ============================================================
         # Dataset Analytics Collection (NEW)
         # ============================================================
         await db.database.dataset_analytics.create_index("dataset_id")
@@ -121,6 +190,32 @@ async def create_indexes():
         # COMPOUND: User's reports sorted by generation time
         await db.database.reports.create_index(
             [("user_id", 1), ("generated_at", -1)], name="idx_user_reports_generated"
+        )
+
+        # ============================================================
+        # Query Log Collection (async execution history)
+        # ============================================================
+        await db.database.query_log.create_index(
+            "ttl_expire_at",
+            expireAfterSeconds=0,
+            name="idx_query_log_ttl",
+        )
+        await db.database.query_log.create_index(
+            [("user_id", 1), ("created_at", -1)],
+            name="idx_user_query_history",
+        )
+        await db.database.query_log.create_index(
+            [("status", 1)], name="idx_query_status"
+        )
+
+        # ============================================================
+        # DB Relationships Collection (cross-table FK cache)
+        # ============================================================
+        # ============================================================
+        # User Settings Collection (alpha adaptation, preferences)
+        # ============================================================
+        await db.database.user_settings.create_index(
+            "user_id", unique=True, name="idx_user_settings_user"
         )
 
         # ============================================================
@@ -167,6 +262,101 @@ async def create_indexes():
             name="idx_user_dataset_kpi_config",
         )
         await db.database.kpi_configs.create_index("updated_at")
+
+        # ============================================================
+        # Chunks Collection (RAG — TTL for orphaned chunks)
+        # ============================================================
+        await db.database.chunks.create_index(
+            "expire_at",
+            expireAfterSeconds=0,
+            name="idx_chunks_ttl",
+        )
+        await db.database.chunks.create_index(
+            [("dataset_id", 1)],
+            name="idx_chunks_dataset",
+        )
+        await db.database.chunks.create_index(
+            [("chunk_id", 1)],
+            unique=True,
+            name="idx_chunks_id",
+        )
+
+        # ============================================================
+        # Workspaces Collection
+        # ============================================================
+        await db.database.workspaces.create_index("owner_id")
+        await db.database.workspaces.create_index("created_at")
+
+        # COMPOUND: Personal workspace lookup (backfill on login)
+        await db.database.workspaces.create_index(
+            [("owner_id", 1), ("is_personal", 1)],
+            name="idx_owner_personal_workspace",
+        )
+
+        # ============================================================
+        # User API Keys Collection (BYOK)
+        # ============================================================
+        await db.database.user_api_keys.create_index(
+            [("user_id", 1), ("provider", 1)],
+            unique=True,
+            name="idx_user_api_key_provider",
+            partialFilterExpression={"is_active": True},
+        )
+        await db.database.user_api_keys.create_index(
+            [("user_id", 1), ("is_active", 1)],
+            name="idx_user_api_keys_active",
+        )
+        await db.database.user_api_keys.create_index(
+            "user_id",
+            name="idx_user_api_keys_user",
+        )
+
+        # ============================================================
+        # Workspace Members Collection
+        # ============================================================
+        await db.database.workspace_members.create_index(
+            [("workspace_id", 1), ("user_id", 1)],
+            unique=True,
+            name="idx_workspace_user_member",
+        )
+        await db.database.workspace_members.create_index("user_id")
+        await db.database.workspace_members.create_index("workspace_id")
+
+        # ============================================================
+        # User Notifications Collection (job notifications inbox)
+        # ============================================================
+        # Tenant-scoped inbox: workspace_id leads so workspace-isolated
+        # reads never degrade to collection scans (see tenant_guard.py).
+        await db.database.user_notifications.create_index(
+            [("workspace_id", 1), ("user_id", 1), ("created_at", -1)],
+            name="idx_notifications_ws_user_recent",
+        )
+        # Unread badge queries: workspace + user + read flag
+        await db.database.user_notifications.create_index(
+            [("workspace_id", 1), ("user_id", 1), ("read", 1)],
+            name="idx_notifications_ws_user_read",
+        )
+
+        # ============================================================
+        # Sessions Collection (per-device auth, refresh-token rotation)
+        # ============================================================
+        # Active sessions per user (device list in Settings), newest first
+        await db.database.sessions.create_index(
+            [("user_id", 1), ("created_at", -1)],
+            name="idx_sessions_user_recent",
+        )
+        # Refresh-token lookup must be unique — one token = one session
+        await db.database.sessions.create_index(
+            "refresh_token_hash",
+            unique=True,
+            name="idx_sessions_refresh_hash",
+        )
+        # Expired sessions are auto-purged by MongoDB TTL
+        await db.database.sessions.create_index(
+            "expires_at",
+            expireAfterSeconds=0,
+            name="idx_sessions_ttl",
+        )
 
         logger.info("Database indexes created successfully")
 

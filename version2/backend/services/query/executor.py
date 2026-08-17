@@ -16,6 +16,7 @@ Architecture:
 import logging
 import re
 import hashlib
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from datetime import datetime
 import json
@@ -24,9 +25,11 @@ import duckdb
 import polars as pl
 import pandas as pd
 
-from services.llm_router import llm_router
-from core.prompt_templates import (
+from llm.router import llm_router
+from core.config import settings
+from prompts.sql import (
     get_sql_generation_prompt,
+    get_direct_sql_prompt,
     get_result_interpretation_prompt,
 )
 from services.query.sql_repair_agent import (
@@ -34,8 +37,14 @@ from services.query.sql_repair_agent import (
     extract_columns_from_df,
     build_column_whitelist_block,
 )
+from services.query.approximate_engine import approximate_rewriter
+from services.query.duckdb_helpers import create_duckdb_connection
+
 # understand_query is the single routing authority — imported lazily to avoid circular imports
 from services.ai.query_rewrite import understand_query
+
+# metric_resolution_service is imported lazily inside execute_query() to avoid
+# a circular import: executor → metric_resolution_service → semantic_query_service → executor
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +83,10 @@ class SQLValidator:
     ]
 
     # Allowed SQL operations (whitelist approach)
+    # Includes DuckDB-specific operations — DuckDB supports PIVOT, UNPIVOT,
+    # QUALIFY (window filter), SAMPLE (random sampling), FILTER (aggregate
+    # filter clause), EXCLUDE/REPLACE (SELECT * column list), COLUMNS()
+    # expression list, and APPROXIMATE aggregates.
     ALLOWED_OPERATIONS = [
         "SELECT",
         "WITH",
@@ -84,21 +97,46 @@ class SQLValidator:
         "HAVING",
         "LIMIT",
         "OFFSET",
+        # ── DuckDB-specific query clauses ────────────────────────────
+        "PIVOT",
+        "UNPIVOT",
+        "QUALIFY",
+        "SAMPLE",
+        "FILTER",         # Aggregate FILTER (WHERE) clause
+        "EXCLUDE",        # SELECT * EXCLUDE col
+        "REPLACE",        # SELECT * REPLACE (col / 100 AS col)
+        "COLUMNS",        # COLUMNS() expression list
+        "APPROXIMATE",    # APPROXIMATE COUNT DISTINCT
+        # ── JOIN variants ────────────────────────────────────────────
         "JOIN",
         "LEFT JOIN",
         "RIGHT JOIN",
         "INNER JOIN",
         "CROSS JOIN",
+        "NATURAL",
+        "POSITIONAL",     # DuckDB POSITIONAL JOIN
+        "ASOF",           # DuckDB ASOF JOIN
+        "SEMI",           # DuckDB SEMI JOIN
+        "ANTI",           # DuckDB ANTI JOIN
+        "USING",
+        # ── Set operations ───────────────────────────────────────────
         "UNION",
         "INTERSECT",
         "EXCEPT",
+        # ── Conditional expressions ──────────────────────────────────
         "CASE",
         "WHEN",
         "THEN",
         "ELSE",
         "END",
+        # ── Aliases and modifiers ────────────────────────────────────
         "AS",
         "DISTINCT",
+        "ALL",
+        "ANY",
+        "SOME",
+        "EXISTS",
+        # ── Aggregate functions ──────────────────────────────────────
         "COUNT",
         "SUM",
         "AVG",
@@ -106,6 +144,7 @@ class SQLValidator:
         "MAX",
         "COALESCE",
         "NULLIF",
+        # ── Scalar functions ─────────────────────────────────────────
         "CAST",
         "ROUND",
         "ABS",
@@ -115,6 +154,7 @@ class SQLValidator:
         "LENGTH",
         "SUBSTRING",
         "CONCAT",
+        # ── Comparison / pattern ─────────────────────────────────────
         "LIKE",
         "ILIKE",
         "IN",
@@ -125,41 +165,80 @@ class SQLValidator:
         "AND",
         "OR",
         "NOT",
+        # ── Ordering ─────────────────────────────────────────────────
         "ASC",
         "DESC",
+        "NULLS FIRST",
+        "NULLS LAST",
+        # ── Window functions ─────────────────────────────────────────
         "OVER",
         "PARTITION BY",
+        "ROWS",
+        "RANGE",
+        "UNBOUNDED PRECEDING",
+        "UNBOUNDED FOLLOWING",
+        "CURRENT ROW",
         "ROW_NUMBER",
         "RANK",
         "DENSE_RANK",
+        "NTILE",
         "LAG",
         "LEAD",
         "FIRST_VALUE",
         "LAST_VALUE",
+        "NTH_VALUE",
+        "CUME_DIST",
+        "PERCENT_RANK",
+        # ── Statistical functions ────────────────────────────────────
         "PERCENTILE_CONT",
         "PERCENTILE_DISC",
         "MEDIAN",
         "MODE",
         "STDDEV",
+        "STDDEV_SAMP",
+        "STDDEV_POP",
         "VARIANCE",
+        "VAR_SAMP",
+        "VAR_POP",
         "CORR",
         "COVAR_POP",
         "COVAR_SAMP",
+        "REGR_SLOPE",
+        "REGR_INTERCEPT",
+        "REGR_R2",
+        "APPROX_COUNT_DISTINCT",
+        "APPROX_QUANTILE",
+        "QUANTILE_CONT",
+        "QUANTILE_DISC",
+        "MAD",
+        # ── Date / time functions ────────────────────────────────────
         "DATE_TRUNC",
         "DATE_PART",
+        "DATEPART",
+        "DATEDIFF",
+        "DATEADD",
         "EXTRACT",
+        "EPOCH",
+        "EPOCH_MS",
         "NOW",
         "CURRENT_DATE",
+        "CURRENT_TIMESTAMP",
         "STRFTIME",
         "DATE_DIFF",
         "DATE_ADD",
         "DATE_SUB",
+        "INTERVAL",
+        # ── String functions ─────────────────────────────────────────
         "REGEXP_MATCHES",
         "REGEXP_REPLACE",
         "STRING_SPLIT",
+        "STRING_AGG",
         "ARRAY_AGG",
         "LIST",
+        "LIST_SORT",
+        "LIST_DISTINCT",
         "UNNEST",
+        # ── Array / generate ─────────────────────────────────────────
         "GENERATE_SERIES",
         "GREATEST",
         "LEAST",
@@ -244,12 +323,11 @@ class QueryExecutor:
 
     def __init__(self):
         self._query_cache: Dict[str, Dict] = {}  # Cache recent query results
-        self._cache_keys_by_dataset: Dict[
-            str, set
-        ] = {}  # dataset_id -> set of cache keys
+        self._cache_keys_by_dataset: Dict[str, set] = {}  # dataset_id -> set of cache keys
         self._max_cache_size = 100
         self._max_result_rows = 1000  # Limit result size for safety
         self._sql_repair_agent = SQLRepairAgent(llm_router)
+        self._approximate_mode: bool = False  # Toggle for AQP rewrites
 
     def _get_column_schema(self, df: pl.DataFrame) -> str:
         """Generate column schema string for LLM prompt."""
@@ -262,12 +340,10 @@ class QueryExecutor:
 
             # Truncate long sample values
             sample_str = (
-                str(sample_val)[:50] + "..."
-                if len(str(sample_val)) > 50
-                else str(sample_val)
+                str(sample_val)[:50] + "..." if len(str(sample_val)) > 50 else str(sample_val)
             )
 
-            schema_lines.append(f"  - `{col}` ({dtype}) — Example: {sample_str}")
+            schema_lines.append(f'  - "{col}" ({dtype}) — Example: {sample_str}')
 
         return "\n".join(schema_lines)
 
@@ -295,17 +371,13 @@ class QueryExecutor:
 
         # Numeric column stats
         numeric_cols = [
-            name
-            for name, dtype in zip(df.columns, df.dtypes)
-            if dtype in pl.NUMERIC_DTYPES
+            name for name, dtype in zip(df.columns, df.dtypes) if dtype in pl.NUMERIC_DTYPES
         ]
         if numeric_cols:
             stats.append(f"Numeric columns: {', '.join(numeric_cols[:5])}")
 
         # Categorical columns with unique counts
-        string_cols = [
-            name for name, dtype in zip(df.columns, df.dtypes) if dtype == pl.Utf8
-        ]
+        string_cols = [name for name, dtype in zip(df.columns, df.dtypes) if dtype == pl.Utf8]
         if string_cols:
             for col in string_cols[:3]:
                 nunique = df[col].n_unique()
@@ -414,6 +486,107 @@ class QueryExecutor:
         return cleaned
 
     @staticmethod
+    def _make_data_path_safe(file_path: str) -> str:
+        """Escape single quotes in a file path for use in DuckDB SQL literals."""
+        return file_path.replace("'", "''")
+
+    @staticmethod
+    def _register_data_view(
+        conn: duckdb.DuckDBPyConnection,
+        file_path: Optional[str],
+        df: pl.DataFrame,
+    ) -> None:
+        """
+        Register the ``data`` view in a DuckDB connection.
+
+        Strategy (best → fallback):
+        1. **Direct file read** (CSV/Parquet) — DuckDB streams from disk, zero Python memory.
+        2. **Pandas registration** — existing Polars→Pandas→DuckDB path for Excel/JSON.
+
+        Args:
+            conn: An open DuckDB in-memory connection.
+            file_path: Optional path to the source file on disk.
+            df: Polars DataFrame (fallback when file_path is None or format unsupported).
+        """
+        if file_path:
+            safe_path = QueryExecutor._make_data_path_safe(file_path)
+            ext = Path(file_path).suffix.lower()
+            if ext == ".csv":
+                conn.execute(
+                    f"CREATE VIEW data AS SELECT * FROM read_csv_auto('{safe_path}')"
+                )
+                return
+            if ext in (".parquet", ".pq"):
+                conn.execute(
+                    f"CREATE VIEW data AS SELECT * FROM read_parquet('{safe_path}')"
+                )
+                return
+            # Unsupported format — fall through to DataFrame path
+
+        # Fallback: register Polars DataFrame
+        try:
+            pandas_df = df.to_pandas()
+        except ModuleNotFoundError as exc:
+            if exc.name != "pyarrow":
+                raise
+            logger.warning(
+                "pyarrow is not installed; falling back to slower "
+                "dict-based Polars->Pandas conversion for SQL execution."
+            )
+            pandas_df = pd.DataFrame(df.to_dicts())
+        conn.register("data", pandas_df)
+
+    @staticmethod
+    def _build_schema_sample_from_file(file_path: str, max_rows: int = 200) -> Optional[pl.DataFrame]:
+        """
+        Build a minimal Polars DataFrame from the file using DuckDB direct reads.
+
+        Reads only ``max_rows`` rows from the file via DuckDB's streaming engine.
+        Zero Python memory overhead — DuckDB never materializes the full dataset
+        in application memory.
+
+        Args:
+            file_path: Path to a CSV or Parquet file on disk.
+            max_rows: Maximum number of rows to read (default 200).
+
+        Returns:
+            A Polars DataFrame with up to ``max_rows`` rows, or ``None`` if the
+            file cannot be read (e.g. unsupported format, file not found).
+        """
+        ext = Path(file_path).suffix.lower()
+        if ext not in (".csv", ".parquet", ".pq"):
+            logger.debug("[SchemaSample] Unsupported format '%s' — returning None", ext)
+            return None
+
+        try:
+            safe_path = QueryExecutor._make_data_path_safe(file_path)
+            conn = create_duckdb_connection()
+            try:
+                if ext == ".csv":
+                    conn.execute(
+                        f"CREATE VIEW _schema_src AS SELECT * FROM read_csv_auto('{safe_path}') LIMIT {max_rows}"
+                    )
+                else:
+                    conn.execute(
+                        f"CREATE VIEW _schema_src AS SELECT * FROM read_parquet('{safe_path}') LIMIT {max_rows}"
+                    )
+
+                cursor = conn.execute("SELECT * FROM _schema_src")
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                records = [dict(zip(columns, row)) for row in rows]
+                return (
+                    pl.from_dicts(records)
+                    if records
+                    else pl.DataFrame({c: pl.Series(c, [], dtype=pl.Utf8) for c in columns})
+                )
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning("[SchemaSample] Failed to build schema sample from '%s': %s", file_path, e)
+            return None
+
+    @staticmethod
     def _sanitize_sql(sql: str) -> str:
         """
         Post-process LLM-generated SQL to fix common model mistakes before
@@ -446,9 +619,7 @@ class QueryExecutor:
             )
 
         # --- fix 3: PostgreSQL json_object_agg → DuckDB json_group_object ----
-        sql = re.sub(
-            r"\bjson_object_agg\b", "json_group_object", sql, flags=re.IGNORECASE
-        )
+        sql = re.sub(r"\bjson_object_agg\b", "json_group_object", sql, flags=re.IGNORECASE)
 
         # --- fix 4: scalar subquery returning multiple rows ------------------
         # Pattern: a subquery in a scalar position (inside an expression but NOT
@@ -489,10 +660,20 @@ class QueryExecutor:
 
         return sql
 
-    async def generate_sql(self, query: str, df: pl.DataFrame) -> Tuple[str, str]:
+    async def generate_sql(
+        self,
+        query: str,
+        df: pl.DataFrame,
+        governance_block: Optional[str] = None,
+    ) -> Tuple[str, str]:
         """
         Generate SQL from natural language query with ReAct-style retry loop.
         Feeds DuckDB errors back into the next generation attempt.
+
+        Args:
+            query: Natural language query
+            df: DataFrame to query
+            governance_block: Optional metric governance block from MetricResolutionService
 
         Returns:
             (sql_query, error_message)
@@ -538,12 +719,11 @@ Sample data (first 5 rows):
                     include_context=False,
                     error_history=error_history if attempt > 1 else None,
                     force_simple_query=force_simple_query,
+                    governance_block=governance_block,
                 )
 
                 if attempt > 1 and error_history:
-                    logger.info(
-                        f"SQL attempt {attempt} with {len(error_history)} previous errors"
-                    )
+                    logger.info(f"SQL attempt {attempt} with {len(error_history)} previous errors")
 
                 # Call LLM for SQL generation with explicit context for caching
                 sql = await llm_router.call(
@@ -561,9 +741,7 @@ Sample data (first 5 rows):
                 # Remove markdown code blocks if present
                 if sql.startswith("```"):
                     lines = sql.split("\n")
-                    sql = "\n".join(
-                        lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-                    )
+                    sql = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
 
                 sql = sql.strip().rstrip(";") + ";"
 
@@ -620,9 +798,7 @@ Sample data (first 5 rows):
                                 )
                             continue
                     else:
-                        error_history.append(
-                            {"attempt": attempt, "sql": sql, "error": exec_error}
-                        )
+                        error_history.append({"attempt": attempt, "sql": sql, "error": exec_error})
                         # If this was the last attempt, return the error
                         if attempt == max_attempts:
                             return (
@@ -636,9 +812,7 @@ Sample data (first 5 rows):
                 return sql, ""
 
             except Exception as e:
-                logger.error(
-                    f"Error generating SQL (attempt {attempt}): {e}", exc_info=True
-                )
+                logger.error(f"Error generating SQL (attempt {attempt}): {e}", exc_info=True)
                 error_history.append({"attempt": attempt, "sql": "", "error": str(e)})
                 if attempt == max_attempts:
                     return "", f"Failed to generate SQL: {str(e)}"
@@ -679,42 +853,181 @@ Now regenerate the SQL query, correcting ALL of the above errors.
 Output ONLY the corrected SQL — nothing else.
 """
 
+    @staticmethod
+    def _filter_relevant_columns(query: str, df: pl.DataFrame) -> list[str]:
+        """Keyword-match user query against column names to select relevant columns.
+
+        Uses word-boundary matching: each word in the query is checked against
+        column names. A column is relevant if any query word is a substring of
+        the column name or vice versa. Falls back to ALL columns if no match.
+        """
+        query_lower = query.lower()
+        query_words = set(re.findall(r"[A-Za-z]\w{2,}", query_lower))
+        relevant = []
+        for col in df.columns:
+            col_lower = col.lower()
+            if any(w in col_lower or col_lower in w for w in query_words):
+                relevant.append(col)
+        if not relevant:
+            relevant = list(df.columns)
+        return relevant
+
+    async def generate_sql_direct(
+        self,
+        query: str,
+        df: pl.DataFrame,
+    ) -> Tuple[str, str]:
+        """1-call NLQ→SQL with JSON-mode output, zero separate routing/extraction.
+
+        Merges query understanding + intent extraction + SQL generation into one
+        LLM call. Validates with DuckDB EXPLAIN. Max 1 LLM retry on execution error.
+
+        Returns:
+            (sql_query, error_message)
+        """
+        schema_str = self._get_column_schema(df)
+        sample_str = self._get_sample_data(df)
+        stats_str = self._get_data_stats(df)
+        relevant_columns = self._filter_relevant_columns(query, df)
+
+        prompt = get_direct_sql_prompt(
+            user_query=query,
+            column_schema=schema_str,
+            sample_data=sample_str,
+            data_stats=stats_str,
+            allowed_columns=relevant_columns,
+        )
+
+        raw = await llm_router.call(
+            prompt=prompt,
+            model_role="sql_generator",
+            expect_json=False,
+            temperature=0.1,
+            max_tokens=1200,
+        )
+
+        sql = self._extract_sql_from_response(str(raw), query)
+        if not sql:
+            return "", "Could not extract SQL from LLM response"
+
+        sql = self._sanitize_sql(sql)
+
+        valid, msg = SQLValidator.validate(sql)
+        if not valid:
+            logger.warning(
+                "[DirectSQL] Validation failed: %s. SQL (first 500): %s",
+                msg,
+                sql[:500],
+            )
+            return "", f"SQL validation failed: {msg}"
+
+        result_df, exec_error = self.execute_sql(sql, df)
+        if exec_error:
+            error_msg = exec_error
+            logger.warning(f"[DirectSQL] DuckDB error on first attempt: {error_msg}")
+
+            repair_result = await self._sql_repair_agent.repair(
+                sql=sql,
+                error_msg=error_msg,
+                df=df,
+                original_query=query,
+                schema_block=schema_str,
+            )
+            if repair_result.was_repaired:
+                sql_2 = repair_result.sql
+                sql_2 = self._sanitize_sql(sql_2)
+                _, exec_error_2 = self.execute_sql(sql_2, df)
+                if not exec_error_2:
+                    logger.info("[DirectSQL] Repair succeeded on retry")
+                    return sql_2, ""
+                return "", f"SQL failed after repair: {exec_error_2}"
+            return "", f"SQL execution failed: {error_msg}"
+
+        return sql, ""
+
+    @staticmethod
+    def _extract_sql_from_response(raw: str, fallback_query: str = "") -> str:
+        """Extract raw SQL from LLM response (Arctic outputs SQL directly).
+
+        Tries multiple strategies in order:
+        1. Response starts with SELECT/WITH
+        2. Find a line starting with SELECT/WITH
+        3. Regex search for ``(SELECT|WITH)\s+`` anywhere in the text
+        """
+        text = str(raw).strip()
+        text = text.replace("```sql", "").replace("```", "").strip()
+        if text.upper().startswith("SELECT") or text.upper().startswith("WITH"):
+            return text
+        if text.upper().startswith("I CANNOT") or text.upper().startswith("I DON'T"):
+            return ""
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.upper().startswith("SELECT") or stripped.upper().startswith("WITH"):
+                remaining = "\n".join(lines[i:]).strip()
+                return remaining
+        # Fallback: try to find (SELECT|WITH) ... FROM ... anywhere in the response
+        m = re.search(
+            r"(SELECT|WITH)\s+.+?\bFROM\b\s+.+",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if m:
+            return m.group(0).strip()
+        logger.warning(
+            "[DirectSQL] Could not extract SQL from LLM response. "
+            "Raw response (first 500 chars): %s",
+            text[:500],
+        )
+        return ""
+
     def execute_sql(
-        self, sql: str, df: pl.DataFrame
+        self,
+        sql: str,
+        df: pl.DataFrame,
+        file_path: Optional[str] = None,
     ) -> Tuple[Optional[pl.DataFrame], str]:
         """
         Execute SQL query against the dataframe using DuckDB.
 
+        When ``file_path`` is provided and the file type is CSV or Parquet,
+        DuckDB reads the file **directly** — streaming from disk instead of
+        going through Polars→Pandas→DuckDB (which triples memory usage).
+
+        For Excel/JSON files, the existing Polars→Pandas→DuckDB path is used
+        as a fallback since DuckDB doesn't natively read those formats.
+
+        Args:
+            sql: The SQL query to execute. Uses table name ``data``.
+            df: Polars DataFrame (fallback when file_path is not used).
+            file_path: Optional path to the source file for direct DuckDB reads.
+
         Returns:
             (result_df, error_message)
         """
+        # Normalize backtick quoting to DuckDB-compatible double-quote quoting.
+        # DuckDB does NOT support `` ` `` (backtick) for identifiers — it uses `"`.
+        sql = sql.replace("`", '"')
+
         try:
             # Final validation before execution
             is_valid, error = SQLValidator.validate(sql)
             if not is_valid:
                 return None, f"SQL validation failed: {error}"
 
-            # Create DuckDB connection (in-memory, isolated, read-only)
-            conn = duckdb.connect(":memory:", read_only=True)
+            # Create DuckDB connection (in-memory, isolated, resource-governed)
+            conn = create_duckdb_connection()
 
             try:
-                # Register the Polars dataframe as a table.
-                # Avoid hard dependency on pyarrow by falling back to
-                # dict-based conversion when to_pandas() is unavailable.
-                try:
-                    pandas_df = df.to_pandas()
-                except ModuleNotFoundError as exc:
-                    if exc.name != "pyarrow":
-                        raise
-                    logger.warning(
-                        "pyarrow is not installed; falling back to slower "
-                        "dict-based Polars->Pandas conversion for SQL execution."
-                    )
-                    pandas_df = pd.DataFrame(df.to_dicts())
-                conn.register("data", pandas_df)
+                # ── Register the ``data`` view ───────────────────────
+                # Uses direct DuckDB file reads for CSV/Parquet (zero Python
+                # memory) and falls back to Polars→Pandas for Excel/JSON.
+                self._register_data_view(conn, file_path, df)
 
                 # Execute with timeout and row limit
-                result_sql = f"SELECT * FROM ({sql.rstrip(';')}) AS subquery LIMIT {self._max_result_rows}"
+                result_sql = (
+                    f"SELECT * FROM ({sql.rstrip(';')}) AS subquery LIMIT {self._max_result_rows}"
+                )
 
                 # Avoid pyarrow dependency: use fetchall() + build Polars from dicts.
                 # .pl() and .df() both rely on Arrow (pyarrow), but fetchall()
@@ -726,9 +1039,7 @@ Output ONLY the corrected SQL — nothing else.
                 result = (
                     pl.from_dicts(records)
                     if records
-                    else pl.DataFrame(
-                        {col: pl.Series(col, [], dtype=pl.Utf8) for col in columns}
-                    )
+                    else pl.DataFrame({col: pl.Series(col, [], dtype=pl.Utf8) for col in columns})
                 )
             finally:
                 conn.close()
@@ -752,9 +1063,95 @@ Output ONLY the corrected SQL — nothing else.
             logger.error(f"Unexpected execution error: {e}", exc_info=True)
             return None, f"Unexpected error: {str(e)}"
 
-    def format_results(
-        self, result_df: pl.DataFrame, max_display_rows: int = 20
-    ) -> str:
+    def _make_row_count_warning(
+        self,
+        query: str,
+        sql: str,
+        estimated_rows: int,
+        threshold: int,
+        start_time,
+    ) -> Dict[str, Any]:
+        """Build a warning response when query would exceed row threshold."""
+        formatted_count = f"{estimated_rows:,}"
+        threshold_str = f"{threshold:,}"
+        return {
+            "success": False,
+            "response": (
+                f"⚠️ Your query would return **{formatted_count} rows**, "
+                f"which exceeds my safety limit of {threshold_str} rows.\n\n"
+                "To make this query more efficient, try:\n"
+                f"1. **Add filters** — narrow down the results using WHERE\n"
+                f"2. **Use LIMIT** — cap the results to a manageable size\n"
+                f"3. **Be more specific** — ask for aggregates or a summary instead\n\n"
+                "Here's the generated SQL — you can modify and run it manually:\n"
+                f"```sql\n{sql}\n```"
+            ),
+            "sql": sql,
+            "data": None,
+            "row_count": estimated_rows,
+            "error": "row_count_warning",
+            "row_count_warning": True,
+            "estimated_rows": estimated_rows,
+            "threshold": threshold,
+            "execution_time_ms": (datetime.now() - start_time).total_seconds() * 1000,
+            "render_intent": {
+                "show_chart": False,
+                "show_table": False,
+                "show_sql": True,
+                "response_mode": "error",
+            },
+        }
+
+    def _estimate_row_count(
+        self,
+        sql: str,
+        df: pl.DataFrame,
+        file_path: Optional[str] = None,
+    ) -> Tuple[int, Optional[str]]:
+        """
+        Estimate the number of rows a SQL query would return using COUNT(*).
+
+        Wraps the original SQL in SELECT COUNT(*) without modifying it, so any
+        existing LIMIT in the SQL is respected. Returns (estimated_rows, error_message).
+        On error, returns (0, error_msg) — caller should proceed with
+        execution rather than block on an estimation failure.
+
+        When ``file_path`` is provided for CSV/Parquet files, DuckDB reads
+        directly from disk — zero Python memory overhead, even for billion-row
+        datasets.
+
+        Args:
+            sql: The SQL query to estimate
+            df: Polars DataFrame with the data (fallback when no file_path)
+            file_path: Optional path to the source file for direct DuckDB reads
+
+        Returns:
+            (estimated_rows, error_message)
+        """
+        try:
+            # Strip trailing semicolon for wrapping
+            clean_sql = sql.strip().rstrip(";")
+
+            conn = create_duckdb_connection()
+            try:
+                self._register_data_view(conn, file_path, df)
+
+                count_sql = f"SELECT COUNT(*) AS _cnt FROM ({clean_sql}) AS _subq"
+                cursor = conn.execute(count_sql)
+                row = cursor.fetchone()
+                count = row[0] if row else 0
+            finally:
+                conn.close()
+
+            return int(count), None
+        except duckdb.Error as e:
+            logger.warning(f"[RowCount] DuckDB estimation error: {e}")
+            return 0, str(e)
+        except Exception as e:
+            logger.warning(f"[RowCount] Estimation error: {e}")
+            return 0, str(e)
+
+    def format_results(self, result_df: pl.DataFrame, max_display_rows: int = 20) -> str:
         """Format query results as a readable markdown table."""
         if result_df is None or len(result_df) == 0:
             return "No results found."
@@ -802,9 +1199,7 @@ Output ONLY the corrected SQL — nothing else.
 
         return result_str
 
-    async def interpret_results(
-        self, query: str, sql: str, result_df: pl.DataFrame
-    ) -> str:
+    async def interpret_results(self, query: str, sql: str, result_df: pl.DataFrame) -> str:
         """
         Use LLM to interpret query results in natural language.
         """
@@ -844,16 +1239,28 @@ Output ONLY the corrected SQL — nothing else.
             return f"Query completed. Results:\n\n{self.format_results(result_df)}"
 
     async def execute_query(
-        self, query: str, df: pl.DataFrame, dataset_id: str, return_raw: bool = False
+        self,
+        query: str,
+        df: pl.DataFrame,
+        dataset_id: str,
+        return_raw: bool = False,
+        user_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        file_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Main entry point: Execute a natural language query against the dataset.
 
         Args:
             query: Natural language question
-            df: Polars DataFrame with the data
+            df: Polars DataFrame with the data (used for schema context in SQL generation)
             dataset_id: Dataset identifier for caching
             return_raw: If True, return raw data instead of interpretation
+            user_id: Authenticated user ID
+            workspace_id: Workspace identifier
+            file_path: Optional path to the source file. When provided for CSV/Parquet,
+                       DuckDB reads directly from disk instead of going through
+                       Polars→Pandas→DuckDB (eliminates triple memory copy).
 
         Returns:
             {
@@ -954,10 +1361,40 @@ Output ONLY the corrected SQL — nothing else.
             self._query_cache[cache_key] = meta_result
             return meta_result
 
-        # ── Step 1: Generate SQL (only reached for 'sql' intent) ────────
+        # ── Step 1: Resolve metrics against governed definitions ───────
+        governance_block = ""
+        resolution_result = None
+        try:
+            # Lazy import to break circular dependency
+            from services.semantic.metric_resolution_service import metric_resolution_service
+            logger.info(f"📐 Resolving metrics for: {query[:60]}...")
+            (
+                governance_block,
+                resolution_result,
+            ) = await metric_resolution_service.enhance_sql_prompt(
+                query=query,
+                dataset_id=dataset_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                available_columns=list(df.columns),
+            )
+        except Exception as e:
+            logger.warning(f"📐 Metric resolution failed, falling back to LLM guess: {e}")
+        if resolution_result and resolution_result.has_governed_definitions:
+            logger.info(
+                f"📐 Resolved {resolution_result.total_resolved} metrics: "
+                f"{', '.join(resolution_result.resolved_metrics.keys())}"
+            )
+        elif resolution_result and resolution_result.unresolved_terms:
+            logger.debug(
+                f"📐 No governed definitions found for: "
+                f"{', '.join(resolution_result.unresolved_terms)}"
+            )
+
+        # ── Step 2: Generate SQL (with governance context) ────────
 
         logger.info(f"🔄 Generating SQL for query: {query[:50]}...")
-        sql, sql_error = await self.generate_sql(query, df)
+        sql, sql_error = await self.generate_sql(query, df, governance_block=governance_block)
 
         if sql_error:
             return {
@@ -967,13 +1404,55 @@ Output ONLY the corrected SQL — nothing else.
                 "data": None,
                 "row_count": 0,
                 "error": sql_error,
-                "execution_time_ms": (datetime.now() - start_time).total_seconds()
-                * 1000,
+                "execution_time_ms": (datetime.now() - start_time).total_seconds() * 1000,
             }
 
-        # Step 2: Execute SQL
-        logger.info(f"⚡ Executing SQL: {sql[:100]}...")
-        result_df, exec_error = self.execute_sql(sql, df)
+        # ── Step 2b: Row-count pre-check ──
+        # Before executing the full query, estimate how many rows it would
+        # return. If it exceeds MAX_ROWS_WARNING_THRESHOLD, warn the user
+        # instead of running a potentially heavy query.
+        threshold = settings.MAX_ROWS_WARNING_THRESHOLD
+        if threshold > 0:
+            estimated_rows, est_error = self._estimate_row_count(sql, df, file_path=file_path)
+            if estimated_rows > threshold:
+                logger.warning(
+                    "[RowCount] Query would return %d rows (threshold=%d) — returning warning",
+                    estimated_rows,
+                    threshold,
+                )
+                return self._make_row_count_warning(
+                    query=query,
+                    sql=sql,
+                    estimated_rows=estimated_rows,
+                    threshold=threshold,
+                    start_time=start_time,
+                )
+            elif estimated_rows > 0:
+                logger.info(
+                    "[RowCount] Query returns %d rows — within threshold (%d), proceeding",
+                    estimated_rows,
+                    threshold,
+                )
+
+        # ── Step 2c: Approximate Query Processing (AQP) ──
+        # If approximate mode is enabled, rewrite expensive operations
+        # (COUNT DISTINCT, PERCENTILE, MEDIAN) to DuckDB native
+        # approximate functions for ~200× faster results.
+        aqp_info = None
+        sql_for_execution = sql
+        if self._approximate_mode and settings.AQP_ENABLED:
+            rewritten, aqp_info = approximate_rewriter.rewrite(sql)
+            if aqp_info["approximated"]:
+                logger.info(
+                    "[AQP] Rewrote %d operation(s) (accuracy: %s)",
+                    aqp_info["rule_count"],
+                    aqp_info["accuracy"],
+                )
+                sql_for_execution = rewritten
+
+        # Step 3: Execute SQL
+        logger.info(f"⚡ Executing SQL: {sql_for_execution[:100]}...")
+        result_df, exec_error = self.execute_sql(sql_for_execution, df, file_path=file_path)
 
         if exec_error:
             # Try to provide helpful feedback
@@ -984,8 +1463,7 @@ Output ONLY the corrected SQL — nothing else.
                 "data": None,
                 "row_count": 0,
                 "error": exec_error,
-                "execution_time_ms": (datetime.now() - start_time).total_seconds()
-                * 1000,
+                "execution_time_ms": (datetime.now() - start_time).total_seconds() * 1000,
             }
 
         # Step 3: Interpret results
@@ -1008,6 +1486,13 @@ Output ONLY the corrected SQL — nothing else.
             "cached": False,
             "execution_time_ms": (datetime.now() - start_time).total_seconds() * 1000,
         }
+
+        # ── Surface AQP metadata in result ──
+        if aqp_info and aqp_info.get("approximated"):
+            result["approximate"] = True
+            result["approx_accuracy"] = aqp_info["accuracy"]
+            result["approx_rule_count"] = aqp_info["rule_count"]
+            result["approx_changes"] = aqp_info["changes"]
 
         # Cache result
         if len(self._query_cache) >= self._max_cache_size:
@@ -1240,10 +1725,7 @@ class QueryClassifier:
         # Default: conservative approach - don't force SQL execution
         # Only return True if query explicitly asks for data retrieval
         explicit_data_words = ["show", "get", "find", "retrieve", "list", "display"]
-        if (
-            any(word in query_lower for word in explicit_data_words)
-            and "?" in query_lower
-        ):
+        if any(word in query_lower for word in explicit_data_words) and "?" in query_lower:
             return True
 
         # For other questions, assume LLM can answer from context

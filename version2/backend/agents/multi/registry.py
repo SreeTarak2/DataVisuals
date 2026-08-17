@@ -66,7 +66,7 @@ class MultiAgentToolRegistry:
         if cls._initialized:
             return
 
-        from services.agents.belief_store import get_belief_store
+        from agents.belief.belief_store import get_belief_store
         from services.analysis.advanced_stats import (
             anomaly_detector,
             correlation_analyzer,

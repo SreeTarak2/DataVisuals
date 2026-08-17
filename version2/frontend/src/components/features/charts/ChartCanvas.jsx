@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../../../lib/utils';
-import PlotlyChart from './PlotlyChart';
+import ChartRenderer from './ChartRenderer';
 
 const BADGE_ICONS = {
     'KEY FINDING': Target,
@@ -269,24 +269,16 @@ const ChartCanvas = ({ chartData, chartConfig, loading, onAskAI, onReset }) => {
             </AnimatePresence>
 
             {/* ── THE CHART — takes all remaining space ─────────────── */}
-            {/* Use relative+absolute so Plotly gets a concrete pixel height */}
             <div className="flex-1 min-h-0 relative">
                 <div className="absolute inset-0 p-2">
-                    <PlotlyChart
+                    <ChartRenderer
                         data={chartData.traces}
                         chartType={chartConfig?.chartType || chartData.type || 'bar'}
-                        layout={{
-                            ...chartData.layout,
-                            title: '',
-                            height: undefined,
-                            autosize: true,
-                            paper_bgcolor: 'rgba(0,0,0,0)',
-                            plot_bgcolor: 'rgba(0,0,0,0)',
-                        }}
+                        layout={{}}
                         style={{ width: '100%', height: '100%' }}
                         onPointClick={handlePointClick}
-                        pointIntelligence={chartData.point_intelligence}
                         chartTitle={chartData.title || ''}
+                        theme="dark"
                     />
                 </div>
             </div>

@@ -393,20 +393,21 @@ export const PromptInputBox = forwardRef((props, ref) => {
           <div className="flex items-center justify-between px-4 pb-3 pt-2">
             <div className="flex items-center gap-3">
               {/* Action: Attach */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <motion.button
-                    whileHover={{ scale: 1.1, backgroundColor: 'rgba(234, 88, 12, 0.1)' }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={onAttachClick}
-                    className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full border border-[var(--border)] bg-white/5 text-[var(--text-secondary)] hover:text-orange-500 transition-colors"
-                  >
-                    <Paperclip className="w-4 h-4" />
-                  </motion.button>
-                </TooltipTrigger>
-                <TooltipContent side="top">Attach File</TooltipContent>
-              </Tooltip>
-
+              {onAttachClick && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <motion.button
+                      whileHover={{ scale: 1.1, backgroundColor: 'rgba(234, 88, 12, 0.1)' }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={onAttachClick}
+                      className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full border border-[var(--border)] bg-white/5 text-[var(--text-secondary)] hover:text-orange-500 transition-colors"
+                    >
+                      <Paperclip className="w-4 h-4" />
+                    </motion.button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">Attach File</TooltipContent>
+                </Tooltip>
+              )}
             </div>
 
             <div className="flex items-center gap-4">

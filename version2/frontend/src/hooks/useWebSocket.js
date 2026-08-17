@@ -3,50 +3,20 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 const isBackendConversationId = (value) =>
     typeof value === 'string' && /^[a-f0-9]{24}$/i.test(value);
 
+import useAuthStore from '../store/authStore';
+
 /**
- * Helper to get auth token from Zustand persisted store
+ * Read auth token from the in-memory Zustand auth store.
+ * The token is no longer persisted in localStorage (HttpOnly cookie handles auth),
+ * but we keep it in memory for WebSocket connections that need to pass the
+ * token as a query parameter during the upgrade handshake.
  */
 const getAuthToken = () => {
     try {
-        const stored = localStorage.getItem('signal-auth') || sessionStorage.getItem('signal-auth');
-        if (stored) {
-            const parsed = JSON.parse(stored);
-            return parsed?.state?.token || null;
-        }
+        return useAuthStore.getState()?.token || localStorage.getItem('token') || localStorage.getItem('auth_token') || null;
     } catch (e) {
-        console.error('Failed to parse auth token:', e);
+        return null;
     }
-    return null;
-};
-
-// Check if token is still valid (basic check - in production would verify with server)
-const isTokenValid = (token) => {
-    // Simple check: if token is null or empty, it's invalid
-    if (!token) return false;
-
-    // In a production app, you'd want to check token expiration from the token payload
-    // For now, we'll just return true if token exists
-    return true;
-};
-
-// Function to refresh token by calling auth endpoint
-const refreshAccessToken = async () => {
-    try {
-        const response = await fetch('/api/auth/refresh-token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include'
-        });
-        if (response.ok) {
-            const data = await response.json();
-            return data.token;
-        } else {
-            console.error('Token refresh failed with status:', response.status);
-        }
-    } catch (error) {
-        console.error('Failed to refresh token:', error);
-    }
-    return null;
 };
 
 /**
@@ -92,10 +62,16 @@ export const useWebSocket = ({
     onDone,
     onError,
     onStatus,
+    onCleaningRedirect,
     onThinkingStep,
     onRenderIntent,
     onBeliefSaved,
     onCancelAck,
+    onModePhases,
+    onRegenerateComplete,
+    onNotification,
+    onProcessingUpdate,
+    onSessionRevoked,
     autoConnect = false
 } = {}) => {
     const [isConnected, setIsConnected] = useState(false);
@@ -139,21 +115,6 @@ export const useWebSocket = ({
         }
 
         let token = getAuthToken();
-        if (!token) {
-            onError?.({ type: 'auth', detail: 'Not authenticated' });
-            return;
-        }
-
-        if (!isTokenValid(token)) {
-            console.log('Token invalid or expired, attempting to refresh...');
-            const newToken = await refreshAccessToken();
-            if (newToken) {
-                token = newToken;
-            } else {
-                onError?.({ type: 'auth', detail: 'Failed to refresh authentication token' });
-                return;
-            }
-        }
 
         setIsConnecting(true);
         // Do not run full cleanup here; calling cleanup would intentionally
@@ -171,7 +132,9 @@ export const useWebSocket = ({
         }
 
         const urlObj = new URL(wsUrl);
-        urlObj.searchParams.append("token", token);
+        if (token) {
+            urlObj.searchParams.append("token", token);
+        }
         const ws = new WebSocket(urlObj.toString());
         wsRef.current = ws;
 
@@ -192,8 +155,10 @@ export const useWebSocket = ({
                 clearTimeout(connectionTimeoutRef.current);
                 connectionTimeoutRef.current = null;
             }
-            // Send auth token immediately upon connecting for backwards compatibility
-            ws.send(JSON.stringify({ type: "auth", token }));
+            // Send auth token if available for backwards compatibility
+            if (token) {
+                ws.send(JSON.stringify({ type: "auth", token }));
+            }
 
             // Start application-level heartbeat to keep proxies alive and detect dead peers.
             if (heartbeatIntervalRef.current) {
@@ -295,7 +260,15 @@ export const useWebSocket = ({
                                     onChart?.(data.chunk.chart_config ?? data.chunk.chartConfig, clientMessageId);
                                     break;
                                 case 'thinking_step':
-                                    onThinkingStep?.(data.chunk.label, data.chunk.step);
+                                    onThinkingStep?.({
+                                        label: data.chunk.label,
+                                        step: data.chunk.step,
+                                        detail: data.chunk.detail,
+                                        source: data.chunk.source,
+                                        evidence: data.chunk.evidence,
+                                        phase: data.chunk.phase,
+                                        confidence: data.chunk.confidence,
+                                    });
                                     break;
                                 case 'render_intent':
                                     onRenderIntent?.({
@@ -303,6 +276,16 @@ export const useWebSocket = ({
                                         show_table: data.chunk.show_table,
                                         show_sql:   data.chunk.show_sql,
                                         response_mode: data.chunk.response_mode,
+                                    });
+                                    break;
+                                case 'cleaning_redirect':
+                                    // Cleaning guard blocked the query — send the
+                                    // user to the Data Briefing to review pending
+                                    // number-changing cleaning actions.
+                                    onCleaningRedirect?.({
+                                        redirectTo: data.chunk.redirect_to ?? 'briefing',
+                                        pendingCritical: data.chunk.pending_critical ?? 0,
+                                        clientMessageId,
                                     });
                                     break;
                                 case 'error':
@@ -395,7 +378,15 @@ export const useWebSocket = ({
                         break;
 
                     case 'thinking_step':
-                        onThinkingStep?.(data.label, data.step);
+                        onThinkingStep?.({
+                            label: data.label,
+                            step: data.step,
+                            detail: data.detail,
+                            source: data.source,
+                            evidence: data.evidence,
+                            phase: data.phase,
+                            confidence: data.confidence,
+                        });
                         break;
 
                     case 'error':
@@ -408,9 +399,52 @@ export const useWebSocket = ({
                         onBeliefSaved?.(data.belief, clientMessageId);
                         break;
 
+                    case 'notification':
+                        // Real-time job notification (dataset ready / failed / resumed)
+                        onNotification?.(data.notification ?? data, clientMessageId);
+                        break;
+
+                    case 'processing_update':
+                        // Live pipeline progress (stage / status / percent)
+                        onProcessingUpdate?.({
+                            datasetId: data.dataset_id ?? data.datasetId,
+                            status: data.status,
+                            progress: data.progress,
+                            stageLabel: data.stage_label ?? data.stageLabel,
+                        });
+                        break;
+
+                    case 'session_revoked':
+                        // This session was revoked server-side (logout on
+                        // another device) — force the app back to login.
+                        onSessionRevoked?.();
+                        break;
+
                     case 'cancel_ack':
                         console.log('Cancel acknowledged:', clientMessageId);
                         onCancelAck?.(clientMessageId);
+                        break;
+
+                    case 'regenerate_complete':
+                        console.log('Regenerate complete:', clientMessageId, 'version:', data.versionMessageId);
+                        onRegenerateComplete?.({
+                            versionMessageId: data.versionMessageId,
+                            clientMessageId: data.clientMessageId,
+                        });
+                        break;
+
+                    case 'mode_phases':
+                        // Phase roadmap for the current copilot mode
+                        onModePhases?.({
+                            label: data.label,
+                            phases: data.phases,
+                            total_phases: data.total_phases,
+                        });
+                        break;
+
+                    case 'stream_start':
+                    case 'stream_end':
+                        // Backend lifecycle events — no frontend action needed
                         break;
 
                     default:
@@ -464,27 +498,32 @@ export const useWebSocket = ({
             // Do NOT reconnect for policy violations or connection limits
             // 1008 = policy violation (auth failure), 4008 = connection limit exceeded
             if (event.code === 1008 || event.code === 4008) {
-                onError?.({ 
-                    type: 'connection', 
-                    detail: event.reason || 'Connection rejected by server. Try closing other tabs.' 
-                });
-                return; // Stop — do not reconnect
+                // Auth/policy failure — stop silently, HTTP REST will handle messages
+                console.warn('WebSocket rejected (auth/policy), falling back to HTTP REST');
+                return;
             }
-            // Attempt reconnect for non-policy closes (including normal closes like 1000/1001)
-            // unless we've explicitly closed the socket intentionally.
-            if (reconnectAttemptsRef.current < maxReconnectAttempts) {
-                const delay = Math.min(1500 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+            // 1006 = abnormal closure (server not accepting WS at all)
+            // Limit retries to avoid log spam; HTTP REST fallback will handle chat.
+            const maxAttempts = event.code === 1006 ? 2 : maxReconnectAttempts;
+            if (reconnectAttemptsRef.current < maxAttempts) {
+                const delay = Math.min(2000 * Math.pow(2, reconnectAttemptsRef.current), 16000);
                 reconnectAttemptsRef.current += 1;
-                console.log(`Scheduling reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})...`);
+                console.log(`Scheduling reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${maxAttempts})...`);
                 reconnectTimeoutRef.current = setTimeout(() => {
                     connect();
                 }, delay);
             } else {
-                console.warn('Max reconnect attempts reached, giving up');
-                onError?.({ type: 'connection', detail: 'Unable to connect. Please refresh the page.' });
+                // Silently give up — HTTP REST fallback handles all chat
+                console.warn('WebSocket unavailable, using HTTP REST for chat.');
             }
         };
-    }, [cleanup, onToken, onResponseComplete, onChart, onDone, onError, onStatus, onChartError, onThinkingStep, onRenderIntent, onBeliefSaved, onCancelAck]);
+    }, [cleanup,    onToken,
+    onResponseComplete,
+    onChart,
+    onDone,
+    onError,
+    onStatus,
+    onCleaningRedirect, onChartError, onThinkingStep, onRenderIntent, onBeliefSaved, onCancelAck, onNotification, onProcessingUpdate, onSessionRevoked]);
 
     const disconnect = useCallback(() => {
         reconnectAttemptsRef.current = 0;
@@ -496,11 +535,12 @@ export const useWebSocket = ({
         message,
         datasetId,
         conversationId = null,
-        streaming = true
+        streaming = true,
+        mode = 'analyst',
+        archetype = 'explorer'
     }) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-            console.error('WebSocket not connected');
-            onError?.({ type: 'connection', detail: 'Not connected' });
+            console.warn('WebSocket not connected, message will be sent via HTTP REST');
             return null;
         }
 
@@ -513,7 +553,9 @@ export const useWebSocket = ({
                 message,
                 datasetId,
                 conversationId: isBackendConversationId(conversationId) ? conversationId : null,
-                streaming
+                streaming,
+                mode,
+                archetype
             }
         };
 
@@ -538,6 +580,30 @@ export const useWebSocket = ({
         wsRef.current.send(JSON.stringify(payload));
         console.log('Cancel request sent for:', clientMessageId);
         return true;
+    }, []);
+
+    const sendRegenerate = useCallback(({ conversationId, messageId, datasetId }) => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+            console.warn('WebSocket not connected, cannot regenerate');
+            return null;
+        }
+
+        const clientMessageId = `regen_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+        const payload = {
+            type: 'regenerate',
+            clientMessageId,
+            payload: {
+                conversationId,
+                messageId,
+                datasetId,
+            }
+        };
+
+        pendingMessagesRef.current.set(clientMessageId, { sentAt: Date.now() });
+        wsRef.current.send(JSON.stringify(payload));
+
+        return clientMessageId;
     }, []);
 
     // Auto-connect on mount if enabled
@@ -594,7 +660,8 @@ export const useWebSocket = ({
         connect,
         disconnect,
         sendMessage,
-        sendCancel
+        sendCancel,
+        sendRegenerate
     };
 };
 

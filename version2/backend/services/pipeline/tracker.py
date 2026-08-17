@@ -20,8 +20,10 @@ Usage:
 
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
+
+from services.notifications.hub import notification_hub
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +62,26 @@ class PipelineTracker:
     and the pipeline continues unaffected.
     """
 
-    def __init__(self, dataset_id: str, user_id: str, db) -> None:
+    def __init__(self, dataset_id: str, user_id: str, db,
+                 progress_map: dict[str, int] | None = None,
+                 workspace_id: str | None = None) -> None:
         """
         Args:
             dataset_id: MongoDB ``_id`` of the dataset being processed.
             user_id:   Owner of the dataset.
             db:        Sync PyMongo database instance (``_get_db()``).
+            progress_map: Optional custom map from stage name -> progress %%.
+                          Defaults to the full legacy map. Tier 1 callers
+                          should pass a trimmed map for accurate progress.
+            workspace_id: Tenant id for the stage records. Falls back to
+                          ``user_id`` (personal workspace) when omitted so
+                          ``pipeline_stages`` documents stay tenant-scoped.
         """
         self.dataset_id = dataset_id
         self.user_id = user_id
+        self.workspace_id = workspace_id or user_id
         self.db = db
+        self._progress_map = progress_map or _PROGRESS_MAP
 
     # ------------------------------------------------------------------
     # Public API
@@ -92,10 +104,11 @@ class PipelineTracker:
             label: Human-readable label (e.g. ``"Loading Dataset"``).
                    Written to ``current_stage_label`` on the dataset doc.
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc).replace(tzinfo=None)
         stage_record: Dict[str, Any] = {
             "dataset_id": self.dataset_id,
             "user_id": self.user_id,
+            "workspace_id": self.workspace_id,
             "name": name,
             "label": label,
             "status": "running",
@@ -117,7 +130,7 @@ class PipelineTracker:
         else:
             stage_record["status"] = "done"
         finally:
-            end_time = datetime.utcnow()
+            end_time = datetime.now(timezone.utc).replace(tzinfo=None)
             stage_record["end_time"] = end_time.isoformat()
             stage_record["duration_ms"] = int(
                 (end_time - start_time).total_seconds() * 1000
@@ -130,7 +143,7 @@ class PipelineTracker:
 
     def _update_dataset_status(self, name: str, label: str) -> None:
         """Write current stage info + derived progress to the dataset doc."""
-        progress_pct = _PROGRESS_MAP.get(name, 50)
+        progress_pct = self._progress_map.get(name, 50)
         try:
             self.db.uploads.update_one(
                 {"_id": self.dataset_id},
@@ -139,13 +152,34 @@ class PipelineTracker:
                         "processing_status": name,
                         "current_stage_label": label,
                         "processing_progress": progress_pct,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
                     }
                 },
             )
         except Exception as exc:
             logger.warning(
                 "[Tracker] Failed to update dataset status for %s: %s",
+                self.dataset_id,
+                exc,
+            )
+
+        # Real-time progress push so open clients (desktop + mobile) update
+        # instantly without polling. Fire-and-forget: failures are logged
+        # inside the hub and never affect the pipeline.
+        try:
+            notification_hub.schedule_push(
+                self.user_id,
+                {
+                    "type": "processing_update",
+                    "dataset_id": str(self.dataset_id),
+                    "status": name,
+                    "progress": progress_pct,
+                    "stage_label": label,
+                },
+            )
+        except Exception as exc:
+            logger.debug(
+                "[Tracker] Failed to schedule processing push for %s: %s",
                 self.dataset_id,
                 exc,
             )

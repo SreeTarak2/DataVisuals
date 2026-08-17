@@ -6,7 +6,8 @@ import {
   EyeOff,
   Mail,
   Lock,
-  User
+  User,
+  Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -134,10 +135,21 @@ export default function RegisterPage() {
 
               <Button
                 type="submit"
-                className="w-full h-11 bg-zinc-100 text-zinc-900 hover:bg-zinc-200 text-base font-semibold transition-all shadow-lg shadow-indigo-500/5"
+                className={`w-full h-11 text-base font-semibold transition-all flex items-center justify-center gap-2 ${
+                  isLoading
+                    ? "bg-zinc-200 text-zinc-600 cursor-wait shadow-lg shadow-indigo-500/10"
+                    : "bg-zinc-100 text-zinc-900 hover:bg-zinc-200 shadow-lg shadow-indigo-500/5"
+                }`}
                 disabled={isLoading}
               >
-                {isLoading ? "Creating Account..." : "Create Account"}
+                {isLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Creating Account...
+                  </>
+                ) : (
+                  "Create Account"
+                )}
               </Button>
 
               <div className="relative">

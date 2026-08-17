@@ -13,7 +13,7 @@ Events Logged:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, asdict
 from enum import Enum
@@ -48,7 +48,7 @@ class PrivacyAuditEvent:
 
     def __post_init__(self):
         if self.timestamp is None:
-            self.timestamp = datetime.utcnow().isoformat()
+            self.timestamp = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         if self.details is None:
             self.details = {}
 
@@ -353,7 +353,7 @@ class PrivacyAuditService:
         Returns:
             Statistics dictionary
         """
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
         pipeline = [
             {
@@ -390,7 +390,7 @@ class PrivacyAuditService:
         if retention_days is None:
             retention_days = self.DEFAULT_RETENTION_DAYS
 
-        cutoff = datetime.utcnow() - timedelta(days=retention_days)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
 
         result = await self.db[self.COLLECTION_NAME].delete_many(
             {"timestamp": {"$lt": cutoff.isoformat()}}
@@ -419,16 +419,16 @@ class PrivacyAuditService:
             Export dictionary
         """
         if start_date is None:
-            start_date = datetime.utcnow() - timedelta(days=365)
+            start_date = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=365)
         if end_date is None:
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc).replace(tzinfo=None)
 
         events = await self.get_user_events(
             user_id=user_id, start_date=start_date, end_date=end_date, limit=10000
         )
 
         return {
-            "export_date": datetime.utcnow().isoformat(),
+            "export_date": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             "user_id": user_id,
             "period": {"start": start_date.isoformat(), "end": end_date.isoformat()},
             "total_events": len(events),

@@ -14,7 +14,7 @@ import hashlib
 import logging
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -259,7 +259,7 @@ class DatabaseConnectionService:
             "username": config.get("username", ""),
             "ssl_mode": config.get("ssl_mode", "prefer"),
             "status": "active",
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
             "last_used_at": None,
         }
 
@@ -312,6 +312,7 @@ class DatabaseConnectionService:
         custom_query: Optional[str],
         dataset_name: Optional[str],
         row_limit: int,
+        workspace_id: Optional[str] = None,
     ) -> Dict:
         """
         Extract rows from the connected DB, save as Parquet, create a dataset
@@ -393,10 +394,12 @@ class DatabaseConnectionService:
 
             db = get_database()
             final_name = dataset_name or f"{conn_doc['name']} — {table_name or 'custom query'}"
+            wid = workspace_id or user_id  # tenant tag — personal workspace fallback
 
             await db.uploads.insert_one({
                 "_id": dataset_id,
                 "user_id": user_id,
+                "workspace_id": wid,
                 "name": final_name,
                 "original_filename": f"{final_name}.parquet",
                 "file_path": parquet_path,
@@ -419,15 +422,17 @@ class DatabaseConnectionService:
                     "dashboard_design": "pending",
                 },
                 "metadata": {},
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+                "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
             })
 
             # ── Fire background processing pipeline ──
             import asyncio as _asyncio
             from services.pipeline.process import process_dataset
 
-            _asyncio.create_task(process_dataset(dataset_id, parquet_path, user_id))
+            _asyncio.create_task(
+                process_dataset(dataset_id, parquet_path, user_id, workspace_id=wid)
+            )
 
             # ── Auto-refresh relationship cache after extraction ──
             # When a new dataset is extracted from a DB connection, the
@@ -478,8 +483,9 @@ class DatabaseConnectionService:
         """
         import polars as pl
 
-        db = get_database()
-        dataset = await db.uploads.find_one({"_id": dataset_id, "user_id": user_id})
+        from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+
+        dataset = await enhanced_dataset_service.get_dataset_doc(dataset_id, user_id)
         if not dataset:
             raise ValueError("Dataset not found")
 
@@ -588,8 +594,9 @@ class DatabaseConnectionService:
         Deletes the old Parquet file, creates a new snapshot, fires the
         Celery pipeline, and returns the new dataset info.
         """
-        db = get_database()
-        dataset = await db.uploads.find_one({"_id": dataset_id, "user_id": user_id})
+        from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+
+        dataset = await enhanced_dataset_service.get_dataset_doc(dataset_id, user_id)
         if not dataset:
             raise ValueError("Dataset not found")
 
@@ -602,7 +609,8 @@ class DatabaseConnectionService:
         row_limit = source_db.get("row_limit", 100_000)
         old_name = dataset.get("name", "dataset")
 
-        # Re-extract using the same source_db config
+        # Re-extract using the same source_db config. Preserve the original
+        # dataset's workspace so the refreshed snapshot stays in-tenant.
         result = await self.extract_to_dataset(
             user_id=user_id,
             conn_id=source_db["connection_id"],
@@ -610,6 +618,7 @@ class DatabaseConnectionService:
             custom_query=custom_query,
             dataset_name=f"{old_name} (re-extracted)",
             row_limit=row_limit,
+            workspace_id=dataset.get("workspace_id", user_id),
         )
 
         # Delete the old Parquet file (best-effort — not a failure if it fails)
@@ -711,7 +720,7 @@ class DatabaseConnectionService:
                         "db_type": db_type,
                         "foreign_keys": fks,
                         "inferred": inferred,
-                        "discovered_at": datetime.utcnow(),
+                        "discovered_at": datetime.now(timezone.utc).replace(tzinfo=None),
                     }
                 },
                 upsert=True,
@@ -768,7 +777,7 @@ class DatabaseConnectionService:
             db = get_database()
             await db.db_relationships.update_one(
                 {"connection_id": conn_id, "user_id": user_id},
-                {"$set": {"inferred": inferred, "discovered_at": datetime.utcnow()}},
+                {"$set": {"inferred": inferred, "discovered_at": datetime.now(timezone.utc).replace(tzinfo=None)}},
             )
             logger.info(f"Refreshed relationship cache for conn {conn_id}: {len(inferred)} inferred")
         except Exception as e:
@@ -810,16 +819,25 @@ class DatabaseConnectionService:
                 "fk_sample_size": int | None,   # only for value_overlap
               }
         """
+        from db.tenant_guard import tenant_scope_query
+        from services.workspace import workspace_service
+
         db = get_database()
 
-        # 1. Find all datasets from this connection
-        cursor = db.uploads.find(
+        # 1. Find all datasets from this connection (workspace-scoped)
+        wid = await workspace_service.resolve_effective_workspace_id(None, user_id)
+        query = tenant_scope_query(
+            "uploads",
             {
-                "user_id": user_id,
                 "source_type": "database",
                 "source_db.connection_id": conn_id,
                 "file_path": {"$exists": True, "$ne": None},
             },
+            wid,
+            user_id,
+        )
+        cursor = db.uploads.find(
+            query,
             {
                 "_id": 1,
                 "name": 1,
@@ -1287,7 +1305,7 @@ class DatabaseConnectionService:
         db = get_database()
         await db.db_connections.update_one(
             {"_id": conn_id},
-            {"$set": {"last_used_at": datetime.utcnow()}},
+            {"$set": {"last_used_at": datetime.now(timezone.utc).replace(tzinfo=None)}},
         )
 
     @staticmethod

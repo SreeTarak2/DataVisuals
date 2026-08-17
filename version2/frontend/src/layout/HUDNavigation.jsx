@@ -1,14 +1,13 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Home, BarChart2, MessageSquare, Settings, UploadCloud } from 'lucide-react';
+import { Home, BarChart2, MessageSquare, Settings, UploadCloud, TerminalSquare } from 'lucide-react';
 import { cn } from '@/lib/utils'; // Assuming cn exists or I should create it. I will create it next if missing.
 
 const HUDNavigation = () => {
     const navItems = [
         { icon: Home, label: 'CMD', path: '/dashboard' },
         { icon: UploadCloud, label: 'DATA', path: '/datasets' },
-        { icon: MessageSquare, label: 'COMM', path: '/chat' },
-        { icon: Box, label: 'VIZ', path: '/analysis' }, // Placeholder icon if Box not available, using simple div
+        { icon: TerminalSquare, label: 'SQL', path: '/sql' },
         { icon: Settings, label: 'SYS', path: '/settings' },
     ];
 

@@ -20,7 +20,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -184,7 +184,7 @@ class InsightReflectionAgent:
     @property
     def llm_router(self):
         if self._llm_router is None:
-            from services.llm_router import llm_router
+            from llm.router import llm_router
             self._llm_router = llm_router
         return self._llm_router
 
@@ -192,7 +192,7 @@ class InsightReflectionAgent:
     def belief_store(self):
         """Lazy-loaded belief store for novelty checking."""
         try:
-            from services.agents.belief_store import get_belief_store
+            from agents.belief.belief_store import get_belief_store
             return get_belief_store()
         except Exception:
             return None
@@ -403,7 +403,7 @@ class InsightReflectionAgent:
                 dimensions=dimensions,
                 failure_modes=failure_modes,
                 prompt_adjustments=prompt_adjustments,
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             )
         )
         # Cap history at 100 entries per key

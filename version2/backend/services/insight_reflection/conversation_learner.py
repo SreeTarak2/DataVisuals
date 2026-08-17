@@ -30,7 +30,7 @@ Usage:
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ class ConversationLearner:
             "temperature_change": adjustment.get("temperature_change", 0.0),
             "add_examples": adjustment.get("add_examples", False),
             "failure_modes": adjustment.get("failure_modes", []),
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         }
 
         async with self._lock:
@@ -124,7 +124,7 @@ class ConversationLearner:
                         "conversation_id": conversation_id,
                         "instruction": instruction,
                     },
-                    {"$set": {**entry, "updated_at": datetime.utcnow().isoformat()}},
+                    {"$set": {**entry, "updated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat()}},
                     upsert=True,
                 )
             except Exception as e:

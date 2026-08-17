@@ -13,8 +13,7 @@ import {
   ArrowRight,
   Shield,
   Filter,
-  RefreshCw,
-  Eye
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
@@ -23,8 +22,9 @@ import useDatasetStore from "../../store/datasetStore";
 import { useTheme } from "../../store/themeStore";
 import { datasetAPI } from "../../services/api";
 import DeleteConfirmModal from '../../components/common/DeleteConfirmModal';
-import UploadModal from '../../components/features/datasets/UploadModal';
+import CreateProjectModal from '../../components/features/projects/CreateProjectModal';
 import SearchInput from '../../components/ui/SearchInput';
+import { useWorkspacePermission } from '../../hooks/useWorkspacePermission';
 import { cn } from "../../lib/utils";
 
 /* ═══════════════════════════════════════════════
@@ -38,9 +38,10 @@ const DatasetsPage = () => {
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === 'dark';
+  const { canUploadDataset, canDeleteDataset } = useWorkspacePermission();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
   const [deleteModal, setDeleteModal] = useState({ isOpen: false, dataset: null });
 
   useEffect(() => {
@@ -200,14 +201,16 @@ const DatasetsPage = () => {
                   paddingBottom: '10px',
                 }}
               />
-              <button 
-                type="button"
-                onClick={() => setIsUploadModalOpen(true)}
-                className="bg-orange-600 hover:bg-orange-500 active:bg-orange-700 text-white px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider flex items-center gap-2 transition-all active:scale-95 shadow-lg shadow-orange-950/20 whitespace-nowrap h-[40px] cursor-pointer"
-              >
-                <Plus size={16} />
-                Add Dataset
-              </button>
+              {canUploadDataset && (
+                <button 
+                  type="button"
+                  onClick={() => setShowCreateProjectModal(true)}
+                  className="bg-orange-600 hover:bg-orange-500 active:bg-orange-700 text-white px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider flex items-center gap-2 transition-all active:scale-95 shadow-lg shadow-orange-950/20 whitespace-nowrap h-[40px] cursor-pointer"
+                >
+                  <Plus size={16} />
+                  New project
+                </button>
+              )}
             </div>
           </header>
 
@@ -296,18 +299,12 @@ const DatasetsPage = () => {
                           <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all translate-x-2 group-hover:translate-x-0">
                             <button 
                               type="button"
-                              onClick={() => navigate(`/app/datasets/${dataset.id || dataset.dataset_id}/understanding`)}
-                              className={cn(
-                                "p-2 rounded-lg transition-all cursor-pointer hover:text-orange-400 hover:bg-orange-500/10",
-                                isDark ? "text-gray-400" : "text-gray-500"
-                              )}
-                              title="Dataset Understanding Report"
-                            >
-                              <Eye size={16} />
-                            </button>
-                            <button 
-                              type="button"
-                              onClick={() => navigate(`/app/chat?dataset=${dataset.id || dataset.dataset_id}`)}
+                              onClick={() => {
+                                const datasetId = dataset.id || dataset.dataset_id;
+                                window.dispatchEvent(new CustomEvent('open-chat-with-query', {
+                                  detail: { query: null }
+                                }));
+                              }}
                               className={cn(
                                 "p-2 rounded-lg transition-all cursor-pointer hover:text-orange-400 hover:bg-orange-500/10",
                                 isDark ? "text-gray-400" : "text-gray-500"
@@ -336,17 +333,19 @@ const DatasetsPage = () => {
                                 <RefreshCw size={16} />
                               </button>
                             )}
-                            <button 
-                              type="button"
-                              onClick={() => setDeleteModal({ isOpen: true, dataset })}
-                              className={cn(
-                                "p-2 rounded-lg transition-all cursor-pointer hover:text-rose-500 hover:bg-rose-500/10",
-                                isDark ? "text-gray-400" : "text-gray-550"
-                              )}
-                              title="Delete"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            {canDeleteDataset && (
+                              <button 
+                                type="button"
+                                onClick={() => setDeleteModal({ isOpen: true, dataset })}
+                                className={cn(
+                                  "p-2 rounded-lg transition-all cursor-pointer hover:text-rose-500 hover:bg-rose-500/10",
+                                  isDark ? "text-gray-400" : "text-gray-550"
+                                )}
+                                title="Delete"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </motion.tr>
@@ -400,11 +399,12 @@ const DatasetsPage = () => {
         itemName={deleteModal.dataset?.name || deleteModal.dataset?.original_filename}
       />
 
-      <UploadModal
-        isOpen={isUploadModalOpen}
-        onClose={() => setIsUploadModalOpen(false)}
-        onProcessingStart={() => setIsUploadModalOpen(false)}
-      />
+      {showCreateProjectModal && (
+        <CreateProjectModal
+          onClose={() => setShowCreateProjectModal(false)}
+          onCreated={(project) => navigate(`/app/projects/${project.id}`)}
+        />
+      )}
     </div>
   );
 };

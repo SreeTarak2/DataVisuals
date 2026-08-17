@@ -15,9 +15,12 @@ The Belief Store is partitioned by user_id for multi-tenancy.
 
 import logging
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import json
+
+# MongoDB collection for Bayesian priors
+_BAYESIAN_PRIORS_COLLECTION = "bayesian_priors"
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +43,7 @@ try:
     EMBEDDINGS_AVAILABLE = True
 except ImportError:
     EMBEDDINGS_AVAILABLE = False
-    logger.warning(
-        "sentence-transformers not installed. Run: pip install sentence-transformers"
-    )
+    logger.warning("sentence-transformers not installed. Run: pip install sentence-transformers")
 
 
 class BeliefStore:
@@ -72,9 +73,7 @@ class BeliefStore:
     # Collection name prefix for multi-tenancy
     COLLECTION_PREFIX = "beliefs_"
 
-    def __init__(
-        self, persist_directory: str = "./chroma_db", embedding_model: str = None
-    ):
+    def __init__(self, persist_directory: str = "./chroma_db", embedding_model: str = None):
         """
         Initialize the Belief Store.
 
@@ -106,24 +105,26 @@ class BeliefStore:
             self.client = None
             logger.warning("ChromaDB not available - Belief Store disabled")
 
-        # Initialize embedding model
-        if EMBEDDINGS_AVAILABLE:
-            try:
-                import os
-                # Use cached model without pinging huggingface.co on every cold start.
-                # If the model is not cached yet, this will be set temporarily to trigger
-                # a fresh download on the NEXT restart (with the env var unset).
-                os.environ.setdefault("HF_HUB_OFFLINE", "1")
-                os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-                self.embedding_model = SentenceTransformer(self.embedding_model_name)
-                logger.info(f"Loaded embedding model: {self.embedding_model_name}")
-            except Exception as e:
-                logger.error(f"Failed to load embedding model: {e}")
-                self.embedding_model = None
-
-        else:
-            self.embedding_model = None
+        # Initialize embedding model (lazy — loaded on first use)
+        self.embedding_model = None
+        if not EMBEDDINGS_AVAILABLE:
             logger.warning("Embeddings not available - using mock embeddings")
+
+    def _ensure_embedding_model(self):
+        if self.embedding_model is not None:
+            return
+        if not EMBEDDINGS_AVAILABLE:
+            return
+        try:
+            import os
+
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+            self.embedding_model = SentenceTransformer(self.embedding_model_name)
+            logger.info(f"Loaded embedding model: {self.embedding_model_name}")
+        except Exception as e:
+            logger.error(f"Failed to load embedding model: {e}")
+            self.embedding_model = None
 
     def _get_collection(self, user_id: str):
         """Get or create a collection for a specific user."""
@@ -172,13 +173,15 @@ class BeliefStore:
 
     async def _embed(self, text: str) -> List[float]:
         """Generate embedding for text."""
+        self._ensure_embedding_model()
         if self.embedding_model:
             import asyncio
+
             embedding = await asyncio.to_thread(
-                self.embedding_model.encode, 
-                text, 
-                normalize_embeddings=True, 
-                show_progress_bar=False
+                self.embedding_model.encode,
+                text,
+                normalize_embeddings=True,
+                show_progress_bar=False,
             )
             return embedding.tolist()
         else:
@@ -224,7 +227,7 @@ class BeliefStore:
             "user_id": user_id,
             "source": source,
             "confidence": confidence,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             "decay_rate": 0.01,  # 1% per day
         }
 
@@ -242,9 +245,7 @@ class BeliefStore:
             if self._handle_dimension_mismatch(user_id, error):
                 collection = self._get_collection(user_id)
                 if collection is None:
-                    logger.warning(
-                        "Belief Store unavailable after collection reset - skipping add"
-                    )
+                    logger.warning("Belief Store unavailable after collection reset - skipping add")
                     return None
                 collection.add(
                     ids=[belief_id],
@@ -255,9 +256,7 @@ class BeliefStore:
             else:
                 raise
 
-        logger.info(
-            f"Added belief {belief_id} for user {user_id}: {belief_text[:50]}..."
-        )
+        logger.info(f"Added belief {belief_id} for user {user_id}: {belief_text[:50]}...")
         return belief_id
 
     async def query_similar_beliefs(
@@ -301,13 +300,15 @@ class BeliefStore:
             raise
 
         beliefs = []
+        beliefs_to_persist = []  # FIX §7: track beliefs needing decay write-back
         for i, doc in enumerate(results["documents"][0]):
             metadata = results["metadatas"][0][i]
             distance = results["distances"][0][i]
 
             # Apply confidence decay
+            stored_confidence = metadata.get("confidence", 1.0)
             confidence = self._apply_decay(
-                metadata.get("confidence", 1.0),
+                stored_confidence,
                 metadata.get("created_at"),
                 metadata.get("decay_rate", 0.01),
             )
@@ -317,6 +318,11 @@ class BeliefStore:
                 # For normalized vectors, L2 distance relates to cosine: d = sqrt(2 - 2*cos)
                 # So cos = 1 - d²/2
                 similarity = max(0, 1 - (distance**2) / 2)
+
+                # FIX §7: If decay has meaningfully changed the confidence,
+                # schedule it for write-back to ChromaDB metadata.
+                if abs(confidence - stored_confidence) > 0.05:
+                    beliefs_to_persist.append((results["ids"][0][i], confidence))
 
                 beliefs.append(
                     {
@@ -328,21 +334,39 @@ class BeliefStore:
                     }
                 )
 
+        # FIX §7: Persist decayed confidence back to ChromaDB metadata.
+        # CRITICAL: Must merge into full metadata — ChromaDB update() replaces
+        # the ENTIRE metadata object, not just the confidence field.
+        # Writing {"confidence": X} alone would wipe user_id, source, created_at,
+        # decay_rate, dataset_id — breaking decay computations and promotions.
+        if beliefs_to_persist:
+            try:
+                # Build a lookup of full metadata by belief ID
+                meta_by_id = {b["id"]: b["metadata"] for b in beliefs if "id" in b}
+                for belief_id, decayed_conf in beliefs_to_persist:
+                    full_meta = dict(meta_by_id.get(belief_id, {}))
+                    full_meta["confidence"] = decayed_conf
+                    collection.update(
+                        ids=[belief_id],
+                        metadatas=[full_meta],
+                    )
+                logger.debug(f"Persisted decayed confidence for {len(beliefs_to_persist)} beliefs")
+            except Exception as e:
+                logger.warning(f"Failed to persist decayed confidence (non-critical): {e}")
+
         # Sort by similarity descending
         beliefs.sort(key=lambda x: x["similarity"], reverse=True)
 
         return beliefs
 
-    def _apply_decay(
-        self, initial_confidence: float, created_at: str, decay_rate: float
-    ) -> float:
+    def _apply_decay(self, initial_confidence: float, created_at: str, decay_rate: float) -> float:
         """Apply temporal decay to confidence."""
         if not created_at:
             return initial_confidence
 
         try:
             created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             days_elapsed = (now - created.replace(tzinfo=None)).days
 
             # Exponential decay: c(t) = c0 * e^(-λt)
@@ -381,9 +405,7 @@ class BeliefStore:
 
         return surprisal, similar
 
-    async def mark_as_known(
-        self, user_id: str, insight_text: str, dataset_id: str = None
-    ) -> str:
+    async def mark_as_known(self, user_id: str, insight_text: str, dataset_id: str = None) -> str:
         """
         Mark an insight as "already known" by the user.
 
@@ -406,9 +428,7 @@ class BeliefStore:
             confidence=0.95,  # Paper §V.B: explicit confirmation c₀ = 0.95
         )
 
-    async def accept_insight(
-        self, user_id: str, insight_text: str, dataset_id: str = None
-    ) -> str:
+    async def accept_insight(self, user_id: str, insight_text: str, dataset_id: str = None) -> str:
         """
         Accept an insight as useful (thumbs up).
 
@@ -539,10 +559,102 @@ class BeliefStore:
             if belief_id:
                 belief_ids.append(belief_id)
 
-        logger.info(
-            f"Ingested document into {len(belief_ids)} beliefs for user {user_id}"
-        )
+        logger.info(f"Ingested document into {len(belief_ids)} beliefs for user {user_id}")
         return belief_ids
+
+    async def decay_all_collections(self) -> int:
+        """
+        Apply temporal confidence decay to ALL beliefs across ALL users.
+
+        Iterates every ChromaDB collection managed by this BeliefStore,
+        computes the decayed confidence for each belief using the same
+        _apply_decay() formula as query_similar_beliefs(), and writes
+        back the updated confidence to ChromaDB metadata.
+
+        This is called by the scheduled belief_decay_task background
+        worker (services/maintenance/belief_decay_task.py). Without
+        it, beliefs about topics users never revisit stay at their
+        initial confidence forever.
+
+        Returns:
+            Total number of beliefs whose confidence was updated.
+        """
+        if not self.client:
+            logger.warning("[Decay] ChromaDB client unavailable — skipping decay pass")
+            return 0
+
+        total_updated = 0
+        try:
+            # List all ChromaDB collections, filter to our managed ones
+            all_collections = self.client.list_collections()
+            belief_collections = [
+                c for c in all_collections if c.name.startswith(self.COLLECTION_PREFIX)
+            ]
+
+            if not belief_collections:
+                logger.debug("[Decay] No belief collections found — nothing to decay")
+                return 0
+
+            logger.info(f"[Decay] Running decay pass on {len(belief_collections)} collections")
+
+            for collection in belief_collections:
+                try:
+                    col_name = collection.name
+                    count = collection.count()
+                    if count == 0:
+                        continue
+
+                    # Get all documents with full metadata
+                    all_data = collection.get(
+                        include=["metadatas", "documents"],
+                    )
+
+                    ids = all_data.get("ids", [])
+                    metadatas = all_data.get("metadatas", [])
+                    if not ids:
+                        continue
+
+                    updated_in_collection = 0
+                    for i in range(len(ids)):
+                        meta = metadatas[i] if i < len(metadatas) else {}
+                        stored_confidence = meta.get("confidence", 1.0)
+                        created_at = meta.get("created_at")
+                        decay_rate = meta.get("decay_rate", 0.01)
+
+                        decayed = self._apply_decay(stored_confidence, created_at, decay_rate)
+
+                        # Only write back if decay meaningfully changed the value
+                        if abs(decayed - stored_confidence) > 0.01:
+                            updated_meta = dict(meta)
+                            updated_meta["confidence"] = decayed
+                            try:
+                                collection.update(
+                                    ids=[ids[i]],
+                                    metadatas=[updated_meta],
+                                )
+                                updated_in_collection += 1
+                            except Exception as update_err:
+                                logger.debug(
+                                    f"[Decay] Failed to update belief {ids[i][:12]}…: {update_err}"
+                                )
+
+                    if updated_in_collection > 0:
+                        logger.debug(
+                            f"[Decay] Decayed {updated_in_collection}/{count} beliefs "
+                            f"in collection {col_name[:40]}…"
+                        )
+                        total_updated += updated_in_collection
+
+                except Exception as col_err:
+                    logger.warning(
+                        f"[Decay] Failed to process collection {getattr(collection, 'name', 'unknown')}: {col_err}"
+                    )
+                    continue
+
+        except Exception as e:
+            logger.error(f"[Decay] Decay pass failed: {e}")
+
+        return total_updated
 
 
 # ============================================================
@@ -643,10 +755,7 @@ class BayesianTracker:
         # D_KL(P(θ|D) || P(θ)) = 0.5 * [σ0²/σ1² + (μ1-μ0)²/σ1² - 1 + ln(σ1²/σ0²)]
         try:
             kl = 0.5 * (
-                (σ0**2) / (σ1**2)
-                + ((μ1 - μ0) ** 2) / (σ1**2)
-                - 1
-                + math.log((σ1**2) / (σ0**2))
+                (σ0**2) / (σ1**2) + ((μ1 - μ0) ** 2) / (σ1**2) - 1 + math.log((σ1**2) / (σ0**2))
             )
             # Normalize to [0,1] with sigmoid, k=2 (Paper Eq. 5)
             surprise = 2 / (1 + math.exp(-2 * kl)) - 1
@@ -662,13 +771,83 @@ class BayesianTracker:
         """List all tracked metric names."""
         return list(self.priors.keys())
 
-    def save_state(self) -> Dict[str, Any]:
-        """Serialize state for persistence."""
-        return {"priors": self.priors}
+    # ── MongoDB Persistence (replaces old JSON file approach) ──
+    # Priors are stored in the "bayesian_priors" collection with documents:
+    #   {"_id": metric_name, "mean": μ, "std": σ, "n": count}
+    # This survives multi-replica deploys — every worker reads from the
+    # same MongoDB cluster instead of a local JSON file.
 
-    def load_state(self, state: Dict[str, Any]):
-        """Load state from persistence."""
-        self.priors = state.get("priors", {})
+    async def persist(self) -> None:
+        """
+        Upsert all priors into MongoDB.
+
+        Each prior becomes a document in the bayesian_priors collection
+        keyed by metric name. Uses individual update_one with upsert
+        (≤50 priors — network overhead is negligible).
+        """
+        if not self.priors:
+            return
+        try:
+            from db.database import get_database
+
+            db = get_database()
+            collection = db[_BAYESIAN_PRIORS_COLLECTION]
+
+            updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            for metric_name, prior in self.priors.items():
+                await collection.update_one(
+                    {"_id": metric_name},
+                    {
+                        "$set": {
+                            "mean": prior["mean"],
+                            "std": prior["std"],
+                            "n": prior["n"],
+                            "updated_at": updated_at,
+                        }
+                    },
+                    upsert=True,
+                )
+
+            logger.debug(f"Persisted {len(self.priors)} Bayesian priors to MongoDB")
+        except Exception as e:
+            logger.warning(f"Failed to persist Bayesian priors to MongoDB (non-critical): {e}")
+
+    @classmethod
+    async def load(cls) -> "BayesianTracker":
+        """
+        Load priors from MongoDB into a new tracker.
+
+        Returns:
+            BayesianTracker with loaded priors, or empty tracker if
+            collection doesn't exist or is empty.
+        """
+        tracker = cls()
+        try:
+            from db.database import get_database
+
+            db = get_database()
+            collection = db[_BAYESIAN_PRIORS_COLLECTION]
+
+            cursor = collection.find({})
+            count = 0
+            async for doc in cursor:
+                metric_name = doc.get("_id")
+                if metric_name and "mean" in doc and "std" in doc and "n" in doc:
+                    tracker.priors[metric_name] = {
+                        "mean": doc["mean"],
+                        "std": doc["std"],
+                        "n": doc["n"],
+                    }
+                    count += 1
+
+            if count > 0:
+                logger.info(f"Loaded {count} Bayesian priors from MongoDB")
+            else:
+                logger.debug("No Bayesian priors found in MongoDB — starting fresh")
+        except Exception as e:
+            logger.warning(f"Failed to load Bayesian priors from MongoDB (non-critical): {e}")
+
+        return tracker
 
 
 # ============================================================
@@ -788,6 +967,190 @@ class PassiveBeliefIngestion:
                 pass
         return nums
 
+    # ── Semantic number comparison (FIX §9: replaces position-dependent zip) ──
+
+    # ── Multiplier map for K/M/B suffixes ─────────────────
+    _NUM_SUFFIX_MAP = {
+        "k": 1_000,
+        "m": 1_000_000,
+        "b": 1_000_000_000,
+    }
+
+    @staticmethod
+    def _parse_number_with_suffix(raw: str) -> float:
+        """
+        Parse a number string with optional K/M/B suffix.
+        "120K" → 120000, "$1.5M" → 1500000, "30" → 30
+        """
+        import re
+
+        raw = raw.replace(",", "").replace("$", "").strip()
+        suffix_match = re.search(r"([kmb])", raw, re.I)
+        if suffix_match:
+            suffix = suffix_match.group(1).lower()
+            numeric = raw[: suffix_match.start()]
+            multiplier = PassiveBeliefIngestion._NUM_SUFFIX_MAP.get(suffix, 1)
+            return float(numeric) * multiplier if numeric else 0.0
+        return float(raw)
+
+    # Common stopwords that should not be used as metric labels
+    _LABEL_STOPWORDS = frozenset(
+        {
+            "a",
+            "an",
+            "the",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "shall",
+            "can",
+            "not",
+            "no",
+            "nor",
+            "but",
+            "or",
+            "and",
+            "if",
+            "then",
+            "else",
+            "when",
+            "where",
+            "why",
+            "how",
+            "all",
+            "each",
+            "every",
+            "both",
+            "few",
+            "more",
+            "most",
+            "other",
+            "some",
+            "such",
+            "only",
+            "own",
+            "same",
+            "so",
+            "than",
+            "too",
+            "very",
+            "just",
+            "because",
+            "as",
+            "until",
+            "while",
+            "of",
+            "at",
+            "by",
+            "for",
+            "with",
+            "about",
+            "against",
+            "between",
+            "into",
+            "through",
+            "during",
+            "before",
+            "after",
+            "above",
+            "below",
+            "to",
+            "from",
+            "up",
+            "down",
+            "in",
+            "out",
+            "on",
+            "off",
+            "over",
+            "under",
+            "again",
+            "further",
+            "once",
+            "here",
+            "there",
+            "this",
+            "that",
+            "these",
+            "those",
+        }
+    )
+
+    @staticmethod
+    def _numbers_differ_semantic(old_text: str, new_text: str, threshold: float = 0.05) -> bool:
+        """
+        Check if the same metric has a different value in two texts.
+
+        Fixes §9: old code used zip(old_nums, new_nums) which paired numbers
+        by position — "Revenue is $120K, profit is $30K" vs "Profit is $28K"
+        would falsely flag a contradiction because zip pairs (120, 28).
+
+        This version extracts (label, value) pairs by finding each number,
+        then looking backwards up to 40 chars for the nearest MEANINGFUL
+        keyword (skipping stopwords like "is", "the", "of") as the metric
+        label. Handles K/M/B suffixes: "120K" → 120000.
+        """
+        import re
+
+        def extract_labeled_numbers(text: str):
+            """Extract (label, value) pairs by looking backwards for the label."""
+            pairs = []
+            # Find all numbers with optional $ prefix and K/M/B suffix
+            for match in re.finditer(
+                r"(\$?[\d,]+(?:\.\d+)?)([KkMmBb]?)",
+                text,
+            ):
+                raw_num = match.group(1)
+                suffix = match.group(2).lower()
+                multiplier = PassiveBeliefIngestion._NUM_SUFFIX_MAP.get(suffix, 1)
+                try:
+                    value = float(raw_num.replace(",", "").replace("$", "")) * multiplier
+                    # Look backwards up to 40 chars for the nearest meaningful keyword
+                    before = text[max(0, match.start() - 40) : match.start()]
+                    words = re.findall(r"[A-Za-z]\w+", before)
+                    # Find the last non-stopword
+                    label = ""
+                    for w in reversed(words):
+                        wl = w.lower()
+                        if wl not in PassiveBeliefIngestion._LABEL_STOPWORDS:
+                            label = wl
+                            break
+                    pairs.append((label, value))
+                except (ValueError, TypeError):
+                    pass
+            return pairs
+
+        old_pairs = extract_labeled_numbers(old_text)
+        new_pairs = extract_labeled_numbers(new_text)
+
+        for old_label, old_val in old_pairs:
+            for new_label, new_val in new_pairs:
+                # Match if labels share a common keyword
+                if (
+                    old_label
+                    and new_label
+                    and (old_label == new_label or old_label in new_label or new_label in old_label)
+                ):
+                    if abs(old_val - new_val) / max(abs(old_val), 1) > threshold:
+                        return True
+        return False
+
     # ── Core: ingest candidates from AI response ────────────
 
     @staticmethod
@@ -816,26 +1179,16 @@ class PassiveBeliefIngestion:
                 break
 
             try:
-                similar = await belief_store.query_similar_beliefs(
-                    user_id, stmt, n_results=1
-                )
+                similar = await belief_store.query_similar_beliefs(user_id, stmt, n_results=1)
                 if similar:
                     top = similar[0]
                     sim = top["similarity"]
 
                     # ── Contradiction detection ──
                     if sim > PassiveBeliefIngestion.CONTRADICTION_SIM:
-                        old_nums = PassiveBeliefIngestion._extract_numbers(
-                            top["document"]
-                        )
-                        new_nums = PassiveBeliefIngestion._extract_numbers(stmt)
-                        numbers_differ = (
-                            old_nums
-                            and new_nums
-                            and any(
-                                abs(o - n) / max(abs(o), 1) > 0.05
-                                for o, n in zip(old_nums, new_nums)
-                            )
+                        # FIX §9: Semantic number comparison — match by label, not position
+                        numbers_differ = PassiveBeliefIngestion._numbers_differ_semantic(
+                            top["document"], stmt
                         )
                         if numbers_differ:
                             # Replace stale belief
@@ -846,9 +1199,7 @@ class PassiveBeliefIngestion:
                             )
                         else:
                             # Near-duplicate, skip
-                            logger.debug(
-                                f"Belief dedup: skipping '{stmt[:50]}…' (sim={sim:.2f})"
-                            )
+                            logger.debug(f"Belief dedup: skipping '{stmt[:50]}…' (sim={sim:.2f})")
                             continue
 
                     elif sim > PassiveBeliefIngestion.DEDUP_SIM:
@@ -900,14 +1251,10 @@ class PassiveBeliefIngestion:
             "dashboard": PassiveBeliefIngestion.BOOST_DASHBOARD_VIEW,
             "export": PassiveBeliefIngestion.BOOST_EXPORT,
         }
-        amount = (
-            boost_amount if boost_amount is not None else boost_map.get(signal, 0.15)
-        )
+        amount = boost_amount if boost_amount is not None else boost_map.get(signal, 0.15)
 
         try:
-            similar = await belief_store.query_similar_beliefs(
-                user_id, query_text, n_results=5
-            )
+            similar = await belief_store.query_similar_beliefs(user_id, query_text, n_results=5)
         except Exception:
             return 0
 
@@ -931,7 +1278,9 @@ class PassiveBeliefIngestion:
                 and new_confidence >= PassiveBeliefIngestion.PROMOTION_THRESHOLD
             ):
                 updated_meta["source"] = "promoted"
-                updated_meta["promoted_at"] = datetime.utcnow().isoformat()
+                updated_meta["promoted_at"] = (
+                    datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+                )
                 logger.info(
                     f"Belief promoted: '{belief['document'][:60]}…' "
                     f"(confidence {belief['confidence']:.2f} → {new_confidence:.2f})"
@@ -949,9 +1298,7 @@ class PassiveBeliefIngestion:
                 pass
 
         if boosted:
-            logger.debug(
-                f"Implicit boost ({signal}): {boosted} beliefs for user {user_id}"
-            )
+            logger.debug(f"Implicit boost ({signal}): {boosted} beliefs for user {user_id}")
         return boosted
 
     # ── Dashboard KPI ingestion ──────────────────────────────
@@ -999,18 +1346,11 @@ class PassiveBeliefIngestion:
                 if similar:
                     top = similar[0]
                     if top["similarity"] > PassiveBeliefIngestion.CONTRADICTION_SIM:
-                        old_nums = PassiveBeliefIngestion._extract_numbers(
-                            top["document"]
+                        # FIX §9: Semantic number comparison — match by label, not position
+                        numbers_differ = PassiveBeliefIngestion._numbers_differ_semantic(
+                            top["document"], belief_text
                         )
-                        new_nums = PassiveBeliefIngestion._extract_numbers(belief_text)
-                        if (
-                            old_nums
-                            and new_nums
-                            and any(
-                                abs(o - n) / max(abs(o), 1) > 0.05
-                                for o, n in zip(old_nums, new_nums)
-                            )
-                        ):
+                        if numbers_differ:
                             await belief_store.delete_belief(user_id, top["id"])
                         else:
                             continue  # same value, skip
@@ -1031,8 +1371,7 @@ class PassiveBeliefIngestion:
 
         if belief_ids:
             logger.info(
-                f"Dashboard belief ingestion: {len(belief_ids)} KPI candidates "
-                f"for user {user_id}"
+                f"Dashboard belief ingestion: {len(belief_ids)} KPI candidates for user {user_id}"
             )
         return belief_ids
 
@@ -1084,9 +1423,15 @@ def get_belief_store(persist_directory: str = "./chroma_db") -> BeliefStore:
     return _belief_store
 
 
-def get_bayesian_tracker() -> BayesianTracker:
-    """Get or create the global BayesianTracker instance."""
+async def get_bayesian_tracker() -> BayesianTracker:
+    """
+    Get or create the global BayesianTracker instance.
+
+    Loads persisted priors from MongoDB on first initialization
+    so Bayesian surprise scores survive server restarts across
+    all replicas (no more single-node JSON file).
+    """
     global _bayesian_tracker
     if _bayesian_tracker is None:
-        _bayesian_tracker = BayesianTracker()
+        _bayesian_tracker = await BayesianTracker.load()
     return _bayesian_tracker

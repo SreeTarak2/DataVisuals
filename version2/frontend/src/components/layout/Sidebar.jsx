@@ -3,27 +3,28 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
     LayoutDashboard, BarChart3, Library, Settings,
-    Sparkles, Upload, Plus, ChevronsLeft, ChevronsRight, Lightbulb, LogOut, History, Trash2, User, Database, Eye, FileSpreadsheet,
-    PanelLeft, PanelLeftClose
+    History, Trash2, Database, FileSpreadsheet,
+    PanelLeft, PanelLeftClose, Loader2, Layers, Plus, MessageSquare,
+    Terminal, FolderKanban
 } from 'lucide-react';
 import useDatasetStore from '../../store/datasetStore';
 import useChatStore from '../../store/chatStore';
-import UploadModal from '../features/datasets/UploadModal';
 import ChatHistoryModal from '../features/observatory/ChatHistoryModal';
+import { DeleteConfirmDialog } from '../ui/delete-confirm-dialog';
+import { toast } from 'react-hot-toast';
 import { cn } from '../../lib/utils';
 import { useAuth } from '../../store/authStore';
-import { AiBotIcon } from '../svg/icons';
 import { ProfileDropdown } from '../ui/ProfileDropdown';
-import { databaseAPI } from '../../services/api';
-
 import useSidebarStore from '../../store/sidebarStore';
+import useConnectorStore from '../../store/connectorStore';
+import { useWorkspacePermission } from '../../hooks/useWorkspacePermission';
 
 /* ─── Nav items ─── */
 const NAV_ITEMS = [
     { icon: LayoutDashboard, label: 'Dashboard', path: '/app/dashboard' },
-    { icon: Lightbulb, label: 'Analysis', path: '/app/analysis' },
-    { icon: AiBotIcon, label: 'AI Chat', path: '/app/chat' },
-    { icon: BarChart3, label: 'Charts', path: '/app/charts' },
+    { icon: FolderKanban, label: 'Projects', path: '/app/projects' },
+    { icon: Layers, label: 'Playground', path: '/app/playground' },
+    { icon: Terminal, label: 'SQL Editor', path: '/app/sql' },
     { icon: Library, label: 'Assets', path: '/app/workspace', badge: 'datasets' },
     { icon: Database, label: 'Data Connectors', path: '/app/connectors' },
     { icon: Settings, label: 'Settings', path: '/app/settings' },
@@ -42,18 +43,20 @@ const Sidebar = () => {
     const setCurrentConversation = useChatStore((s) => s.setCurrentConversation);
     const loadConversations = useChatStore((s) => s.loadConversations);
     const { logout, user } = useAuth();
+    const { isViewer, role } = useWorkspacePermission();
 
     const { expanded, toggle } = useSidebarStore();
     const [isHovered, setIsHovered] = useState(false);
-    const [showUpload, setShowUpload] = useState(false);
     const [showHistoryModal, setShowHistoryModal] = useState(false);
+    const [deleteTarget, setDeleteTarget] = useState(null); // { id, name, type } | null
+    const [deletingId, setDeletingId] = useState(null); // id of item currently being deleted
 
     useEffect(() => {
         if (sessionStorage.getItem("logo_processed_v3")) return;
 
         const img = new Image();
         img.crossOrigin = "anonymous";
-        img.src = "/logo.png?v=2";
+        img.src = "/logo.png";
         img.onload = () => {
             const canvas = document.createElement("canvas");
             const ctx = canvas.getContext("2d");
@@ -158,45 +161,42 @@ const Sidebar = () => {
         }
     }, [expanded, loadConversations]);
 
-    const [dbConnections, setDbConnections] = useState([]);
-
-    const fetchConnections = useCallback(() => {
-        if (!expanded) return;
-        databaseAPI.listConnections()
-            .then((res) => setDbConnections(res.data || []))
-            .catch(() => {});
-    }, [expanded]);
+    const connections = useConnectorStore((s) => s.connections);
+    const fetchConnections = useConnectorStore((s) => s.fetchConnections);
 
     useEffect(() => {
-        fetchConnections();
-    }, [fetchConnections]);
-
-    // Listen for db-connection-saved events from ConnectorSetupPage
-    useEffect(() => {
-        const handler = () => fetchConnections();
-        window.addEventListener('db-connection-saved', handler);
-        return () => window.removeEventListener('db-connection-saved', handler);
-    }, [fetchConnections]);
+        if (expanded) {
+            fetchConnections();
+        }
+    }, [expanded, fetchConnections]);
 
     const googleSheetsDatasets = useMemo(() =>
         datasets.filter((d) => d.source_type === 'google_sheets'),
     [datasets]);
 
     const connectorItems = useMemo(() => {
+        const typeMap = {
+            postgresql: 'postgres',
+            mysql: 'mysql',
+            mongodb: 'mongodb',
+            supabase: 'supabase',
+        };
+        const DB_IMAGES = {
+            postgres: '/postgres.png',
+            mysql: '/mysql.png',
+            mongodb: '/mongodb.png',
+            supabase: '/supabase.png',
+        };
         const items = [];
-        dbConnections.forEach((conn) => {
-            const typeMap = {
-                postgresql: 'postgres',
-                mysql: 'mysql',
-                mongodb: 'mongodb',
-                supabase: 'supabase',
-            };
+        connections.forEach((conn) => {
+            const slug = typeMap[conn.db_type] || conn.db_type;
             items.push({
                 id: `db-${conn.connection_id}`,
                 name: conn.name || conn.database,
                 type: 'database',
                 icon: Database,
-                path: `/app/connectors/${typeMap[conn.db_type] || conn.db_type}?connId=${conn.connection_id}`,
+                image: DB_IMAGES[slug] || null,
+                path: `/app/connectors/${slug}?connId=${conn.connection_id}`,
                 status: conn.status || 'active',
             });
         });
@@ -207,12 +207,13 @@ const Sidebar = () => {
                 name: ds.name || ds.original_filename || 'Google Sheet',
                 type: 'google_sheets',
                 icon: FileSpreadsheet,
+                image: '/google-sheets.png',
                 path: '/app/workspace',
                 status: ds.is_processed ? 'active' : 'syncing',
             });
         });
         return items;
-    }, [dbConnections, googleSheetsDatasets]);
+    }, [connections, googleSheetsDatasets]);
 
     const recentChats = useMemo(() => {
         const generateTitle = (messages = [], datasetName = 'New Chat') => {
@@ -243,16 +244,18 @@ const Sidebar = () => {
                 const lastMessage = messages[messages.length - 1];
                 const rawSnippet = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
                 const snippet = rawSnippet ? stripMarkdown(rawSnippet) : 'No messages yet';
+                // Prefer backend-generated title (from auto_name_conversation) over heuristic
+                const storedTitle = conv.title && conv.title !== 'New Chat' ? conv.title : null;
                 return {
                     id: conv.id,
                     datasetId: conv.datasetId,
-                    title: generateTitle(messages, conv.datasetName || 'New Chat'),
+                    title: storedTitle || generateTitle(messages, conv.datasetName || 'New Chat'),
                     snippet: snippet || 'No messages yet',
                     ts: new Date(conv.updatedAt || conv.createdAt || Date.now()).getTime(),
                 };
             })
             .sort((a, b) => b.ts - a.ts)
-            .slice(0, 6);
+            .slice(0, 15);
     }, [conversations]);
 
     const openConversation = useCallback((conversationId, datasetId = null) => {
@@ -264,17 +267,10 @@ const Sidebar = () => {
             if (matchedDataset) setSelectedDataset(matchedDataset);
         }
 
-        const params = new URLSearchParams();
-        params.set('chatId', conversationId);
-        if (datasetId) params.set('dataset', datasetId);
-        navigate(`/app/chat?${params.toString()}`);
+        navigate('/app/dashboard');
+        // Open the chat panel
+        window.dispatchEvent(new CustomEvent('open-chat-with-query', { detail: {} }));
     }, [datasets, navigate, setCurrentConversation, setSelectedDataset]);
-
-    const handleNewChat = () => {
-        const dsId = selectedDataset?.id || selectedDataset?._id || null;
-        startNewConversation(dsId);
-        navigate('/app/chat');
-    };
 
     const getBadge = (key) => {
         if (key === 'datasets' && datasets.length > 0) return datasets.length;
@@ -312,7 +308,7 @@ const Sidebar = () => {
                                     className="flex items-center gap-2.5 group transition-all duration-300"
                                     title="Go to Dashboard"
                                 >
-                                    <img src="/logo.png?v=2" alt="Signal Logo" className="h-6 w-6 object-contain shrink-0" />
+                                    <img src="/logo.png" alt="Signal Logo" className="h-6 w-6 object-contain shrink-0" />
                                     <span className="text-[16px] font-semibold tracking-tight text-blue-500 leading-none">
                                         Signal
                                     </span>
@@ -341,7 +337,7 @@ const Sidebar = () => {
                                         className="flex items-center justify-center w-full transition-all duration-300 scale-90"
                                         title="Go to Dashboard"
                                     >
-                                        <img src="/logo.png?v=2" alt="Signal Logo" className="h-6 w-6 object-contain shrink-0" />
+                                        <img src="/logo.png" alt="Signal Logo" className="h-6 w-6 object-contain shrink-0" />
                                     </button>
                                 )}
                             </div>
@@ -352,7 +348,13 @@ const Sidebar = () => {
                 <nav className={cn("flex-1 flex flex-col overflow-y-auto overflow-x-hidden pt-2 pb-6", expanded ? "px-3" : "px-2")}>
 
                     <div className="flex flex-col gap-0.5 mb-4">
-                        {NAV_ITEMS.map((item) => {
+                        {NAV_ITEMS.filter((item) => {
+                            // Hide Settings nav item for viewers (they can still access personal settings via direct URL)
+                            if (item.path === '/app/settings' && isViewer) return false;
+                            // Hide Data Connectors for viewers
+                            if (item.path === '/app/connectors' && isViewer) return false;
+                            return true;
+                        }).map((item) => {
                             const badge = getBadge(item.badge);
                             return (
                                 <NavLink
@@ -448,31 +450,68 @@ const Sidebar = () => {
                                                         : "text-[var(--text-secondary)] hover:bg-[var(--bg-active)]/50 hover:text-[var(--text-primary)]"
                                                 )}
                                             >
-                                                <conn.icon 
-                                                    className="shrink-0 transition-colors"
-                                                    size={15} 
-                                                />
-
-                                                <div className="flex-1 min-w-0 flex items-center justify-between gap-2">
-                                                    <span 
-                                                        className="text-[13px] font-normal truncate min-w-0 transition-colors"
-                                                    >
-                                                        {conn.name}
-                                                    </span>
-                                                    <div className="relative flex h-1.5 w-1.5 items-center justify-center shrink-0">
-                                                        {conn.status === 'active' && (
-                                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-40"></span>
-                                                        )}
-                                                        <span
-                                                            className={cn(
-                                                                "relative inline-flex rounded-full h-1.5 w-1.5 shrink-0",
-                                                                conn.status === 'active'
-                                                                    ? 'bg-emerald-500'
-                                                                    : 'bg-amber-500'
+                                                {conn.image ? (
+                                                    <img
+                                                        src={conn.image}
+                                                        alt={conn.name}
+                                                        className="w-[15px] h-[15px] object-contain shrink-0"
+                                                    />
+                                                ) : (
+                                                    <conn.icon 
+                                                        className="shrink-0 transition-colors"
+                                                        size={15} 
+                                                    />
+                                                )}                                                    <div className="flex-1 min-w-0 flex items-center justify-between gap-2">
+                                                        <span 
+                                                            className="text-[13px] font-normal truncate min-w-0 transition-colors"
+                                                        >
+                                                            {conn.name}
+                                                        </span>
+                                                        <div className="flex items-center gap-1.5 shrink-0">
+                                                            {(conn.type === 'database' || conn.type === 'google_sheets') && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        const isDb = conn.type === 'database';
+                                                                        setDeleteTarget({
+                                                                            fullId: conn.id,
+                                                                            id: isDb ? conn.id.replace('db-', '') : conn.id.replace('gs-', ''),
+                                                                            name: conn.name,
+                                                                            type: conn.type,
+                                                                        });
+                                                                    }}
+                                                                    disabled={deletingId === conn.id}
+                                                                    className={cn(
+                                                                        "p-1 rounded transition-opacity hover:bg-red-500/20 hover:text-red-400 text-[var(--text-secondary)]",
+                                                                        deletingId === conn.id
+                                                                            ? "opacity-100 cursor-not-allowed"
+                                                                            : "opacity-0 group-hover:opacity-100"
+                                                                    )}
+                                                                    title={deletingId === conn.id ? 'Removing...' : 'Remove source'}
+                                                                >
+                                                                    {deletingId === conn.id ? (
+                                                                        <Loader2 size={12} className="animate-spin" />
+                                                                    ) : (
+                                                                        <Trash2 size={12} />
+                                                                    )}
+                                                                </button>
                                                             )}
-                                                        />
+                                                            <div className="relative flex h-1.5 w-1.5 items-center justify-center">
+                                                                {conn.status === 'active' && (
+                                                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-40"></span>
+                                                                )}
+                                                                <span
+                                                                    className={cn(
+                                                                        "relative inline-flex rounded-full h-1.5 w-1.5 shrink-0",
+                                                                        conn.status === 'active'
+                                                                            ? 'bg-emerald-500'
+                                                                            : 'bg-amber-500'
+                                                                    )}
+                                                                />
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                </div>
                                             </div>
                                         );
                                     })}
@@ -483,6 +522,20 @@ const Sidebar = () => {
                                 <span className="text-[12px] font-medium text-[var(--text-secondary)]/70">
                                     Recent Chats
                                 </span>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        const dsId = selectedDataset?.id || selectedDataset?._id;
+                                        startNewConversation(dsId);
+                                        navigate('/app/dashboard');
+                                        window.dispatchEvent(new CustomEvent('open-chat-with-query', { detail: {} }));
+                                    }}
+                                    className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 transition-all"
+                                    title="New Chat"
+                                >
+                                    <Plus size={13} />
+                                    New
+                                </button>
                             </div>
 
                             {recentChats.length === 0 ? (
@@ -508,31 +561,38 @@ const Sidebar = () => {
                                                 role="button"
                                                 tabIndex={0}
                                                 className={cn(
-                                                    "group w-full text-left rounded-md px-2.5 h-8 transition-all duration-200 flex items-center justify-between gap-2 border border-transparent",
+                                                    "group w-full text-left rounded-md px-2.5 py-1.5 transition-all duration-200 flex flex-col gap-0.5 border border-transparent",
                                                     isActive
                                                         ? "bg-[var(--bg-active)] text-[var(--text-primary)]"
                                                         : "text-[var(--text-secondary)] hover:bg-[var(--bg-active)]/50 hover:text-[var(--text-primary)]"
                                                 )}
                                                 style={{ cursor: 'pointer' }}
                                             >
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="text-[13px] font-normal truncate transition-colors">
-                                                        {chat.title}
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="flex items-center gap-2 min-w-0">
+                                                        <MessageSquare size={12} className="shrink-0 opacity-50" />
+                                                        <span className="text-[13px] font-normal truncate transition-colors">
+                                                            {chat.title}
+                                                        </span>
                                                     </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            const { clearConversation } = useChatStore.getState();
+                                                            clearConversation(chat.id);
+                                                        }}
+                                                        className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/20 hover:text-red-400 shrink-0"
+                                                        title="Delete conversation"
+                                                    >
+                                                        <Trash2 size={11} />
+                                                    </button>
                                                 </div>
-                                                <button
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        const { clearConversation } = useChatStore.getState();
-                                                        clearConversation(chat.id);
-                                                    }}
-                                                    className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/20 hover:text-red-400"
-                                                    title="Delete task"
-                                                    style={{ flexShrink: 0 }}
-                                                >
-                                                    <Trash2 size={12} />
-                                                </button>
+                                                {chat.snippet && chat.snippet !== 'No messages yet' && (
+                                                    <div className="text-[11px] leading-relaxed text-[var(--text-tertiary)] line-clamp-1 pl-[20px]">
+                                                        {chat.snippet.length > 80 ? chat.snippet.slice(0, 77) + '...' : chat.snippet}
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })}
@@ -540,9 +600,9 @@ const Sidebar = () => {
                                     <button
                                         type="button"
                                         onClick={() => setShowHistoryModal(true)}
-                                        className="w-full flex items-center justify-start gap-2.5 rounded-md px-2.5 h-8 text-[13px] font-normal text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-active)]/50 hover:text-[var(--text-primary)]"
+                                        className="w-full flex items-center justify-start gap-2 rounded-md px-2.5 h-7 text-[12px] font-normal text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-active)]/50 hover:text-[var(--text-primary)]"
                                     >
-                                        <History className="w-[15px] h-[15px]" />
+                                        <History size={13} />
                                         View All
                                     </button>
                                 </div>
@@ -559,12 +619,13 @@ const Sidebar = () => {
                 >
                     <ProfileDropdown
                         expanded={expanded}
+                        role={role}
                         data={{
                             name: user?.full_name || user?.username || 'User',
                             email: user?.email || 'user@signal.ai',
                             avatar: user?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user?.full_name || user?.username || 'User')}&background=6366f1&color=fff`,
                             subscription: user?.subscription || 'GUEST',
-                            model: 'Gemini 2.0 Flash'
+                            model: 'OpenRouter'
                         }}
                         onLogout={() => {
                             logout();
@@ -575,9 +636,36 @@ const Sidebar = () => {
 
             </motion.aside>
 
-            <UploadModal
-                isOpen={showUpload}
-                onClose={() => setShowUpload(false)}
+            <DeleteConfirmDialog
+                open={!!deleteTarget}
+                onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
+                onConfirm={async () => {
+                    if (!deleteTarget) return;
+                    setDeletingId(deleteTarget.fullId);
+                    let result;
+                    if (deleteTarget.type === 'database') {
+                        const { deleteConnection } = useConnectorStore.getState();
+                        result = await deleteConnection(deleteTarget.id);
+                    } else {
+                        const { deleteDataset } = useDatasetStore.getState();
+                        // silentToast=true so we show a consistent toast ourselves
+                        result = await deleteDataset(deleteTarget.id, true);
+                    }
+                    if (result.success) {
+                        toast.success(`"${deleteTarget.name}" removed`);
+                    } else {
+                        toast.error(result.error || 'Failed to remove source');
+                    }
+                    setDeleteTarget(null);
+                    setDeletingId(null);
+                }}
+                title="Remove Source"
+                description={
+                    deleteTarget?.type === 'database'
+                        ? 'Are you sure you want to remove this data source? Any datasets imported from this connection will remain, but you will need to reconnect to manage tables again.'
+                        : 'Are you sure you want to remove this Google Sheet? The associated dataset will be deleted.'
+                }
+                itemName={deleteTarget?.name || ''}
             />
 
             <ChatHistoryModal

@@ -11,12 +11,15 @@ Takes RawProfilingResult (pure facts) and adds:
   - Domain hypotheses
 
 Returns UnifiedIntelligenceResult — the complete semantic understanding.
+
+After deterministic classification, the Metric Correction Store is checked
+for user overrides. This gives users governed control over the semantic layer.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Dict, Optional
 
 import polars as pl
 
@@ -68,20 +71,27 @@ class IntelligenceEngine:
         self,
         profiling_result: RawProfilingResult,
         df: Optional[pl.DataFrame] = None,
+        corrections: Optional[Dict[str, Any]] = None,
     ) -> UnifiedIntelligenceResult:
         """Run all intelligence engines and return unified result.
 
         Args:
             profiling_result: RawProfilingResult from the profiling layer.
             df: Optional DataFrame for entity stats and relationship detection.
+            corrections: Optional dict of {column_name: MetricCorrection}
+                from MetricCorrectionStore. If provided, user overrides are
+                applied to classifications.
 
         Returns:
             UnifiedIntelligenceResult with all semantic classifications.
         """
-        # ── 1. Classify every column ──
+        # ── 1. Classify every column (with optional corrections) ──
         column_intel: list[ColumnIntelligence] = []
         for col_profile in profiling_result.columns:
-            classification = self.classifier.classify(col_profile)
+            classification = self.classifier.classify(
+                col_profile,
+                corrections=corrections,
+            )
             agg = self.agg_engine.compute(
                 col_profile,
                 classification.semantic_role,

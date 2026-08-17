@@ -140,6 +140,7 @@ class CostTracker:
         input_tokens: int,
         output_tokens: int,
         role: str = "unknown",
+        source: str = "platform",
     ) -> Dict:
         """
         Record an LLM API call's token usage and return updated budget info.
@@ -150,6 +151,8 @@ class CostTracker:
             input_tokens: Prompt tokens used
             output_tokens: Completion tokens generated
             role: The task role (e.g., 'chat_streaming', 'kpi_suggestion')
+            source: 'platform' for OpenRouter calls (deducts from budget) or
+                    'byok' for user-provided keys (analytics only, no deduction)
 
         Returns:
             Dict with keys:
@@ -172,80 +175,108 @@ class CostTracker:
             }
 
         today = self._today_str()
-        cost_cents = estimate_cost_cents(model_key, input_tokens, output_tokens)
         total_tokens = input_tokens + output_tokens
+
+        # BYOK calls: track for analytics only — skip cost/budget deduction
+        if source == "byok":
+            cost_cents = 0.0
+        else:
+            cost_cents = estimate_cost_cents(model_key, input_tokens, output_tokens)
 
         try:
             db = self.db
 
+            # ── Build update payload ──
+            # Always track tokens and call count. Only track cost for platform calls.
+            update_inc = {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+                "call_count": 1,
+                f"models_used.{model_key}.calls": 1,
+                f"models_used.{model_key}.input_tokens": input_tokens,
+                f"models_used.{model_key}.output_tokens": output_tokens,
+                f"models_used.{model_key}.cost_cents": cost_cents,
+            }
+
+            # Track BYOK-specific call count separately
+            if source == "byok":
+                update_inc["byok_call_count"] = 1
+                update_inc["cost_cents"] = 0  # No cost deduction for BYOK
+            else:
+                update_inc["cost_cents"] = cost_cents
+
             # ── Update user-level record ──
             await db.llm_usage.update_one(
                 {"date": today, "user_id": user_id},
-                {
-                    "$inc": {
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "total_tokens": total_tokens,
-                        "cost_cents": cost_cents,
-                        "call_count": 1,
-                        f"models_used.{model_key}.calls": 1,
-                        f"models_used.{model_key}.input_tokens": input_tokens,
-                        f"models_used.{model_key}.output_tokens": output_tokens,
-                        f"models_used.{model_key}.cost_cents": cost_cents,
-                    },
-                },
+                {"$inc": update_inc},
                 upsert=True,
             )
 
-            # ── Update global record ──
-            await db.llm_usage_global.update_one(
-                {"date": today},
-                {
-                    "$inc": {
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "total_tokens": total_tokens,
-                        "cost_cents": cost_cents,
-                        "call_count": 1,
+            # ── Update global record (only for platform calls — BYOK doesn't
+            #    affect platform-wide budgets) ──
+            if source != "byok":
+                await db.llm_usage_global.update_one(
+                    {"date": today},
+                    {
+                        "$inc": {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": total_tokens,
+                            "cost_cents": cost_cents,
+                            "call_count": 1,
+                        },
                     },
-                },
-                upsert=True,
-            )
+                    upsert=True,
+                )
 
             # ── Fetch updated totals ──
             user_record = await self._get_usage_record(today, user_id)
-            global_record = await self._get_global_usage_record(today)
 
             user_daily_cost = user_record.get("cost_cents", 0)
-            global_daily_cost = global_record.get("cost_cents", 0)
 
-            # ── Check budgets ──
-            user_blocked = user_daily_cost > self._daily_budget_cents
-            global_blocked = global_daily_cost > self._global_daily_budget_cents
+            # ── Check budgets (only for platform calls) ──
+            user_blocked = False
+            global_blocked = False
 
-            # If user is now blocked, mark it
-            if user_blocked:
-                await db.llm_usage.update_one(
-                    {"date": today, "user_id": user_id},
-                    {"$set": {"blocked": True}},
+            if source != "byok":
+                global_record = await self._get_global_usage_record(today)
+                global_daily_cost = global_record.get("cost_cents", 0)
+
+                user_blocked = user_daily_cost > self._daily_budget_cents
+                global_blocked = global_daily_cost > self._global_daily_budget_cents
+
+                # If user is now blocked, mark it
+                if user_blocked:
+                    await db.llm_usage.update_one(
+                        {"date": today, "user_id": user_id},
+                        {"$set": {"blocked": True}},
+                    )
+
+                logger.info(
+                    f"[CostTracker] User {user_id[:8]}... | "
+                    f"{model_key} | "
+                    f"{input_tokens} in + {output_tokens} out = {total_tokens}T | "
+                    f"${cost_cents:.4f} this call | "
+                    f"${user_daily_cost:.2f} user today / ${self._daily_budget_cents:.2f} cap | "
+                    f"${global_daily_cost:.2f} global today / ${self._global_daily_budget_cents:.2f} cap"
                 )
-
-            logger.info(
-                f"[CostTracker] User {user_id[:8]}... | "
-                f"{model_key} | "
-                f"{input_tokens} in + {output_tokens} out = {total_tokens}T | "
-                f"${cost_cents:.4f} this call | "
-                f"${user_daily_cost:.2f} user today / ${self._daily_budget_cents:.2f} cap | "
-                f"${global_daily_cost:.2f} global today / ${self._global_daily_budget_cents:.2f} cap"
-            )
+            else:
+                logger.info(
+                    f"[CostTracker] BYOK — User {user_id[:8]}... | "
+                    f"{model_key} | "
+                    f"{input_tokens} in + {output_tokens} out = {total_tokens}T | "
+                    "(analytics only, no budget deduction)"
+                )
 
             return {
                 "recorded": True,
                 "cost_cents": cost_cents,
                 "user_daily_cost_cents": user_daily_cost,
                 "user_daily_budget_cents": self._daily_budget_cents,
-                "global_daily_cost_cents": global_daily_cost,
+                "global_daily_cost_cents": 0 if source == "byok" else global_record.get("cost_cents", 0),
                 "global_daily_budget_cents": self._global_daily_budget_cents,
+                "source": source,
                 "user_blocked": user_blocked,
                 "global_blocked": global_blocked,
             }

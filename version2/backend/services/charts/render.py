@@ -126,8 +126,30 @@ class ChartRenderer:
         if chart_type == "area":
             for tr in traces:
                 tr.setdefault("fill", "tozeroy")
-                
-        
+
+        if chart_type == "sankey":
+            for tr in traces:
+                tr.setdefault("node", {})
+                tr["node"]["line"] = tr["node"].get("line", {"color": "rgba(0,0,0,0.2)", "width": 0.5})
+
+        if chart_type == "graph":
+            for tr in traces:
+                tr.pop("xaxis", None)
+                tr.pop("yaxis", None)
+                tr.pop("_is_graph", None)
+
+        if chart_type == "pictorial_bar":
+            for tr in traces:
+                tr.pop("_is_pictorial", None)
+
+        if chart_type == "effect_scatter":
+            for tr in traces:
+                tr.pop("_is_effect_scatter", None)
+
+        if chart_type == "lines":
+            for tr in traces:
+                tr.pop("_is_lines", None)
+
     # -----------------------------------------------------
     # INTERNAL: LAYOUT GENERATION
     # -----------------------------------------------------
@@ -223,6 +245,31 @@ class ChartRenderer:
                 "showticklabels": False,
                 "showline": False
             })
+
+        elif chart_type == "sankey":
+            for ax in ["xaxis", "yaxis"]:
+                layout[ax].update({
+                    "showticklabels": False,
+                    "showgrid": False,
+                    "zeroline": False,
+                    "showline": False
+                })
+            layout["margin"] = {"l": 50, "r": 50, "t": 40, "b": 40}
+
+        elif chart_type == "parallel":
+            layout["xaxis"]["showgrid"] = False
+            layout["yaxis"]["showgrid"] = False
+            layout["margin"] = {"l": 60, "r": 20, "t": 40, "b": 40}
+
+        elif chart_type == "graph":
+            for ax in ["xaxis", "yaxis"]:
+                layout[ax].update({
+                    "showticklabels": False,
+                    "showgrid": False,
+                    "zeroline": False,
+                    "showline": False
+                })
+            layout["margin"] = {"l": 10, "r": 10, "t": 40, "b": 10}
 
         return layout
     

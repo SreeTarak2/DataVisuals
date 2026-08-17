@@ -39,11 +39,13 @@ rank-bm25               # Optional: BM25 hybrid search (lazy-imported)
 # ── Rate limiting ──
 slowapi
 
-# ── Caching (optional — falls back to in-memory) ──
+# ── Caching ──
 redis                   # Optional: used in cache_service + WebSocket rate limiter
+diskcache               # SQLite-backed persistent cache for DuckDB query results
 
 # ── File handling ──
 python-magic            # MIME type detection for uploaded files
+charset-normalizer      # Encoding detection for CSV files (fallback to latin-1)
 
 # ── PDF Generation ──
 weasyprint

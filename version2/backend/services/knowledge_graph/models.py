@@ -15,7 +15,7 @@ import logging
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +214,7 @@ class SchemaProfile(BaseModel):
     table_name: str = Field(..., description="Table or file name")
     columns: List[ColumnProfile] = Field(..., description="List of column profiles")
     row_count: int = Field(default=0, ge=0, description="Total number of rows")
-    profile_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    profile_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     @property
     def column_count(self) -> int:
@@ -398,7 +398,7 @@ class DatasetUnderstandingReport(BaseModel):
     )
     column_count: int = Field(default=0, description="Total columns in dataset")
     entity_count: int = Field(default=0, description="Number of entities discovered")
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 class AlternativeCandidate(BaseModel):
@@ -675,7 +675,7 @@ class ExtractionResult(BaseModel):
     good_confidence_count: int = Field(default=0)
     tentative_confidence_count: int = Field(default=0)
     uncertain_confidence_count: int = Field(default=0)
-    extraction_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    extraction_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     def model_post_init(self, __context):
         """Calculate statistics after initialization"""
@@ -715,7 +715,7 @@ class EntityCorrection(BaseModel):
     original_entity: EntityType
     corrected_entity: EntityType
     original_confidence: float
-    correction_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    correction_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     user_id: Optional[str] = None
 
     @field_validator("original_entity", "corrected_entity", mode="before")

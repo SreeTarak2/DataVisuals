@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, BarChart3, TrendingUp, Target, AlertCircle, Eye, Download, Maximize2 } from 'lucide-react';
-import PlotlyChart from './PlotlyChart';
+import ChartRenderer from '@/components/features/charts/ChartRenderer';
 import { cn } from '../lib/utils';
 
 const VisualEvidencePanel = ({ 
@@ -155,7 +155,7 @@ const VisualEvidencePanel = ({
             >
               {activeVisualization.chartData ? (
                 <div className="h-full relative">
-                  <PlotlyChart
+                  <ChartRenderer
                     data={activeVisualization.chartData.data}
                     layout={{
                       ...activeVisualization.chartData.layout,

@@ -11,7 +11,7 @@ Features:
 - Retention policy support
 
 Usage:
-    from services.audit_service import audit_service
+    from services.audit import audit_service
 
     await audit_service.log_chat_interaction(
         user_id="...",
@@ -26,7 +26,7 @@ Usage:
 
 import hashlib
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from enum import Enum
 
@@ -46,6 +46,7 @@ class AuditEventType(str, Enum):
     EXPORT_REQUEST = "export_request"
     AUTH_EVENT = "auth_event"
     ERROR = "error"
+    AGENT_EXECUTION = "agent_execution"
 
 
 class AuditSeverity(str, Enum):
@@ -88,7 +89,7 @@ class AuditService:
         Log a simple event (websocket connect/disconnect, etc.)
         """
         entry = {
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc).replace(tzinfo=None),
             "event_type": event_type,
             "user_id": user_id,
             "metadata": metadata or {},
@@ -141,7 +142,7 @@ class AuditService:
             response_summary = response[:500] if response else ""
 
             audit_entry = {
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(timezone.utc).replace(tzinfo=None),
                 "event_type": AuditEventType.CHAT_MESSAGE,
                 "severity": AuditSeverity.INFO if success else AuditSeverity.WARNING,
                 "user_id": user_id,
@@ -158,8 +159,8 @@ class AuditService:
                 "chart_generated": chart_generated,
                 "analysis_type": analysis_type,
                 "metadata": {
-                    "hour_of_day": datetime.utcnow().hour,
-                    "day_of_week": datetime.utcnow().weekday(),
+                    "hour_of_day": datetime.now(timezone.utc).replace(tzinfo=None).hour,
+                    "day_of_week": datetime.now(timezone.utc).replace(tzinfo=None).weekday(),
                 },
             }
 
@@ -192,7 +193,7 @@ class AuditService:
         """Log deep QUIS analysis events."""
         try:
             audit_entry = {
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(timezone.utc).replace(tzinfo=None),
                 "event_type": AuditEventType.DEEP_ANALYSIS,
                 "severity": AuditSeverity.INFO if success else AuditSeverity.ERROR,
                 "user_id": user_id,
@@ -212,6 +213,52 @@ class AuditService:
             logger.error(f"Failed to log deep analysis audit: {e}")
             return ""
 
+    async def log_agent_execution(
+        self,
+        user_id: str,
+        agent_type: str,
+        dataset_id: str,
+        query: str,
+        status: str,
+        duration_ms: float,
+        error: Optional[str] = None,
+        tools_used: Optional[list[str]] = None,
+        iterations: int = 0,
+    ) -> str:
+        """Log an agent execution for audit and compliance."""
+        try:
+            entry = {
+                "timestamp": datetime.now(timezone.utc).replace(tzinfo=None),
+                "event_type": AuditEventType.AGENT_EXECUTION,
+                "severity": AuditSeverity.ERROR if error else AuditSeverity.INFO,
+                "user_id": user_id,
+                "agent_type": agent_type,
+                "dataset_id": dataset_id,
+                "query_hash": self._hash_content(query),
+                "query_length": len(query) if query else 0,
+                "status": status,
+                "duration_ms": round(duration_ms, 2),
+                "error": (error[:500] if error else None),
+                "tools_used": tools_used or [],
+                "iterations": iterations,
+                "metadata": {
+                    "hour_of_day": datetime.now(timezone.utc).replace(tzinfo=None).hour,
+                    "day_of_week": datetime.now(timezone.utc).replace(tzinfo=None).weekday(),
+                },
+            }
+            result = await self.db.agent_audit_log.insert_one(entry)
+            logger.info(
+                "AUDIT: agent=%s user=%s... status=%s duration=%.0fms",
+                agent_type,
+                user_id[:8] if user_id else "?",
+                status,
+                duration_ms,
+            )
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error("Failed to log agent audit entry: %s", e)
+            return ""
+
     async def log_error(
         self,
         user_id: str,
@@ -222,7 +269,7 @@ class AuditService:
         """Log error events for debugging and monitoring."""
         try:
             audit_entry = {
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(timezone.utc).replace(tzinfo=None),
                 "event_type": AuditEventType.ERROR,
                 "severity": AuditSeverity.ERROR,
                 "user_id": user_id,
@@ -296,9 +343,7 @@ class AuditService:
             logger.error(f"Failed to export user data: {e}")
             return []
 
-    async def delete_user_data(
-        self, user_id: str, before_date: Optional[datetime] = None
-    ) -> int:
+    async def delete_user_data(self, user_id: str, before_date: Optional[datetime] = None) -> int:
         """
         GDPR: Delete user's audit data (right to be forgotten).
 
@@ -342,7 +387,7 @@ class AuditService:
             - most_active_hour: Most active hour of day
         """
         try:
-            start_date = datetime.utcnow() - timedelta(days=days)
+            start_date = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
             pipeline = [
                 {
@@ -358,9 +403,7 @@ class AuditService:
                         "total_queries": {"$sum": 1},
                         "successful_queries": {"$sum": {"$cond": ["$success", 1, 0]}},
                         "avg_latency_ms": {"$avg": "$latency_ms"},
-                        "charts_generated": {
-                            "$sum": {"$cond": ["$chart_generated", 1, 0]}
-                        },
+                        "charts_generated": {"$sum": {"$cond": ["$chart_generated", 1, 0]}},
                         "total_tokens": {"$sum": {"$ifNull": ["$tokens_used", 0]}},
                     }
                 },
@@ -403,7 +446,7 @@ class AuditService:
             - active_users: Unique users in period
         """
         try:
-            start_time = datetime.utcnow() - timedelta(hours=hours)
+            start_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
 
             pipeline = [
                 {"$match": {"timestamp": {"$gte": start_time}}},
@@ -465,9 +508,7 @@ class AuditService:
     # Retention Policy
     # -----------------------------------------------------------
 
-    async def cleanup_old_logs(
-        self, retention_days: int = 90, batch_size: int = 1000
-    ) -> int:
+    async def cleanup_old_logs(self, retention_days: int = 90, batch_size: int = 1000) -> int:
         """
         Clean up audit logs older than retention period.
 
@@ -481,13 +522,13 @@ class AuditService:
             Number of records deleted
         """
         try:
-            cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+            cutoff_date = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+                days=retention_days
+            )
 
             # Find old records
             old_ids = (
-                await self.db.audit_logs.find(
-                    {"timestamp": {"$lt": cutoff_date}}, {"_id": 1}
-                )
+                await self.db.audit_logs.find({"timestamp": {"$lt": cutoff_date}}, {"_id": 1})
                 .limit(batch_size)
                 .to_list(batch_size)
             )
@@ -496,9 +537,7 @@ class AuditService:
                 return 0
 
             ids_to_delete = [doc["_id"] for doc in old_ids]
-            result = await self.db.audit_logs.delete_many(
-                {"_id": {"$in": ids_to_delete}}
-            )
+            result = await self.db.audit_logs.delete_many({"_id": {"$in": ids_to_delete}})
 
             logger.info(f"Cleaned up {result.deleted_count} old audit logs")
             return result.deleted_count
@@ -522,7 +561,7 @@ class AuditService:
         try:
             await self.db.audit_logs.insert_one(
                 {
-                    "timestamp": datetime.utcnow(),
+                    "timestamp": datetime.now(timezone.utc).replace(tzinfo=None),
                     "event_type": AuditEventType.EXPORT_REQUEST,
                     "severity": AuditSeverity.INFO,
                     "user_id": user_id,
@@ -555,8 +594,6 @@ async def create_audit_indexes():
     await db.audit_logs.create_index([("timestamp", 1)])
 
     # Index for analytics
-    await db.audit_logs.create_index(
-        [("event_type", 1), ("timestamp", -1), ("success", 1)]
-    )
+    await db.audit_logs.create_index([("event_type", 1), ("timestamp", -1), ("success", 1)])
 
     logger.info("Audit indexes created successfully")

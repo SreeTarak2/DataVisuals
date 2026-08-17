@@ -14,7 +14,7 @@ services/conversations/conversation_service.py
 """
 
 from typing import Optional, List, Dict, Any, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 import logging
 
@@ -81,7 +81,7 @@ async def archive_old_messages(
             "dataset_id": conv.get("dataset_id"),
             "archived_messages": to_archive,
             "message_count": len(to_archive),
-            "archived_at": datetime.utcnow(),
+            "archived_at": datetime.now(timezone.utc).replace(tzinfo=None),
             "archive_batch": await _get_next_archive_batch(conv_id),
         }
 
@@ -94,7 +94,7 @@ async def archive_old_messages(
                     {
                         "$set": {
                             "messages": to_keep,
-                            "updated_at": datetime.utcnow(),
+                            "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
                             "archived_message_count": len(to_archive)
                             + conv.get("archived_message_count", 0),
                         }
@@ -279,10 +279,12 @@ async def get_conversation_page(
             archived = await get_archived_messages(conversation_id, user_id)
             conv["archived_messages"] = archived
 
-        # Fetch dataset name
+        # Fetch dataset name (workspace-scoped read)
         try:
-            dataset = await db.uploads.find_one(
-                {"_id": conv.get("dataset_id"), "user_id": user_id}
+            from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+
+            dataset = await enhanced_dataset_service.get_dataset_doc(
+                conv.get("dataset_id"), user_id, projection={"name": 1}
             )
             conv["dataset_name"] = (
                 dataset.get("name", "Unknown") if dataset else "Unknown"
@@ -348,7 +350,7 @@ async def append_message(
         # Append the message
         result = await db.conversations.update_one(
             {"_id": ObjectId(conv_id)},
-            {"$push": {"messages": message}, "$set": {"updated_at": datetime.utcnow()}},
+            {"$push": {"messages": message}, "$set": {"updated_at": datetime.now(timezone.utc).replace(tzinfo=None)}},
         )
 
         if result.matched_count == 0:
@@ -411,8 +413,8 @@ async def load_or_create_conversation(
     new_conv = {
         "user_id": user_id,
         "dataset_id": dataset_id,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+        "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
         "messages": [],
     }
 
@@ -462,10 +464,12 @@ async def get_user_conversations(user_id: str) -> List[Dict]:
         for conv in conv_list:
             conv["_id"] = str(conv["_id"])
 
-            # Fetch dataset name
+            # Fetch dataset name (workspace-scoped read)
             try:
-                dataset = await db.uploads.find_one(
-                    {"_id": conv.get("dataset_id"), "user_id": user_id}
+                from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+
+                dataset = await enhanced_dataset_service.get_dataset_doc(
+                    conv.get("dataset_id"), user_id, projection={"name": 1}
                 )
                 conv["dataset_name"] = (
                     dataset.get("name", "Unknown Dataset")
@@ -501,10 +505,12 @@ async def get_conversation(conversation_id: str, user_id: str) -> Optional[Dict]
         if conv:
             conv["_id"] = str(conv["_id"])
 
-            # attach dataset name
+            # attach dataset name (workspace-scoped read)
             try:
-                dataset = await db.uploads.find_one(
-                    {"_id": conv.get("dataset_id"), "user_id": user_id}
+                from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+
+                dataset = await enhanced_dataset_service.get_dataset_doc(
+                    conv.get("dataset_id"), user_id, projection={"name": 1}
                 )
                 conv["dataset_name"] = (
                     dataset.get("name", "Unknown Dataset")
@@ -560,7 +566,7 @@ async def update_title(conversation_id: str, user_id: str, title: str) -> bool:
     try:
         result = await db.conversations.update_one(
             {"_id": ObjectId(conversation_id), "user_id": user_id},
-            {"$set": {"title": title, "updated_at": datetime.utcnow()}},
+            {"$set": {"title": title, "updated_at": datetime.now(timezone.utc).replace(tzinfo=None)}},
         )
         return result.modified_count > 0
 
@@ -582,7 +588,7 @@ async def auto_name_conversation(conv_id: str, user_id: str, first_message: str)
     The title is generated from the user's first message and saved to the conversation.
     """
     try:
-        from services.llm_router import llm_router
+        from llm.router import llm_router
 
         prompt = (
             "Generate a short, descriptive title (5 words or fewer) for this conversation.\n\n"

@@ -10,7 +10,7 @@ Caches results in dataset_analytics for fast re-fetching.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -29,6 +29,7 @@ class AnomalyInvestigationRequest(BaseModel):
     columns: Optional[list[dict]] = None
     anomalies: Optional[list[dict]] = None
     investigation_id: Optional[str] = ""
+    diagnostic_mode: Optional[str] = None
 
 
 @router.post("/datasets/{dataset_id}/investigate-anomalies")
@@ -59,12 +60,13 @@ async def investigate_anomalies(
     user_id = current_user["id"]
     db = get_database()
 
-    # ── Check cache (unless force refresh) ──────────────────────────────────
+    # ── Check cache (unless force refresh) — workspace-scoped read ────────
     if not force_refresh:
         try:
-            analytics = await db.dataset_analytics.find_one(
-                {"dataset_id": dataset_id, "user_id": user_id},
-                {"anomaly_investigation": 1},
+            from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+
+            analytics = await enhanced_dataset_service.get_dataset_analytics(
+                dataset_id, user_id
             )
             if analytics and analytics.get("anomaly_investigation"):
                 return {
@@ -110,6 +112,17 @@ async def investigate_anomalies(
     investigation_id = body.investigation_id or str(uuid.uuid4())
 
     try:
+        # ── Detect time column for mode auto-selection ──────────────────────
+        has_time_col = False
+        if df is not None:
+            try:
+                import polars as pl
+                has_time_col = any(
+                    df[c].dtype in (pl.Date, pl.Datetime) for c in df.columns if c in df
+                )
+            except Exception:
+                pass
+
         report = await investigator.investigate(
             dataset_id=dataset_id,
             columns=columns,
@@ -118,6 +131,8 @@ async def investigate_anomalies(
             sample_rows=sample_rows[:3] if sample_rows else None,
             row_count=row_count,
             investigation_id=investigation_id,
+            mode=body.diagnostic_mode,
+            has_time_column=has_time_col,
         )
     except Exception as e:
         logger.error(f"[AnomalyInvestigator] Investigation failed: {e}", exc_info=True)
@@ -133,17 +148,26 @@ async def investigate_anomalies(
         "investigation_id": report.investigation_id,
         "dataset_id": report.dataset_id,
         "confidence": report.confidence,
-        "investigated_at": datetime.utcnow().isoformat(),
+        "diagnostic_mode": report.diagnostic_mode,
+        "investigated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
     }
 
-    # ── Cache for future requests ──────────────────────────────────────────
+    # ── Cache for future requests (workspace-scoped write) ─────────────────
     try:
+        from db.tenant_guard import enforce_workspace_filter, tenant_scope_query
+        from services.workspace import workspace_service
+
+        wid = await workspace_service.resolve_effective_workspace_id(None, user_id)
+        analytics_filter = tenant_scope_query(
+            "dataset_analytics", {"dataset_id": dataset_id}, wid, user_id
+        )
+        enforce_workspace_filter("dataset_analytics", analytics_filter, wid, "write")
         await db.dataset_analytics.update_one(
-            {"dataset_id": dataset_id, "user_id": user_id},
+            analytics_filter,
             {
                 "$set": {
                     "anomaly_investigation": report_dict,
-                    "anomaly_investigation_generated_at": datetime.utcnow(),
+                    "anomaly_investigation_generated_at": datetime.now(timezone.utc).replace(tzinfo=None),
                 }
             },
             upsert=True,

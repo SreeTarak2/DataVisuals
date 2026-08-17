@@ -96,6 +96,9 @@ class RateLimits:
     CHART_RENDER = "60/minute"
     CHART_RECOMMENDATIONS = "30/minute"
 
+    # Insight feedback — dismiss/mark_as_known
+    INSIGHT_DISMISS = "30/minute"
+
     # Analysis
     ANALYSIS_RUN = "20/minute"
 

@@ -626,7 +626,6 @@ textarea {
 }
 
 .dark {
-  /* Backgrounds - Unified Solaris Dark */
   --bg-primary: #0A0A0A;
   --bg-secondary: #111113;
   --bg-surface: #101012;
@@ -1734,7 +1733,8 @@ textarea {
 }
 
 .hero-gradient {
-  background: linear-gradient(135deg, #FFB88C 0%, #E85002 100%);
+  /* Brighter stops for ≥3:1 contrast against the #0A0A0A canvas */
+  background: linear-gradient(135deg, #FFCFA8 0%, #FF8A3D 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;

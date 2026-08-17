@@ -165,7 +165,7 @@ class GraphRAGService:
     def llm_router(self):
         """Lazy-initialized LLM router (avoids import-time dependency)."""
         if self._llm_router is None:
-            from services.llm.router import llm_router
+            from llm.router import llm_router
 
             self._llm_router = llm_router
         return self._llm_router

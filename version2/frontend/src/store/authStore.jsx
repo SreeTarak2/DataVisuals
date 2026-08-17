@@ -1,12 +1,11 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import axios from 'axios';
+import api, { authAPI } from '../services/api';
 import useDatasetStore from './datasetStore';
 import useChatStore from './chatStore';
-import useChatHistoryStore from './chatHistoryStore';
+import useWorkspaceStore from './workspaceStore';
 import { clearInsightsDataCache } from '../pages/insights/hooks/useInsightsData';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 const USER_SCOPED_STORAGE_KEYS = ['dataset-storage', 'signal-chat-store', 'chat-history-storage'];
 
 /**
@@ -36,12 +35,6 @@ const clearUserScopedClientState = () => {
     }
 
     try {
-        useChatHistoryStore.getState().resetState();
-    } catch (error) {
-        console.warn('Failed to reset chat history store:', error);
-    }
-
-    try {
         clearInsightsDataCache();
     } catch (error) {
         console.warn('Failed to clear insights data cache:', error);
@@ -51,65 +44,66 @@ const clearUserScopedClientState = () => {
         localStorage.removeItem(key);
         sessionStorage.removeItem(key);
     });
+
+    // Also clear the persisted auth (user only — token is in HttpOnly cookie)
+    localStorage.removeItem('signal-auth');
+    sessionStorage.removeItem('signal-auth');
 };
 
 const useAuthStore = create(
     persist(
-        (set, get) => ({
+        (set) => ({
             user: null,
-            token: null,
             loading: true,
+            sessions: [],
+            sessionsLoading: false,
             _hasHydrated: false,
 
-            // Verify token and get user info
+            // Verify the session is still valid by calling /auth/me.
+            // Auth is handled by the HttpOnly cookie (auto-sent by browser).
+            // No token is stored in JavaScript — the cookie is managed by the backend.
             verifyToken: async () => {
-                const token = get().token;
-                if (!token) {
-                    set({ loading: false });
-                    return false;
+                // Short-circuit: if already verified, skip the API call entirely.
+                // This prevents duplicate /auth/me calls caused by React StrictMode
+                // double-firing effects in development (the most common source of
+                // duplicate auth requests on page load).
+                const current = useAuthStore.getState();
+                if (current.user && !current.loading) {
+                    return true;
                 }
 
-                axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-
                 try {
-                    const response = await axios.get(`${API_URL}/auth/me`);
+                    const response = await api.get('/auth/me');
                     set({ user: response.data, loading: false });
                     return true;
                 } catch (error) {
-                    console.error('Token verification failed:', error);
-                    // Only logout on definitive auth failures (401/403), not network errors
+                    console.error('Session verification failed:', error);
                     const status = error.response?.status;
                     if (status === 401 || status === 403) {
-                        get().logout();
+                        // Session expired or invalid — clear local state
+                        set({ user: null, loading: false });
                     } else {
-                        // Network error or server down — keep the persisted user/token
-                        // so the app remains usable with cached data
+                        // Network error or server down — keep user state for offline UX
                         set({ loading: false });
                     }
                     return false;
                 }
             },
 
-            login: async (email, password, rememberMe = true) => {
+            login: async (email, password) => {
                 try {
-                    const response = await axios.post(`${API_URL}/auth/login`, { email, password });
-                    const { access_token, user: userData } = response.data;
-
-                    axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+                    const response = await api.post('/auth/login', { email, password });
+                    const { user: userData } = response.data;
 
                     // Security: never carry user-scoped caches across logins
                     clearUserScopedClientState();
 
-                    // If "Remember me" is unchecked, migrate to sessionStorage
-                    if (!rememberMe) {
-                        // Clear any existing localStorage entry
-                        localStorage.removeItem('signal-auth');
-                    } else {
-                        // Ensure we're using localStorage
-                        sessionStorage.removeItem('signal-auth');
-                    }
+                    // Persist user info for instant rehydration on page reload.
+                    // Auth token is stored in an HttpOnly cookie by the backend.
+                    set({ user: userData, loading: false });
 
-                    set({ token: access_token, user: userData, loading: false });
+                    // Initialize workspace context immediately so role is available
+                    useWorkspaceStore.getState().fetchAndSetContext();
 
                     return { success: true };
                 } catch (error) {
@@ -119,7 +113,7 @@ const useAuthStore = create(
 
             register: async (email, password, username) => {
                 try {
-                    await axios.post(`${API_URL}/auth/register`, {
+                    await api.post('/auth/register', {
                         email,
                         password,
                         username
@@ -131,26 +125,29 @@ const useAuthStore = create(
             },
 
             googleLogin: () => {
-                window.location.href = `${API_URL}/auth/google`;
+                const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+                window.location.href = `${baseURL}/auth/google`;
             },
 
-            setGoogleToken: async (token, tokenType = 'bearer') => {
-                axios.defaults.headers.common['Authorization'] = `${tokenType} ${token}`;
+            // Phase 2: Cookie-based auth — the backend sets the HttpOnly cookie during
+            // the Google OAuth redirect. The frontend just needs to verify the session.
+            verifyGoogleSession: async () => {
                 clearUserScopedClientState();
-                set({ token, loading: true });
-                
+                set({ loading: true });
                 try {
-                    const response = await axios.get(`${API_URL}/auth/me`);
+                    const response = await api.get('/auth/me');
                     set({ user: response.data, loading: false });
+                    return true;
                 } catch (error) {
-                    console.error('Failed to get user info after Google login:', error);
+                    console.error('Failed to verify session after Google login:', error);
                     set({ loading: false });
+                    return false;
                 }
             },
 
             updateProfile: async (profileData) => {
                 try {
-                    const response = await axios.put(`${API_URL}/auth/profile`, profileData);
+                    const response = await api.put('/auth/profile', profileData);
                     const updatedUser = response.data;
                     set((state) => ({
                         user: {
@@ -169,7 +166,7 @@ const useAuthStore = create(
 
             changePassword: async (oldPassword, newPassword) => {
                 try {
-                    await axios.post(`${API_URL}/auth/change-password`, {
+                    await api.post('/auth/change-password', {
                         old_password: oldPassword,
                         new_password: newPassword,
                     });
@@ -182,34 +179,89 @@ const useAuthStore = create(
                 }
             },
 
-            logout: () => {
-                delete axios.defaults.headers.common['Authorization'];
-                set({ token: null, user: null, loading: false });
+            logout: async () => {
+                try {
+                    // Ask the backend to revoke this session + clear the HttpOnly cookies
+                    await api.post('/auth/logout');
+                } catch (error) {
+                    console.warn('Logout API call failed, clearing local state anyway:', error);
+                }
+                // Clear local state regardless of API success
+                set({ user: null, loading: false });
                 clearUserScopedClientState();
-                // Clear from both storage backends
-                localStorage.removeItem('signal-auth');
-                sessionStorage.removeItem('signal-auth');
+                useWorkspaceStore.getState().reset();
+            },
+
+            // ── Per-device session management ──────────────────────────────
+
+            fetchSessions: async () => {
+                try {
+                    set({ sessionsLoading: true });
+                    const response = await authAPI.listSessions();
+                    set({ sessions: response.data.sessions || [], sessionsLoading: false });
+                    return response.data.sessions || [];
+                } catch (error) {
+                    set({ sessionsLoading: false });
+                    return [];
+                }
+            },
+
+            revokeSession: async (sessionId) => {
+                try {
+                    await authAPI.revokeSession(sessionId);
+                    set((state) => ({
+                        sessions: state.sessions.filter((s) => s.jti !== sessionId),
+                    }));
+                    return { success: true };
+                } catch (error) {
+                    return {
+                        success: false,
+                        error: error.response?.data?.detail || 'Failed to revoke session',
+                    };
+                }
+            },
+
+            logoutAll: async () => {
+                try {
+                    await authAPI.logoutAll();
+                } catch (error) {
+                    console.warn('Logout-all API call failed:', error);
+                }
+                // This device keeps its session (the server kept it) — just
+                // drop the other devices from the list.
+                set((state) => ({
+                    sessions: (state.sessions || []).filter((s) => s.is_current),
+                }));
+                return { success: true };
+            },
+
+            // Called when the server revokes THIS session while the app is
+            // open (e.g. the user logged out on another device and the WS
+            // push arrived). No API call — the server already did the work.
+            handleSessionRevoked: () => {
+                set({ user: null, loading: false, sessions: [] });
+                clearUserScopedClientState();
+                useWorkspaceStore.getState().reset();
             },
         }),
         {
             name: 'signal-auth',
             // Use whichever storage backend has the auth data
             storage: createJSONStorage(() => getStorageBackend()),
-            // Persist both token AND user for instant rehydration
-            partialize: (state) => ({ token: state.token, user: state.user }),
+            // Only persist user info for instant rehydration.
+            // Auth token is in an HttpOnly cookie (Phase 1+) — not stored in JS.
+            partialize: (state) => ({ user: state.user }),
             // Called when store is rehydrated from storage
             onRehydrateStorage: () => {
                 return (state, error) => {
                     if (error) {
                         console.error('Auth rehydration error:', error);
-                        // Using set directly is problematic in this callback context. 
-                        // It's handled gracefully since zustand will not break entirely
                         return;
                     }
-                    // Set axios header immediately if token exists
-                    if (state?.token) {
-                        console.log('Auth rehydrated, token found, user:', state.user ? 'present' : 'missing');
-                        axios.defaults.headers.common['Authorization'] = `Bearer ${state.token}`;
+                    if (state?.user) {
+                        console.log('Auth rehydrated, user:', state.user.email);
+                        // Also init workspace context on rehydration so role is available immediately
+                        useWorkspaceStore.getState().fetchAndSetContext();
                     }
                 };
             },
@@ -218,46 +270,52 @@ const useAuthStore = create(
 );
 
 // Initialize auth on app load - call this once in App.jsx
+// On page load, the HttpOnly cookie is auto-sent with requests.
+// Call /auth/me to verify the session and get the current user.
 export const initAuth = async () => {
     const store = useAuthStore.getState();
-
-    // Wait for rehydration to complete
-    if (store.token) {
-        console.log('initAuth: Token found, verifying...');
-        await store.verifyToken();
-    } else {
-        console.log('initAuth: No token found');
-        useAuthStore.setState({ loading: false });
+    console.log('initAuth: Verifying session via /auth/me...');
+    const verified = await store.verifyToken();
+    if (verified) {
+        await useWorkspaceStore.getState().fetchAndSetContext();
     }
 };
 
 // Convenience hook that matches the old Context API
 export const useAuth = () => {
     const user = useAuthStore((state) => state.user);
-    const token = useAuthStore((state) => state.token);
     const loading = useAuthStore((state) => state.loading);
     const login = useAuthStore((state) => state.login);
     const register = useAuthStore((state) => state.register);
     const googleLogin = useAuthStore((state) => state.googleLogin);
-    const setGoogleToken = useAuthStore((state) => state.setGoogleToken);
+    const verifyGoogleSession = useAuthStore((state) => state.verifyGoogleSession);
     const updateProfile = useAuthStore((state) => state.updateProfile);
     const changePassword = useAuthStore((state) => state.changePassword);
     const logout = useAuthStore((state) => state.logout);
+    const logoutAll = useAuthStore((state) => state.logoutAll);
+    const fetchSessions = useAuthStore((state) => state.fetchSessions);
+    const revokeSession = useAuthStore((state) => state.revokeSession);
+    const sessions = useAuthStore((state) => state.sessions);
+    const sessionsLoading = useAuthStore((state) => state.sessionsLoading);
     const hasHydrated = useAuthStore((state) => state._hasHydrated);
 
     return {
         user,
-        token,
         login,
         register,
         googleLogin,
-        setGoogleToken,
+        verifyGoogleSession,
         updateProfile,
         changePassword,
         logout,
+        logoutAll,
+        fetchSessions,
+        revokeSession,
+        sessions,
+        sessionsLoading,
         loading,
         hasHydrated,
-        isAuthenticated: !!user && !!token,
+        isAuthenticated: !!user,
     };
 };
 

@@ -6,6 +6,7 @@ import pandas as pd
 import polars as pl
 
 from db.schemas_pipeline import ComputeResult, PrimitiveSpec, PrimitiveType
+from services.query.duckdb_helpers import create_duckdb_connection
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +201,7 @@ def _run_sql(df: pl.DataFrame, sql: str) -> tuple[list[dict], Optional[str]]:
             pandas_df = df.to_pandas()
         except ModuleNotFoundError:
             pandas_df = pd.DataFrame(df.to_dicts())
-        conn = duckdb.connect(":memory:")
+        conn = create_duckdb_connection()
         conn.register("data", pandas_df)
         cursor = conn.execute(sql.strip())
         cols = [d[0] for d in cursor.description]

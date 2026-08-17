@@ -10,15 +10,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _get_owned_dataset(dataset_id: str, user_id: str):
-    db = get_database()
-    dataset = None
-    try:
-        dataset = await db.uploads.find_one({"_id": ObjectId(dataset_id), "user_id": user_id})
-    except Exception:
-        pass
-    if not dataset:
-        dataset = await db.uploads.find_one({"_id": dataset_id, "user_id": user_id})
+async def _get_owned_dataset(dataset_id: str, user_id: str, workspace_id: str | None = None):
+    from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+
+    # Strictly workspace-scoped read (handles str/ObjectId _id + tenant pin).
+    dataset = await enhanced_dataset_service.get_dataset_doc(
+        dataset_id, user_id, workspace_id=workspace_id
+    )
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found or access denied")
     return dataset
@@ -31,12 +29,15 @@ async def download_pdf_report(
     preview: bool = Query(False),
     current_user: dict = Depends(get_current_user),
 ):
-    dataset = await _get_owned_dataset(dataset_id, current_user["id"])
+    workspace_id = current_user.get("workspace_id")
+    dataset = await _get_owned_dataset(dataset_id, current_user["id"], workspace_id)
     try:
         result = await generate_pdf_report(
             dataset_id=dataset_id,
+            user_id=current_user["id"],
             include_charts=include_charts,
             preview=preview,
+            workspace_id=workspace_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -64,7 +65,9 @@ async def get_report_info(
     dataset_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    dataset = await _get_owned_dataset(dataset_id, current_user["id"])
+    dataset = await _get_owned_dataset(
+        dataset_id, current_user["id"], current_user.get("workspace_id")
+    )
     insights = dataset.get("insights", {})
     dq = insights.get("data_quality", dataset.get("data_quality", {}))
 

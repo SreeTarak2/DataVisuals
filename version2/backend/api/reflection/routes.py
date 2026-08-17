@@ -156,3 +156,42 @@ async def get_reflection_trends(
         "calibrated_thresholds": thresholds,
         "dataset_id": dataset_id,
     }
+
+
+@router.get("/reflection/harness-history")
+@limiter.limit(RateLimits.DATASET_GET)
+async def get_harness_validation_history(
+    request: Request,
+    conversation_id: Optional[str] = None,
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get the Self-Harness validation gate history.
+
+    Shows every proposed instruction adjustment and whether it was
+    ACCEPTED or REJECTED, along with the evidence from each check
+    (self-consistency, non-redundancy, non-regression).
+
+    Args:
+        conversation_id: Optional filter to a specific conversation
+        limit: Max records to return (default 50)
+
+    Returns:
+        Dict with:
+        - decisions: List of validation decisions
+        - stats: Aggregate accept/reject statistics
+    """
+    from services.insight_reflection.harness_validator import harness_validator
+
+    history = await harness_validator.get_history(
+        conversation_id=conversation_id,
+        limit=limit,
+    )
+    stats = await harness_validator.get_stats()
+
+    return {
+        "decisions": history,
+        "stats": stats,
+        "conversation_filter": conversation_id,
+    }

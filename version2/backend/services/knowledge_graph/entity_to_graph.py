@@ -18,7 +18,7 @@ Key features:
 
 import logging
 from typing import List, Dict, Any, Optional, Set, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .models import EntityCandidate, ExtractionResult, EntityType
 from .graph_client import GraphNode, GraphRelationship, FalkorDBClient
@@ -361,7 +361,7 @@ class EntityToGraphTransformer:
                 "entity_type": corrected_entity_type,
                 "confidence": 1.0,  # User confirmed
                 "confidence_level": "strong",
-                "corrected_at": datetime.utcnow().isoformat(),
+                "corrected_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                 "was_fallback": node.properties.get("is_fallback", False),
             }
 

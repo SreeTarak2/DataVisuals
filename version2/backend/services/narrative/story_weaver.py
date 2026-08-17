@@ -21,8 +21,8 @@ import re
 from typing import Dict, Any, List, Optional
 from uuid import uuid4
 
-from services.llm_router import llm_router
-from core.narrative_prompts import (
+from llm.router import llm_router
+from prompts.narrative import (
     get_story_weaver_prompt,
     get_story_theme_detection_prompt,
     FALLBACK_STORY_TEMPLATES,

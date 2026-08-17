@@ -525,7 +525,7 @@ class RedactionService:
             columns_with_redactions=columns_with_redactions,
             total_values_redacted=total_redacted,
             column_results=column_results,
-            redaction_timestamp=datetime.utcnow().isoformat(),
+            redaction_timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         )
 
     def create_redacted_context(

@@ -8,10 +8,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'react-hot-toast';
 import useDatasetStore from '../../../store/datasetStore';
-import { getAuthToken } from '../../../services/api';
+
 
 const getDatasetId = (dataset) => dataset?.id || dataset?._id || null;
 const DASHBOARD_DATA_ERROR_TOAST_ID = 'dashboard-data-error';
+const TERMINAL_STATUSES = ['completed', 'success', 'failed'];
 
 export const useDashboardData = (selectedDataset) => {
     const { fetchDatasets } = useDatasetStore();
@@ -122,10 +123,21 @@ export const useDashboardData = (selectedDataset) => {
 
             // Check if still processing
             if (currentDataset && !currentDataset.is_processed && currentDataset.processing_status !== 'failed') {
-                // Set up a single polling loop
+                // Set up a single polling loop. The backend pipeline has its own
+                // size-aware timeout (it will eventually mark the dataset
+                // completed or failed), so this loop is only a UI refresher.
+                // Safety cap: give up after 30 min so a stuck dataset (e.g.
+                // pipeline task died without a restart) doesn't poll forever.
+                const MAX_POLL_MS = 30 * 60 * 1000;
                 if (!pollIntervalRef.current) {
+                    const pollStart = Date.now();
                     pollIntervalRef.current = setInterval(async () => {
                         try {
+                            if (Date.now() - pollStart > MAX_POLL_MS) {
+                                clearProcessingPoll();
+                                console.warn('Stopped polling for dataset processing (30 min cap)');
+                                return;
+                            }
                             const updatedDatasets = await fetchDatasets(true);
                             const updatedDataset = updatedDatasets.find(
                                 d => d.id === selectedDatasetId || d._id === selectedDatasetId
@@ -151,15 +163,13 @@ export const useDashboardData = (selectedDataset) => {
             }
 
             clearProcessingPoll();
-            const token = getAuthToken();
-            const authHeaders = { 'Authorization': `Bearer ${token}` };
 
             // Fire dataset data fetch in parallel (raw data, not AI generation)
-            const dataFetch = fetch(`/api/datasets/${selectedDatasetId}/data?page=1&page_size=1000`, { headers: authHeaders });
+            const dataFetch = fetch(`/api/datasets/${selectedDatasetId}/data?page=1&page_size=1000`, { credentials: 'include' });
 
             // ── Step 1: KPIs (overview) ──────────────────────────────────────
             try {
-                const overviewRes = await fetch(`/api/dashboard/${selectedDatasetId}/overview?period=${selectedPeriod}`, { headers: authHeaders });
+                const overviewRes = await fetch(`/api/dashboard/${selectedDatasetId}/overview?period=${selectedPeriod}`, { credentials: 'include' });
                 if (activeRequestIdRef.current !== requestId) return;
                 if (overviewRes.ok) {
                     const overviewData = await overviewRes.json();
@@ -190,43 +200,21 @@ export const useDashboardData = (selectedDataset) => {
             // KPIs are ready — unblock the page render now
             if (activeRequestIdRef.current === requestId) setLoading(false);
 
-            // ── Step 2: Charts ───────────────────────────────────────────────
-            if (activeRequestIdRef.current !== requestId) return;
-            try {
-                const chartsRes = await fetch(`/api/dashboard/${selectedDatasetId}/charts`, { headers: authHeaders });
-                if (activeRequestIdRef.current !== requestId) return;
-                if (chartsRes.ok) {
-                    const chartsData = await chartsRes.json();
-                    if (activeRequestIdRef.current !== requestId) return;
-                    const charts = chartsData.charts || {};
-                    setChartData(charts);
-                    const intelligenceMap = {};
-                    if (Array.isArray(charts)) {
-                        charts.forEach((chart, index) => {
-                            if (chart.intelligence) intelligenceMap[`chart_${index}`] = { intelligence: chart.intelligence, insights: chart.insights };
-                        });
-                    } else {
-                        Object.keys(charts).forEach(key => {
-                            const chart = charts[key];
-                            if (chart.intelligence) intelligenceMap[key] = { intelligence: chart.intelligence, insights: chart.insights };
-                        });
-                    }
-                    setChartIntelligence(intelligenceMap);
-                } else {
-                    setChartData({});
-                    setChartIntelligence({});
-                }
-            } catch (e) {
-                console.error('Failed to load charts data:', e);
-                setChartData({});
-            }
+            // ── Step 2: Charts — DISABLED ───────────────────────────────────
+            // Chart data fetching is disabled as part of the KPI-first refactor.
+            // Original code retained below.
+            //
+            // try {
+            //     const chartsRes = await fetch(`/api/dashboard/${selectedDatasetId}/charts`);
+            //     ...
+            // } catch (e) { ... }
 
             // ── Step 3: Insights ─────────────────────────────────────────────
             if (activeRequestIdRef.current !== requestId) return;
             try {
                 const insightsController = new AbortController();
                 const insightsTimeout = setTimeout(() => insightsController.abort(), 12000);
-                const insightsRes = await fetch(`/api/dashboard/${selectedDatasetId}/insights`, { headers: authHeaders, signal: insightsController.signal });
+                const insightsRes = await fetch(`/api/dashboard/${selectedDatasetId}/insights`, { credentials: 'include', signal: insightsController.signal });
                 clearTimeout(insightsTimeout);
                 if (activeRequestIdRef.current !== requestId) return;
                 if (insightsRes.ok) {
@@ -286,6 +274,49 @@ export const useDashboardData = (selectedDataset) => {
             }
         }
     }, [selectedDatasetId, fetchDatasets, clearProcessingPoll, resetDashboardState]);
+
+    // ── Instant completion via WebSocket ────────────────────────────────
+    // When the backend pushes a terminal status (completed/failed) for the
+    // selected dataset, `applyProcessingUpdate` patches it in the store. This
+    // watcher detects the active → terminal *transition* (ignoring mount and
+    // dataset switches, which the main effect handles) and refreshes + reloads
+    // immediately instead of waiting for the next 8s poll tick.
+    const prevStatusRef = useRef(null);
+    const prevIdRef = useRef(null);
+
+    useEffect(() => {
+        const ds = selectedDatasetRef.current;
+        const id = getDatasetId(ds);
+        if (!ds || !id) return;
+
+        const status = String(ds.processing_status || ds.status || '').toLowerCase();
+        const isTerminal = TERMINAL_STATUSES.includes(status);
+
+        // Dataset switched (or first observation) — reset tracking and let
+        // the main effect handle the load.
+        if (prevIdRef.current !== id) {
+            prevIdRef.current = id;
+            prevStatusRef.current = status;
+            return;
+        }
+
+        const prevStatus = prevStatusRef.current;
+        prevStatusRef.current = status;
+
+        const wasActive = prevStatus && !TERMINAL_STATUSES.includes(prevStatus);
+        if (wasActive && isTerminal) {
+            // Mirror the poll's completion path: pull final artifacts first,
+            // then reload the dashboard.
+            (async () => {
+                try {
+                    await fetchDatasets(true, true);
+                    loadDashboardData();
+                } catch (err) {
+                    console.warn('Failed to refresh after processing completed:', err);
+                }
+            })();
+        }
+    }, [selectedDataset, fetchDatasets, loadDashboardData]);
 
     useEffect(() => {
         loadDashboardData();

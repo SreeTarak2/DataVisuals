@@ -9,6 +9,9 @@ from api.reports.routes import router as reports_router
 from api.agentic.routes import router as agentic_router
 from api.bookmarks.routes import router as bookmarks_router
 from api.privacy.routes import router as privacy_router
+from api.semantic.routes import router as semantic_router
+from api.predictive_questions.routes import router as predictive_questions_router
+from api.assumptions.routes import router as assumptions_router
 from api import models
 
 __all__ = [
@@ -23,5 +26,8 @@ __all__ = [
     "agentic_router",
     "bookmarks_router",
     "privacy_router",
+    "semantic_router",
+    "predictive_questions_router",
+    "assumptions_router",
     "models",
 ]

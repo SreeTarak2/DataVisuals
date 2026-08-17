@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { useLocation, Link } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import {
-  ChevronRight, Database, ChevronDown, Upload, Search,
-  Moon, Sun, Monitor, Check, LogOut, Settings, User,
-  Command, Rows3, Columns3, Clock, Sparkles, RefreshCw, Loader2
+  ChevronRight, Database, ChevronDown, FolderPlus, FolderKanban, Search,
+  Moon, Sun, Check, LogOut, Settings, User,
+  Command, Activity, Clock, Sparkles, RefreshCw, Loader2
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import UploadModal from '../features/datasets/UploadModal';
+import CreateProjectModal from '../features/projects/CreateProjectModal';
+import ProcessingIndicator from '../features/datasets/ProcessingIndicator';
+import NotificationBell from '../features/notifications/NotificationBell';
 import { useAuth } from '../../store/authStore';
-import useDatasetStore from '../../store/datasetStore';
+import useProjectStore from '../../store/projectStore';
 import { useTheme } from '../../store/themeStore';
 import useDashboardActionStore from '../../store/dashboardActionStore';
-import { toast } from 'react-hot-toast';
+import { useWorkspacePermission } from '../../hooks/useWorkspacePermission';
 import { cn } from '../../lib/utils';
 
 /* ─── Route → breadcrumb label map ─── */
@@ -21,17 +23,9 @@ const ROUTE_LABELS = {
   workspace: 'Assets',
   datasets: 'Assets',
   chat: 'AI Chat',
-  charts: 'Charts Studio',
   settings: 'Settings',
   analysis: 'Analysis',
 };
-
-/* ─── Theme options ─── */
-const THEME_OPTIONS = [
-  { value: 'dark', icon: Moon, label: 'Dark' },
-  { value: 'light', icon: Sun, label: 'Light' },
-  { value: 'system', icon: Monitor, label: 'System' },
-];
 
 /* ─── Breadcrumbs ─── */
 const Breadcrumbs = () => {
@@ -87,9 +81,9 @@ const Breadcrumbs = () => {
   );
 };
 
-/* ─── Compact dataset indicator ─── */
-const DatasetIndicator = ({ dataset, onClick, isOpen }) => {
-  if (!dataset) {
+/* ─── Compact project indicator ─── */
+const ProjectIndicator = ({ project, onClick, isOpen }) => {
+  if (!project) {
     return (
       <button
         onClick={onClick}
@@ -105,15 +99,12 @@ const DatasetIndicator = ({ dataset, onClick, isOpen }) => {
           boxShadow: isOpen ? 'var(--shadow-lg)' : 'var(--shadow-md)',
         }}
       >
-        <Database className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
-        <span className="hidden sm:inline font-semibold">No dataset</span>
+        <FolderKanban className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+        <span className="hidden sm:inline font-semibold">No project</span>
         <ChevronDown className={cn("w-3.5 h-3.5 transition-transform duration-300", isOpen && "rotate-180")} />
       </button>
     );
   }
-
-  const rowCount = dataset.row_count ? Number(dataset.row_count).toLocaleString() : '—';
-  const colCount = dataset.column_count || dataset.columns?.length || '—';
 
   return (
     <button
@@ -133,24 +124,24 @@ const DatasetIndicator = ({ dataset, onClick, isOpen }) => {
         className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0 shadow-sm"
         style={{ backgroundColor: 'var(--accent-orange-light)' }}
       >
-        <Database className="w-3.5 h-3.5" style={{ color: 'var(--accent-purple)' }} />
+        <FolderKanban className="w-3.5 h-3.5" style={{ color: 'var(--accent-purple)' }} />
       </div>
       <span
-        className="font-semibold truncate max-w-[140px] hidden sm:inline"
+        className="font-semibold truncate max-w-[160px] hidden sm:inline"
         style={{ color: 'var(--text-header)' }}
       >
-        {dataset.name || dataset.filename || 'Unnamed'}
+        {project.name || 'Unnamed project'}
       </span>
       <span
         className="hidden md:flex items-center gap-2 text-[11px] font-bold tabular-nums"
         style={{ color: 'var(--text-secondary)' }}
       >
         <div className="flex items-center gap-1 opacity-80">
-          <Rows3 className="w-3.5 h-3.5" />{rowCount}
+          <Database className="w-3.5 h-3.5" />{project.source_count || 0}
         </div>
         <span className="opacity-40">|</span>
         <div className="flex items-center gap-1 opacity-80">
-          <Columns3 className="w-3.5 h-3.5" />{colCount}
+          <Activity className="w-3.5 h-3.5" />{project.cell_count || 0}
         </div>
       </span>
       <ChevronDown
@@ -161,10 +152,8 @@ const DatasetIndicator = ({ dataset, onClick, isOpen }) => {
   );
 };
 
-/* ─── Dataset dropdown panel ─── */
-const DatasetDropdown = ({ datasets, selectedDataset, onSelect, onUpload }) => {
-  const selectedId = selectedDataset?.id || selectedDataset?._id;
-
+/* ─── Project dropdown panel ─── */
+const ProjectDropdown = ({ projects, selectedId, onSelect, onNewProject }) => {
   return (
     <motion.div
       initial={{ opacity: 0, y: -6, scale: 0.98 }}
@@ -186,24 +175,23 @@ const DatasetDropdown = ({ datasets, selectedDataset, onSelect, onUpload }) => {
             className="text-[10px] uppercase tracking-[0.08em] font-medium mb-2"
             style={{ color: 'var(--text-muted)' }}
           >
-            Datasets
+            Projects
           </div>
         </div>
 
         <div className="max-h-56 overflow-y-auto px-1.5 pb-1.5">
-          {datasets.length === 0 ? (
+          {projects.length === 0 ? (
             <div className="px-3 py-6 text-center">
-              <Database className="w-5 h-5 mx-auto mb-2" style={{ color: 'var(--text-muted)', opacity: 0.5 }} />
-              <p className="text-[12px]" style={{ color: 'var(--text-muted)' }}>No datasets uploaded</p>
+              <FolderKanban className="w-5 h-5 mx-auto mb-2" style={{ color: 'var(--text-muted)', opacity: 0.5 }} />
+              <p className="text-[12px]" style={{ color: 'var(--text-muted)' }}>No projects yet</p>
             </div>
           ) : (
-            datasets.map((ds) => {
-              const dsId = ds.id || ds._id;
-              const isSelected = dsId === selectedId;
+            projects.map((project) => {
+              const isSelected = project.id === selectedId;
               return (
                 <button
-                  key={dsId}
-                  onClick={() => onSelect(ds)}
+                  key={project.id}
+                  onClick={() => onSelect(project)}
                   className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-all duration-100"
                   style={{
                     color: isSelected ? 'var(--text-header)' : 'var(--text-secondary)',
@@ -214,22 +202,22 @@ const DatasetDropdown = ({ datasets, selectedDataset, onSelect, onUpload }) => {
                     className="w-6 h-6 rounded flex items-center justify-center shrink-0"
                     style={{ backgroundColor: isSelected ? 'var(--accent-primary-light)' : 'var(--bg-elevated)' }}
                   >
-                    <Database
+                    <FolderKanban
                       className="w-3 h-3"
                       style={{ color: isSelected ? 'var(--accent-primary)' : 'var(--text-muted)' }}
                     />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-[13px] font-medium truncate">
-                      {ds.name || ds.filename || 'Unnamed'}
+                      {project.name || 'Unnamed project'}
                     </div>
                     <div
                       className="flex items-center gap-2 text-[11px] font-mono tabular-nums"
                       style={{ color: 'var(--text-muted)' }}
                     >
-                      <span>{ds.row_count ? Number(ds.row_count).toLocaleString() : '—'} rows</span>
+                      <span>{project.source_count || 0} sources</span>
                       <span>·</span>
-                      <span>{ds.column_count || '—'} cols</span>
+                      <span>{project.cell_count || 0} cells</span>
                     </div>
                   </div>
                   {isSelected && (
@@ -246,12 +234,12 @@ const DatasetDropdown = ({ datasets, selectedDataset, onSelect, onUpload }) => {
           style={{ borderTop: '1px solid var(--border)' }}
         >
           <button
-            onClick={onUpload}
+            onClick={onNewProject}
             className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[13px] transition-all"
             style={{ color: 'var(--accent-warning)' }}
           >
-            <Upload className="w-3.5 h-3.5" />
-            <span>Upload new dataset</span>
+            <FolderPlus className="w-3.5 h-3.5" />
+            <span>New project</span>
           </button>
         </div>
       </div>
@@ -259,77 +247,21 @@ const DatasetDropdown = ({ datasets, selectedDataset, onSelect, onUpload }) => {
   );
 };
 
-/* ─── Theme Switcher ─── */
+/* ─── Theme Toggle — single icon click, no dropdown ─── */
 const ThemeSwitcher = () => {
-  const { theme, setTheme, resolvedTheme } = useTheme();
-  const [isOpen, setIsOpen] = useState(false);
-  const ref = useRef(null);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handler = (e) => {
-      if (!ref.current?.contains(e.target)) setIsOpen(false);
-    };
-    document.addEventListener('pointerdown', handler);
-    return () => document.removeEventListener('pointerdown', handler);
-  }, [isOpen]);
-
-  const ActiveIcon = resolvedTheme === 'dark' ? Moon : Sun;
+  const { resolvedTheme, toggleTheme } = useTheme();
+  const isDark = resolvedTheme === 'dark';
 
   return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150"
-        style={{
-          color: 'var(--text-secondary)',
-          backgroundColor: isOpen ? 'var(--bg-elevated)' : 'transparent',
-        }}
-        aria-label="Theme"
-        title="Toggle theme"
-      >
-        <ActiveIcon className="w-4 h-4" />
-      </button>
-
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: -4, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.96 }}
-            transition={{ duration: 0.12 }}
-            className="absolute right-0 top-full mt-1.5 z-50"
-          >
-            <div
-              className="rounded-lg p-1 min-w-[130px]"
-              style={{
-                backgroundColor: 'var(--bg-surface)',
-                border: '1px solid var(--border)',
-                boxShadow: 'var(--shadow-lg)',
-              }}
-            >
-              {THEME_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => { setTheme(opt.value); setIsOpen(false); }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[13px] transition-all"
-                  style={{
-                    color: theme === opt.value ? 'var(--text-header)' : 'var(--text-secondary)',
-                    backgroundColor: theme === opt.value ? 'var(--bg-elevated)' : 'transparent',
-                  }}
-                >
-                  <opt.icon className="w-3.5 h-3.5" />
-                  <span>{opt.label}</span>
-                  {theme === opt.value && (
-                    <Check className="w-3 h-3 ml-auto" style={{ color: 'var(--accent-primary)' }} />
-                  )}
-                </button>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    <button
+      onClick={toggleTheme}
+      className="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150 hover:bg-elevated/60"
+      style={{ color: 'var(--text-secondary)' }}
+      aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+      title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+    >
+      {isDark ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+    </button>
   );
 };
 
@@ -338,43 +270,56 @@ const ThemeSwitcher = () => {
    ═══════════════════════════════════════════ */
 const Header = () => {
   const { user } = useAuth();
-  const { selectedDataset, setSelectedDataset, fetchDatasets, datasets } = useDatasetStore();
-  const [showDatasetDropdown, setShowDatasetDropdown] = useState(false);
-  const [showUploadModal, setShowUploadModal] = useState(false);
-  const datasetRef = useRef(null);
+  const { canUploadDataset } = useWorkspacePermission();
+  const { projects, current, fetchProjects } = useProjectStore();
+  const [showProjectDropdown, setShowProjectDropdown] = useState(false);
+  const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
+  const projectRef = useRef(null);
   const location = useLocation();
+  const navigate = useNavigate();
 
-  // Get redesign state and callbacks from store (synced from Dashboard component)
-  const { isRedesigning, redesignAttempts, onRegenerate, MAX_REDESIGNS, onInsightsRefresh, insightsLoading } = useDashboardActionStore();
+  // Get insights refresh state from store (synced from Insights page)
+  const { onInsightsRefresh, insightsLoading } = useDashboardActionStore();
 
   // Check if on dashboard or insights page
   const isDashboardPage = location.pathname.includes('/dashboard');
   const isInsightsPage = location.pathname.includes('/insights');
-  const showActionButton = isDashboardPage || isInsightsPage;
 
-  // Choose the appropriate action based on current page
-  const actionButtonClick = isDashboardPage ? onRegenerate : onInsightsRefresh;
-  const isLoading = isDashboardPage ? isRedesigning : insightsLoading;
-  const buttonLabel = isDashboardPage ? 'Redesign' : 'Refresh';
-  const buttonLabelLoading = isDashboardPage ? 'Redesigning...' : 'Refreshing...';
-
-  useEffect(() => {
-    if (datasets.length === 0) fetchDatasets();
-  }, [datasets.length, fetchDatasets]);
+  // Action button shows only on the insights page (refresh)
+  const showActionButton = isInsightsPage;
+  const actionButtonClick = onInsightsRefresh;
+  const isLoading = insightsLoading;
+  const buttonLabel = 'Refresh';
+  const buttonLabelLoading = 'Refreshing...';
 
   useEffect(() => {
-    if (!showDatasetDropdown) return;
+    if (projects.length === 0) fetchProjects();
+  }, [projects.length, fetchProjects]);
+
+  useEffect(() => {
+    if (!showProjectDropdown) return;
     const handler = (e) => {
-      if (!datasetRef.current?.contains(e.target)) setShowDatasetDropdown(false);
+      if (!projectRef.current?.contains(e.target)) setShowProjectDropdown(false);
     };
     document.addEventListener('pointerdown', handler);
     return () => document.removeEventListener('pointerdown', handler);
-  }, [showDatasetDropdown]);
+  }, [showProjectDropdown]);
 
-  const handleDatasetSelect = (dataset) => {
-    setSelectedDataset(dataset);
-    setShowDatasetDropdown(false);
-    toast.success(`Switched to "${dataset.name || dataset.filename}"`);
+  // The project currently open in the URL (or null on other pages)
+  const activeProject = useMemo(() => {
+    const match = location.pathname.match(/\/app\/projects\/([^/]+)/);
+    const projectId = match?.[1];
+    if (!projectId) return null;
+    return (
+      projects.find((p) => p.id === projectId) ||
+      (current?.id === projectId ? current : null) ||
+      null
+    );
+  }, [location.pathname, projects, current]);
+
+  const handleProjectSelect = (project) => {
+    setShowProjectDropdown(false);
+    navigate(`/app/projects/${project.id}`);
   };
 
   const isSettingsPage = location.pathname.includes('/settings');
@@ -398,19 +343,19 @@ const Header = () => {
                 style={{ backgroundColor: 'var(--border)' }}
               />
 
-              <div className="relative hidden sm:block" ref={datasetRef}>
-                <DatasetIndicator
-                  dataset={selectedDataset}
-                  isOpen={showDatasetDropdown}
-                  onClick={() => setShowDatasetDropdown(!showDatasetDropdown)}
+              <div className="relative hidden sm:block" ref={projectRef}>
+                <ProjectIndicator
+                  project={activeProject}
+                  isOpen={showProjectDropdown}
+                  onClick={() => setShowProjectDropdown(!showProjectDropdown)}
                 />
                 <AnimatePresence>
-                  {showDatasetDropdown && (
-                    <DatasetDropdown
-                      datasets={datasets}
-                      selectedDataset={selectedDataset}
-                      onSelect={handleDatasetSelect}
-                      onUpload={() => { setShowDatasetDropdown(false); setShowUploadModal(true); }}
+                  {showProjectDropdown && (
+                    <ProjectDropdown
+                      projects={projects}
+                      selectedId={activeProject?.id}
+                      onSelect={handleProjectSelect}
+                      onNewProject={() => { setShowProjectDropdown(false); setShowCreateProjectModal(true); }}
                     />
                   )}
                 </AnimatePresence>
@@ -420,21 +365,20 @@ const Header = () => {
         </div>
 
         <div className="flex items-center gap-2 px-3">
-          {/* Action button - show on dashboard (redesign) or insights (refresh) pages */}
-          {showActionButton && actionButtonClick && selectedDataset && (
+          {/* Action button - show on insights page (refresh) */}
+          {showActionButton && actionButtonClick && activeProject && (
             <>
               <button
                 onClick={actionButtonClick}
-                disabled={isLoading || !selectedDataset?.is_processed || (isDashboardPage && (redesignAttempts ?? 0) >= (MAX_REDESIGNS ?? 5))}
+                disabled={isLoading}
                 className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all"
                 style={{
-                  backgroundColor: (isDashboardPage && (redesignAttempts ?? 0) >= (MAX_REDESIGNS ?? 5)) ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
-                  color: (isDashboardPage && (redesignAttempts ?? 0) >= (MAX_REDESIGNS ?? 5)) ? 'var(--text-secondary)' : 'var(--text-header)',
+                  backgroundColor: 'var(--bg-elevated)',
+                  color: 'var(--text-header)',
                   border: '1px solid var(--border)',
-                  cursor: (isDashboardPage && (redesignAttempts ?? 0) >= (MAX_REDESIGNS ?? 5)) ? 'not-allowed' : 'pointer',
-                  opacity: (isDashboardPage && (redesignAttempts ?? 0) >= (MAX_REDESIGNS ?? 5)) ? 0.5 : 1,
+                  cursor: 'pointer',
                 }}
-                title={isDashboardPage ? `Redesign this dashboard (${redesignAttempts ?? 0}/${MAX_REDESIGNS ?? 5} used)` : 'Refresh insights'}
+                title="Refresh insights"
               >
                 {isLoading ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -446,13 +390,10 @@ const Header = () => {
 
               <button
                 onClick={actionButtonClick}
-                disabled={isLoading || !selectedDataset?.is_processed || (isDashboardPage && (redesignAttempts ?? 0) >= (MAX_REDESIGNS ?? 5))}
+                disabled={isLoading}
                 className="sm:hidden w-8 h-8 rounded-lg flex items-center justify-center transition-all"
-                style={{
-                  color: (isDashboardPage && (redesignAttempts ?? 0) >= (MAX_REDESIGNS ?? 5)) ? 'var(--text-secondary)' : 'var(--text-header)',
-                  opacity: (isDashboardPage && (redesignAttempts ?? 0) >= (MAX_REDESIGNS ?? 5)) ? 0.5 : 1,
-                }}
-                title={isDashboardPage ? `Redesign (${redesignAttempts ?? 0}/${MAX_REDESIGNS ?? 5})` : 'Refresh'}
+                style={{ color: 'var(--text-header)' }}
+                title="Refresh"
               >
                 {isLoading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -465,38 +406,46 @@ const Header = () => {
             </>
           )}
 
-          <button
-            onClick={() => setShowUploadModal(true)}
-            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all"
-            style={{
-              backgroundColor: "var(--accent-primary)",
-              color: "white",
-              border: "1px solid var(--accent-primary)",
-            }}
+          {canUploadDataset && (
+            <button
+              onClick={() => setShowCreateProjectModal(true)}
+              className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all"
+              style={{
+                backgroundColor: "var(--accent-primary)",
+                color: "white",
+                border: "1px solid var(--accent-primary)",
+              }}
+            >
+              <FolderPlus className="w-3.5 h-3.5" />
+              <span>New project</span>
+            </button>
+          )}
 
-          >
-            <Upload className="w-3.5 h-3.5" />
-            <span>Upload</span>
-          </button>
-
-          <button
-            onClick={() => setShowUploadModal(true)}
-            className="sm:hidden w-8 h-8 rounded-lg flex items-center justify-center transition-all"
-            style={{ color: 'var(--text-secondary)' }}
-          >
-            <Upload className="w-4 h-4" />
-          </button>
+          {canUploadDataset && (
+            <button
+              onClick={() => setShowCreateProjectModal(true)}
+              className="sm:hidden w-8 h-8 rounded-lg flex items-center justify-center transition-all"
+              style={{ color: 'var(--text-secondary)' }}
+              title="New project"
+            >
+              <FolderPlus className="w-4 h-4" />
+            </button>
+          )}
 
           <div className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border)' }} />
 
+          {isDashboardPage && <ProcessingIndicator />}
+          <NotificationBell />
           <ThemeSwitcher />
         </div>
       </header>
 
-      <UploadModal
-        isOpen={showUploadModal}
-        onClose={() => setShowUploadModal(false)}
-      />
+      {showCreateProjectModal && (
+        <CreateProjectModal
+          onClose={() => setShowCreateProjectModal(false)}
+          onCreated={(project) => navigate(`/app/projects/${project.id}`)}
+        />
+      )}
     </>
   );
 };

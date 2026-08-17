@@ -1,8 +1,11 @@
 import React from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { UploadCloud, BrainCircuit, LineChart } from 'lucide-react';
+import { Database, MessageSquareText, BrainCircuit } from 'lucide-react';
 
-const Step = ({ icon: Icon, number, title, description, delay }) => {
+const ACCENT = '#F97316';
+
+const Step = ({ icon, number, title, description, delay }) => {
+    const Icon = icon;
     const prefersReducedMotion = useReducedMotion();
 
     return (
@@ -13,9 +16,11 @@ const Step = ({ icon: Icon, number, title, description, delay }) => {
             viewport={{ once: true, margin: "-50px" }}
             className="flex flex-col items-center text-center p-8 bg-[#0D0D0F] border border-white/[0.03] rounded-3xl relative z-10"
         >
-            <div className="w-12 h-12 bg-blue-500/10 text-blue-500 flex items-center justify-center mb-6 relative rounded-xl border border-blue-500/20">
+            <div className="w-12 h-12 flex items-center justify-center mb-6 relative rounded-xl border"
+                style={{ background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.25)', color: ACCENT }}>
                 <Icon className="w-6 h-6" aria-hidden="true" />
-                <div className="absolute -top-3 -right-3 w-6 h-6 bg-blue-500 text-white flex items-center justify-center text-[10px] font-bold rounded-full shadow-lg">
+                <div className="absolute -top-3 -right-3 w-6 h-6 text-white flex items-center justify-center text-[10px] font-bold rounded-full shadow-lg"
+                    style={{ background: ACCENT }}>
                     {number}
                 </div>
             </div>
@@ -30,45 +35,47 @@ const HowItWorks = () => {
         <section id="how-it-works" className="py-32 bg-[#0A0A0A] border-y border-white/[0.03]">
             <div className="container mx-auto px-6">
                 <div className="text-center mb-20">
+                    <div className="text-[11px] font-bold uppercase tracking-[0.18em] mb-5" style={{ color: ACCENT }}>How it works</div>
                     <h2 className="text-3xl md:text-5xl font-bold text-white mb-6 tracking-tight text-balance">
-                        From raw data to insights in seconds.
+                        From raw data to shared understanding.
                     </h2>
                     <p className="text-lg text-neutral-400 max-w-2xl mx-auto text-balance">
-                        No coding. No complex setup. Just drop your file and let the engine do the work.
+                        Three steps. No setup week. No re-explaining your business to a chatbot.
                     </p>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-12 max-w-6xl mx-auto relative">
-                    {/* Connecting Line (Desktop) */}
+                    {/* Connecting line */}
                     <div className="hidden md:block absolute top-14 left-[16%] right-[16%] h-px bg-white/[0.05]" aria-hidden="true">
                         <motion.div
                             initial={{ scaleX: 0 }}
                             whileInView={{ scaleX: 1 }}
                             viewport={{ once: true, margin: "-100px" }}
                             transition={{ duration: 1.5, ease: "easeInOut" }}
-                            className="h-full bg-blue-500 origin-left"
+                            className="h-full origin-left"
+                            style={{ background: ACCENT }}
                         />
                     </div>
 
                     <Step
-                        icon={UploadCloud}
+                        icon={Database}
                         number="1"
-                        title="Upload Data"
-                        description="Drag and drop your CSV or Excel files. The engine automatically detects schemas and cleans the data."
+                        title="Connect data"
+                        description="Upload a CSV or Excel file, import a Google Sheet, or connect Postgres, MySQL, MongoDB, Supabase, and more."
                         delay={0}
                     />
                     <Step
-                        icon={BrainCircuit}
+                        icon={MessageSquareText}
                         number="2"
-                        title="AI Engines Run"
-                        description="The system analyzes patterns, identifies anomalies, and infers statistical significance instantly."
+                        title="Ask in plain English"
+                        description="'What dropped conversion on Tuesday?' Signal writes the SQL, runs it on DuckDB, and charts the answer — showing its work."
                         delay={0.1}
                     />
                     <Step
-                        icon={LineChart}
+                        icon={BrainCircuit}
                         number="3"
-                        title="View Dashboard"
-                        description="Get a fully interactive executive dashboard, ready to share or export immediately."
+                        title="Teach it once"
+                        description="Correct anything. The belief store learns your metric definitions and terminology — so accuracy compounds with every conversation."
                         delay={0.2}
                     />
                 </div>

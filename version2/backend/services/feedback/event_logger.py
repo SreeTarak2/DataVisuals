@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import logging
 
@@ -45,7 +45,7 @@ class EventLogger:
     ):
         self.current_user_id = user_id
         self.current_workspace_id = workspace_id
-        self.current_session_id = session_id or str(datetime.utcnow().timestamp())
+        self.current_session_id = session_id or str(datetime.now(timezone.utc).replace(tzinfo=None).timestamp())
         logger.info(f"Session started: {self.current_session_id}")
 
     def end_session(self):
@@ -65,7 +65,7 @@ class EventLogger:
 
         self.last_query = query_text
         self.last_response = response_text
-        self.last_query_time = datetime.utcnow()
+        self.last_query_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
         await context_store.log_interaction_event(
             user_id=self.current_user_id,
@@ -85,7 +85,7 @@ class EventLogger:
         ):
             return 0.0
 
-        time_since_last = (datetime.utcnow() - self.last_query_time).total_seconds()
+        time_since_last = (datetime.now(timezone.utc).replace(tzinfo=None) - self.last_query_time).total_seconds()
         metadata = metadata or {}
         metadata["time_since_last_query"] = time_since_last
         metadata["previous_query"] = self.last_query

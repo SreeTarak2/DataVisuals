@@ -489,6 +489,12 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
   const navigateRef = useRef(false);
   const highestProgressRef = useRef(0);
 
+  // Consecutive failures while polling. If the dataset record is missing
+  // (404 from /stages, or absent from the datasets list for several polls),
+  // the upload never produced a usable dataset — stop polling instead of
+  // hammering the API forever with a dead dataset id.
+  const notFoundCountRef = useRef(0);
+
   // ── Determine effective state ──────────────────────────────────────────────
   const useRealStages = stagesLoaded && stages.length > 0;
 
@@ -527,7 +533,20 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
       const datasets = await fetchDatasets(true);
       const dataset = datasets.find(d => d.id === datasetId || d._id === datasetId);
 
-      if (!dataset) return;
+      if (!dataset) {
+        // Dataset record missing from the list. Allow a few transient misses
+        // (the list fetch can race upload completion), then give up: an
+        // invisible dataset will never finish processing.
+        notFoundCountRef.current += 1;
+        if (notFoundCountRef.current >= 3) {
+          stopPolling();
+          setHasError(true);
+        }
+        return;
+      }
+
+      // Found the dataset again — reset the miss counter
+      notFoundCountRef.current = 0;
 
       const dsProgress = dataset.processing_progress || 0;
       const dsStatus = dataset.processing_status || '';
@@ -544,19 +563,29 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
       const dashboardReady = artifactStatus.dashboard_design === 'ready';
       const insightsReady = artifactStatus.insights_report === 'ready';
 
-      if (isProcessed && dashboardReady && insightsReady) {
+      if (isProcessed && (dsStatus === 'completed' || (dashboardReady && insightsReady))) {
         setIsComplete(true);
         setHasError(false);
-        if (datasetPollRef.current) clearInterval(datasetPollRef.current);
-        if (stagesPollRef.current) clearInterval(stagesPollRef.current);
-        datasetPollRef.current = null;
-        stagesPollRef.current = null;
+        stopPolling();
         toast.success('Processing complete!', { id: 'processing-complete' });
       } else if (dataset.processing_status === 'failed') {
         setHasError(true);
       }
     } catch (err) {
       console.error('Error checking processing status:', err);
+    }
+  };
+
+  // Stop both polling intervals (idempotent). Used on completion, on error,
+  // and when the dataset turns out not to exist.
+  const stopPolling = () => {
+    if (datasetPollRef.current) {
+      clearInterval(datasetPollRef.current);
+      datasetPollRef.current = null;
+    }
+    if (stagesPollRef.current) {
+      clearInterval(stagesPollRef.current);
+      stagesPollRef.current = null;
     }
   };
 
@@ -587,8 +616,20 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
       if (!stagesLoaded && stagesPollRef.current) {
         // After 10 seconds, give up waiting for stages and use fallback
       }
-    } catch {
-      // Silently ignore — stages endpoint may not exist for legacy datasets
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 404) {
+        // Dataset record doesn't exist — the upload never produced a usable
+        // dataset (e.g. it was rejected server-side after the modal opened).
+        // Stop polling so we don't 404 forever; surface an error instead.
+        notFoundCountRef.current += 1;
+        if (notFoundCountRef.current >= 2) {
+          stopPolling();
+          setHasError(true);
+        }
+      }
+      // Silently ignore other errors — the stages endpoint may not exist
+      // for legacy datasets.
     }
   };
 
@@ -620,11 +661,8 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
     }, 10000);
 
     return () => {
-      if (datasetPollRef.current) clearInterval(datasetPollRef.current);
-      if (stagesPollRef.current) clearInterval(stagesPollRef.current);
+      stopPolling();
       clearTimeout(fallbackTimer);
-      datasetPollRef.current = null;
-      stagesPollRef.current = null;
     };
   }, [isOpen, datasetId, retryKey]);
 
@@ -641,14 +679,12 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
     navigateRef.current = true;
     clearProcessingState();
     if (onClose) onClose();
-    navigate('/app/dashboard');
-  };
-
-  const handleGoToProfile = () => {
-    navigateRef.current = true;
-    clearProcessingState();
-    if (onClose) onClose();
-    navigate(`/app/datasets/${datasetId}/profile`);
+    // Navigate to the Data Briefing page for human-in-the-loop column selection
+    if (datasetId) {
+      navigate(`/app/datasets/${datasetId}/briefing`);
+    } else {
+      navigate('/app/dashboard');
+    }
   };
 
   const handleGoToDatasets = () => {
@@ -665,6 +701,7 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
     setFallbackStage('uploaded');
     setFallbackProgress(0);
     setIsComplete(false);
+    notFoundCountRef.current = 0;
     setRetryKey(k => k + 1);
 
     const result = await reprocessDataset(datasetId);
@@ -768,7 +805,7 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
                 {hasError
                   ? 'An error occurred during processing. You can retry or view your datasets.'
                   : isComplete
-                    ? 'Your data profile is ready — explore column details, statistics, and patterns'
+                    ? 'Processing complete — go to the dashboard to explore your data'
                     : 'Running analysis pipeline — please wait or check back later'}
               </p>
             </div>
@@ -823,10 +860,7 @@ const ProcessingModal = ({ isOpen, datasetId, onClose }) => {
             <div className="pm-footer-actions">
               {isComplete ? (
                 <>
-                  <button className="pm-btn pm-btn-primary" onClick={handleGoToProfile}>
-                    View Profile
-                  </button>
-                  <button className="pm-btn" onClick={handleGoToDashboard}>
+                  <button className="pm-btn pm-btn-primary" onClick={handleGoToDashboard}>
                     Go to Dashboard
                   </button>
                 </>

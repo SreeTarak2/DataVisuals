@@ -18,7 +18,7 @@ Target: Financial Services (Fintechs, Accounting Firms)
 import logging
 import re
 from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import polars as pl
 
 from db.schemas_kpi import (
@@ -518,7 +518,7 @@ class KPIService:
 
         return KPICalculateResponse(
             dataset_id=dataset_id,
-            calculated_at=datetime.utcnow(),
+            calculated_at=datetime.now(timezone.utc).replace(tzinfo=None),
             results=results,
             healthy_count=healthy,
             warning_count=warning,
@@ -691,7 +691,7 @@ class KPIService:
         self, from_date: datetime, to_date: Optional[datetime], period: ComparisonPeriod
     ) -> Tuple[datetime, datetime]:
         """Calculate previous period date range."""
-        to_date = to_date or datetime.utcnow()
+        to_date = to_date or datetime.now(timezone.utc).replace(tzinfo=None)
         duration = to_date - from_date
 
         if period == ComparisonPeriod.DAY:
@@ -812,7 +812,7 @@ class KPIService:
         config_dict = config.model_dump()
         config_dict["user_id"] = user_id
         config_dict["dataset_id"] = dataset_id
-        config_dict["updated_at"] = datetime.utcnow()
+        config_dict["updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
 
         if config.id:
             filter_id = (
@@ -825,7 +825,7 @@ class KPIService:
             )
             return config.id
         else:
-            config_dict["created_at"] = datetime.utcnow()
+            config_dict["created_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
             result = await self.kpi_configs.insert_one(config_dict)
             return str(result.inserted_id)
 

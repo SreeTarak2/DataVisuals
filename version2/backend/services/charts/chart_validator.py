@@ -16,7 +16,7 @@ Version: 1.0
 import logging
 from typing import Dict, List, Any, Optional
 import polars as pl
-from services.llm_router import llm_router
+from llm.router import llm_router
 
 logger = logging.getLogger(__name__)
 

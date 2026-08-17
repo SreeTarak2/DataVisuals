@@ -22,12 +22,12 @@ import {
     Plug,
     RefreshCw,
     Sparkles,
-    Upload,
+    FolderPlus,
 } from 'lucide-react';
 import { Button } from '../../../components/common/Button';
 import { Loader2 } from 'lucide-react';
 
-const EmptyStates = ({ type, selectedDataset, onUpload, onConnectSource, onNavigateToDatasets, onRegenerate, onRetryProcessing }) => {
+const EmptyStates = ({ type, selectedDataset, onUpload, onConnectSource, onNavigateToDatasets, onRegenerate, onRetryProcessing, onRefreshStatus, canUpload = true }) => {
     const processingProgress = selectedDataset?.processing_progress || 0;
     const processingStatus = selectedDataset?.processing_status || 'processing';
     if (type === 'no-dataset') {
@@ -65,17 +65,19 @@ const EmptyStates = ({ type, selectedDataset, onUpload, onConnectSource, onNavig
                                 </div>
 
                                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                    <button
-                                        type="button"
-                                        onClick={onUpload}
-                                        className="flex min-h-14 items-center justify-between rounded-xl bg-orange-600 px-4 text-left text-sm font-semibold text-white transition-colors hover:bg-orange-500"
-                                    >
-                                        <span className="flex items-center gap-3">
-                                            <Upload className="h-4 w-4" />
-                                            Upload file
-                                        </span>
-                                        <ArrowRight className="h-4 w-4" />
-                                    </button>
+                                    {canUpload && (
+                                        <button
+                                            type="button"
+                                            onClick={onUpload}
+                                            className="flex min-h-14 items-center justify-between rounded-xl bg-orange-600 px-4 text-left text-sm font-semibold text-white transition-colors hover:bg-orange-500"
+                                        >
+                                            <span className="flex items-center gap-3">
+                                                <FolderPlus className="h-4 w-4" />
+                                                New project
+                                            </span>
+                                            <ArrowRight className="h-4 w-4" />
+                                        </button>
+                                    )}
                                     <button
                                         type="button"
                                         onClick={onConnectSource}
@@ -175,14 +177,16 @@ const EmptyStates = ({ type, selectedDataset, onUpload, onConnectSource, onNavig
                     Please upload a valid CSV file with actual data or check if the file was processed correctly.
                 </p>
                 <div className="flex gap-4 justify-center">
-                    <Button
-                        onClick={onUpload}
-                        className="text-white px-6 py-3"
-                        style={{ background: 'var(--accent-success)' }}
-                    >
-                        <Upload className="w-5 h-5 mr-2" />
-                        Upload New Dataset
-                    </Button>
+                    {canUpload && (
+                        <Button
+                            onClick={onUpload}
+                            className="text-white px-6 py-3"
+                            style={{ background: 'var(--accent-success)' }}
+                        >
+                            <FolderPlus className="w-5 h-5 mr-2" />
+                            New project
+                        </Button>
+                    )}
                     <Button
                         onClick={onNavigateToDatasets}
                         className="text-white px-6 py-3"
@@ -246,6 +250,16 @@ const EmptyStates = ({ type, selectedDataset, onUpload, onConnectSource, onNavig
                 <p className="text-sm mb-2" style={{ color: 'var(--accent-primary)' }}>Stage: {processingStatus.replace(/_/g, ' ')}</p>
                 <p className="text-sm mb-8" style={{ color: 'var(--text-muted)' }}>Progress: {processingProgress}%</p>
                 <div className="flex gap-4 justify-center">
+                    {onRefreshStatus && (
+                        <Button
+                            onClick={onRefreshStatus}
+                            className="text-white px-6 py-3"
+                            style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                        >
+                            <RefreshCw className="w-4 h-4 mr-2" />
+                            Refresh Status
+                        </Button>
+                    )}
                     <Button
                         onClick={onNavigateToDatasets}
                         className="text-white px-6 py-3"

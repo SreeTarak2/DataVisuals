@@ -47,10 +47,12 @@ class SemanticCache:
         self._embeddings: Dict[str, List[float]] = {}  # cache_key -> embedding
         self._embedding_model = None
         self._use_embeddings = False
-
-        self._initialize_embedding_model()
+        self._embedding_initialized = False
 
     def _initialize_embedding_model(self):
+        if self._embedding_initialized:
+            return
+        self._embedding_initialized = True
         """Initialize the embedding model for semantic similarity.
 
         Uses the shared embedding singleton to avoid loading the
@@ -67,9 +69,7 @@ class SemanticCache:
                 logger.warning("Shared embedding model unavailable, using word overlap matching")
                 self._use_embeddings = False
         except Exception as e:
-            logger.warning(
-                f"Failed to load embedding model: {e}, using word overlap matching"
-            )
+            logger.warning(f"Failed to load embedding model: {e}, using word overlap matching")
             self._use_embeddings = False
 
     def _normalize_query(self, query: str) -> str:
@@ -79,9 +79,7 @@ class SemanticCache:
         normalized = re.sub(r"[?!.,;:]+$", "", normalized)
         return normalized
 
-    def _generate_cache_key(
-        self, query: str, dataset_id: str, mode: str = "chat"
-    ) -> str:
+    def _generate_cache_key(self, query: str, dataset_id: str, mode: str = "chat") -> str:
         """Generate deterministic cache key."""
         normalized = self._normalize_query(query)
         content = f"{dataset_id}:{mode}:{normalized}"
@@ -94,6 +92,8 @@ class SemanticCache:
 
     def _compute_embedding(self, text: str) -> Optional[List[float]]:
         """Compute embedding for text."""
+        if not self._use_embeddings and self._embedding_model is None:
+            self._initialize_embedding_model()
         if not self._use_embeddings or not self._embedding_model:
             return None
 
@@ -144,9 +144,7 @@ class SemanticCache:
 
         return self._word_overlap_similarity(text1, text2)
 
-    def get(
-        self, query: str, dataset_id: str, mode: str = "chat"
-    ) -> Optional[Dict[str, Any]]:
+    def get(self, query: str, dataset_id: str, mode: str = "chat") -> Optional[Dict[str, Any]]:
         """Get cached response if available and not expired."""
         key = self._generate_cache_key(query, dataset_id, mode)
 
@@ -275,9 +273,7 @@ class SemanticCache:
                 "ttl_hours": self.ttl_seconds / 3600,
                 "similarity_threshold": self.similarity_threshold,
                 "using_embeddings": self._use_embeddings,
-                "embedding_model": self.embedding_model_name
-                if self._use_embeddings
-                else None,
+                "embedding_model": self.embedding_model_name if self._use_embeddings else None,
             }
 
     def _lock(self):
@@ -307,9 +303,7 @@ class ChartConfigCache:
         """Generate cache key."""
         return f"{dataset_id}:{context}"
 
-    def get(
-        self, dataset_id: str, context: str = "default"
-    ) -> Optional[Dict[str, Any]]:
+    def get(self, dataset_id: str, context: str = "default") -> Optional[Dict[str, Any]]:
         """Get cached chart config."""
         key = self._generate_key(dataset_id, context)
 
@@ -323,9 +317,7 @@ class ChartConfigCache:
 
         return None
 
-    def set(
-        self, dataset_id: str, config: Dict[str, Any], context: str = "default"
-    ) -> None:
+    def set(self, dataset_id: str, config: Dict[str, Any], context: str = "default") -> None:
         """Cache chart config."""
         key = self._generate_key(dataset_id, context)
 
@@ -335,9 +327,7 @@ class ChartConfigCache:
 
     def invalidate(self, dataset_id: str) -> None:
         """Invalidate all cache entries for a dataset."""
-        keys_to_delete = [
-            k for k in self._cache.keys() if k.startswith(f"{dataset_id}:")
-        ]
+        keys_to_delete = [k for k in self._cache.keys() if k.startswith(f"{dataset_id}:")]
 
         for key in keys_to_delete:
             del self._cache[key]
@@ -388,17 +378,13 @@ class DashboardLayoutCache:
         count = 0
 
         if dataset_id:
-            keys_to_delete = [
-                k for k in self._cache.keys() if k.startswith(f"{dataset_id}:")
-            ]
+            keys_to_delete = [k for k in self._cache.keys() if k.startswith(f"{dataset_id}:")]
             for key in keys_to_delete:
                 del self._cache[key]
                 count += 1
 
         if user_id:
-            keys_to_delete = [
-                k for k in self._cache.keys() if k.endswith(f":{user_id}")
-            ]
+            keys_to_delete = [k for k in self._cache.keys() if k.endswith(f":{user_id}")]
             for key in keys_to_delete:
                 del self._cache[key]
                 count += 1

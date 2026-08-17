@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -35,15 +35,19 @@ import {
   Users,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+void motion;
 import { toast } from "react-hot-toast";
 import { useAuth } from "../../store/authStore";
 import useThemeStore from "../../store/themeStore";
 import useDatasetStore from "../../store/datasetStore";
 import useChatStore from "../../store/chatStore";
-import useChatHistoryStore from "../../store/chatHistoryStore";
 import { cn } from "../../lib/utils";
 import { useSearchParams } from "react-router-dom";
 import { agenticAPI, privacyAPI, datasetAPI } from "../../services/api";
+import { useWorkspacePermission } from "../../hooks/useWorkspacePermission";
+import TeamManagement from "../../components/features/workspace/TeamManagement";
+import ApiKeysSection from "../../components/features/api-keys/ApiKeysSection";
+import SessionsSection from "../../components/features/sessions/SessionsSection";
 
 /* ─── Constants ─── */
 const SETTINGS_PREFS_KEY = "signal-settings-preferences";
@@ -52,16 +56,24 @@ const ACCOUNT_TABS = [
   { id: "general", label: "Profile", icon: User },
   { id: "notifications", label: "Notifications", icon: BellRing },
   { id: "security", label: "Security & Privacy", icon: Shield },
+  { id: "api-keys", label: "API Keys", icon: KeyRound },
 ];
 
-const WORKSPACE_TABS = [
-  { id: "workspace", label: "General", icon: Laptop },
-  { id: "team", label: "Members", icon: Users },
-  { id: "sources", label: "Data Sources", icon: Database },
-  { id: "ai-preferences", label: "AI Preferences", icon: BrainCircuit },
-  { id: "billing", label: "Billing & Plans", icon: CreditCard },
-  { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
-];
+const WORKSPACE_TABS = (canEditSettings) => {
+  const tabs = [
+    { id: "workspace", label: "General", icon: Laptop },
+    { id: "sources", label: "Data Sources", icon: Database },
+    { id: "ai-preferences", label: "AI Preferences", icon: BrainCircuit },
+  ];
+  if (canEditSettings) {
+    tabs.push(
+      { id: "team", label: "Members", icon: Users },
+      { id: "billing", label: "Billing & Plans", icon: CreditCard },
+      { id: "advanced", label: "Advanced", icon: SlidersHorizontal }
+    );
+  }
+  return tabs;
+};
 
 /* ─── Motion ─── */
 const fadeSlide = {
@@ -165,8 +177,8 @@ const ActionFooter = ({ onSave, onCancel, saving, disabled, saveLabel = "Save ch
 const SettingsPage = () => {
   const { user, updateProfile, changePassword, logout } = useAuth();
   const theme = useThemeStore((s) => s.theme);
-  const resolvedTheme = useThemeStore((s) => s.resolvedTheme);
   const setTheme = useThemeStore((s) => s.setTheme);
+  const { canEditSettings } = useWorkspacePermission();
 
   const datasets = useDatasetStore((s) => s.datasets);
   const fetchDatasets = useDatasetStore((s) => s.fetchDatasets);
@@ -174,17 +186,16 @@ const SettingsPage = () => {
   const setSelectedDataset = useDatasetStore((s) => s.setSelectedDataset);
 
   const clearAllConversations = useChatStore((s) => s.clearAllConversations);
-  const clearAllChats = useChatHistoryStore((s) => s.clearAllChats);
-
-  const tabsRef = useRef(null);
 
   /* ── State ── */
+  const workspaceTabs = useMemo(() => WORKSPACE_TABS(canEditSettings), [canEditSettings]);
+
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTabState] = useState(() => {
     const initialTab = searchParams.get("tab");
     const allTabIds = [
       ...ACCOUNT_TABS.map((t) => t.id),
-      ...WORKSPACE_TABS.map((t) => t.id),
+      ...workspaceTabs.map((t) => t.id),
     ];
     return allTabIds.includes(initialTab) ? initialTab : "general";
   });
@@ -199,13 +210,13 @@ const SettingsPage = () => {
     if (currentTab && currentTab !== activeTab) {
       const allTabIds = [
         ...ACCOUNT_TABS.map((t) => t.id),
-        ...WORKSPACE_TABS.map((t) => t.id),
+        ...workspaceTabs.map((t) => t.id),
       ];
       if (allTabIds.includes(currentTab)) {
         setActiveTabState(currentTab);
       }
     }
-  }, [searchParams, activeTab]);
+  }, [searchParams, activeTab, workspaceTabs]);
   const [savingProfile, setSavingProfile] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [savingPrefs, setSavingPrefs] = useState(false);
@@ -224,7 +235,6 @@ const SettingsPage = () => {
   const [privacyDatasets, setPrivacyDatasets] = useState([]);
   const [privacyAuditStats, setPrivacyAuditStats] = useState(null);
   const [loadingPrivacy, setLoadingPrivacy] = useState(false);
-  const [savingPrivacy, setSavingPrivacy] = useState(false);
   const [scanningPii, setScanningPii] = useState(null);
   const [piiScanResults, setPiiScanResults] = useState({});
 
@@ -382,7 +392,7 @@ const SettingsPage = () => {
 
   const handleClearLocal = async () => {
     setClearingLocalData(true);
-    clearAllConversations(); clearAllChats();
+    clearAllConversations();
     setDatasets([]); setSelectedDataset(null);
     ["dataset-storage", "signal-chat-store", "chat-history-storage", SETTINGS_PREFS_KEY].forEach((k) => { localStorage.removeItem(k); sessionStorage.removeItem(k); });
     const d = buildDefaultPreferences(theme);
@@ -596,7 +606,6 @@ const SettingsPage = () => {
 
   /* ── Privacy handlers ── */
   const updatePrivacySetting = async (key, value) => {
-    setSavingPrivacy(true);
     try {
       const res = await privacyAPI.updateGlobalSettings({ [key]: value });
       setPrivacySettings(res.data?.global_defaults || {});
@@ -604,8 +613,6 @@ const SettingsPage = () => {
     } catch (err) {
       console.error("Failed to update privacy setting:", err);
       toast.error("Failed to update setting.");
-    } finally {
-      setSavingPrivacy(false);
     }
   };
 
@@ -1032,14 +1039,25 @@ const SettingsPage = () => {
     </motion.div>
   );
 
+  const renderTeamTab = () => (
+    <motion.div variants={fadeSlide} initial="hidden" animate="visible" exit="exit">
+      <TeamManagement />
+    </motion.div>
+  );
+
   const renderCombinedSecurityTab = () => (
     <div className="space-y-12">
       {renderSecurityTab()}
+      <div className="pt-8 border-t border-[var(--border)]">
+        <SessionsSection />
+      </div>
       <div className="pt-8 border-t border-[var(--border)]">
         {renderPrivacyTab()}
       </div>
     </div>
   );
+
+  const renderApiKeysTab = () => <ApiKeysSection />;
 
   const TAB_RENDERERS = {
     general: renderAccountTab,
@@ -1048,8 +1066,9 @@ const SettingsPage = () => {
     "ai-preferences": renderAiMemoryTab,
     notifications: renderNotificationsTab,
     security: renderCombinedSecurityTab,
+    "api-keys": renderApiKeysTab,
     billing: () => <PlaceholderTab title="Billing" desc="Manage your subscription and billing details." />,
-    team: () => <PlaceholderTab title="Team" desc="Manage your team members and roles." />,
+    team: renderTeamTab,
     advanced: () => <PlaceholderTab title="Advanced Settings" desc="Configure advanced workspace settings." />,
   };
 
@@ -1096,7 +1115,7 @@ const SettingsPage = () => {
             <div className="px-3 mb-1.5 text-[10px] font-bold text-[var(--text-secondary)]/50 uppercase tracking-[0.08em]">
               Workspace Settings
             </div>
-            {WORKSPACE_TABS.map((tab) => {
+            {workspaceTabs.map((tab) => {
               const isActive = activeTab === tab.id;
               const Icon = tab.icon;
               return (
@@ -1132,7 +1151,7 @@ const SettingsPage = () => {
               {ACCOUNT_TABS.map(tab => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
             </optgroup>
             <optgroup label="Workspace Settings">
-              {WORKSPACE_TABS.map(tab => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
+              {workspaceTabs.map(tab => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
             </optgroup>
           </select>
         </div>

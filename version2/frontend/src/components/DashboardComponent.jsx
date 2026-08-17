@@ -1,14 +1,15 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef, Component } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  BarChart3, Layers, AlertCircle, RefreshCw, Loader2, HelpCircle, ChevronDown, ChevronUp
+  BarChart3, Layers, AlertCircle, RefreshCw, Loader2, HelpCircle,
+  ChevronDown, ChevronUp, Sparkles, Lightbulb, Filter, ShieldAlert
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import PlotlyChart from './features/charts/PlotlyChart';
-import EnterpriseKpiCard from './ui/EnterpriseKpiCard';
+import ChartRenderer from './features/charts/ChartRenderer';
+import { MetricCard } from './kpi';
 import SurprisingInsightCard from './ui/SurprisingInsightCard';
 import useDatasetStore from '../store/datasetStore';
-import { getAuthToken, chartAPI, datasetAPI } from '../services/api';
+import { chartAPI } from '../services/api';
 import { useChartTheme } from '../hooks/useChartTheme';
 import useDashboardActionStore from '../store/dashboardActionStore';
 import CorrelationMatrix from './features/analysis/CorrelationMatrix';
@@ -16,6 +17,8 @@ import DistributionComparison from './features/analysis/DistributionComparison';
 import PivotTable from './features/analysis/PivotTable';
 import AnomalyFeed from './features/analysis/AnomalyFeed';
 import DataPreviewTable from '../pages/Dashboard/components/DataPreviewTable';
+import DrillDownBreadcrumbs from './features/charts/DrillDownBreadcrumbs';
+import { drillChartAlongHierarchy, restoreDrilledCharts, findHierarchyForField } from '../utils/hierarchyDrill';
 
 // ── KPI Card Error Boundary (isolates one bad card so it doesn't collapse the grid) ──
 class KpiCardErrorBoundary extends Component {
@@ -71,23 +74,25 @@ const normalizePlotlyChartData = (component = {}) => {
     return normalizePlotlyChartData({ chart_data: nested });
   }
 
+  const meta = raw?.metadata || component.metadata || {};
+
   if (Array.isArray(raw?.data)) {
-    return { data: raw.data, layout: raw.layout || {} };
+    return { data: raw.data, layout: raw.layout || {}, metadata: meta };
   }
 
   if (Array.isArray(raw?.traces)) {
-    return { data: raw.traces, layout: raw.layout || {} };
+    return { data: raw.traces, layout: raw.layout || {}, metadata: meta };
   }
 
   if (Array.isArray(component.data)) {
-    return { data: component.data, layout: component.layout || {} };
+    return { data: component.data, layout: component.layout || {}, metadata: meta };
   }
 
   if (Array.isArray(component.traces)) {
-    return { data: component.traces, layout: component.layout || {} };
+    return { data: component.traces, layout: component.layout || {}, metadata: meta };
   }
 
-  return { data: [], layout: {} };
+  return { data: [], layout: {}, metadata: {} };
 };
 
 const chartHasRenderableData = (chartData = {}) => {
@@ -109,17 +114,20 @@ const chartHasRenderableData = (chartData = {}) => {
   });
 };
 
-const DashboardComponent = ({ component: initialComponent, variant, chartIntelligence, colorOffset = 0, datasetData = [] }) => {
+
+
+const DashboardComponent = ({ component: initialComponent, variant, datasetData = [], bulkHydrating = false }) => {
   const [component, setComponent] = useState(initialComponent);
   const [retrying, setRetrying] = useState(false);
   const [explanationExpanded, setExplanationExpanded] = useState(false);
   const [chartExplanation, setChartExplanation] = useState(null);
   const [explanationLoading, setExplanationLoading] = useState(false);
   const [retryError, setRetryError] = useState(null);
-  const autoRetryAttemptedRef = useRef(false);
   const clickTimeout = useRef(null);
   const { colors } = useChartTheme();
-  const { crossFilter, setCrossFilter } = useDashboardActionStore();
+  const { crossFilters, crossFilter, toggleFilter, setFilters, clearCrossFilter,
+    drillDownStack, pushDrillDown, popDrillDown, clearDrillDown,
+    hierarchies, hierarchyDrill } = useDashboardActionStore();
   const { selectedDataset } = useDatasetStore();
 
   // Generate a stable unique ID for this KPI card instance.
@@ -134,115 +142,53 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
       .replace(/[^a-z0-9_:]/g, ''),
   [initialComponent.title, initialComponent.column]);
 
-  // Listen for KPI edit events from EnterpriseKpiCard
+  // KPI drill-down event listener
   useEffect(() => {
-    const handleKpiEdit = async (e) => {
-      const { id, column, aggregation, format, icon, value } = e.detail;
-      if (id !== kpiId) return;
-
-      // Update local state immediately
-      setComponent(prev => ({
-        ...prev,
-        column,
-        aggregation,
-        format,
-        icon,
-        value,
-      }));
-
-      // Persist to backend (fire-and-forget — don't block the UI)
-      const datasetId = selectedDataset?.id || selectedDataset?._id;
-      if (!datasetId) return;
-
-      try {
-        await datasetAPI.updateKpi(datasetId, kpiId, {
-          column,
-          aggregation,
-          format,
-          icon,
-          value,
-        });
-      } catch (err) {
-        console.warn('[KPI] Failed to persist edit:', err);
-        toast.error('Failed to save KPI changes — will retry on next edit', {
-          duration: 3000,
-          style: { background: '#1e293b', color: '#e2e8f0', border: '1px solid rgba(239,68,68,0.3)' },
+    const handleKpiDrillDown = (e) => {
+      const { kpiId: targetId } = e.detail || {};
+      if (targetId === kpiId) {
+        toast(`Explore: ${component.title}`, {
+          duration: 2000,
+          style: {
+            background: '#1e293b',
+            color: '#e2e8f0',
+            border: '1px solid rgba(99, 102, 241, 0.3)',
+            fontSize: '13px',
+          },
         });
       }
     };
 
-    window.addEventListener('kpi-edited', handleKpiEdit);
-    return () => window.removeEventListener('kpi-edited', handleKpiEdit);
-  }, [kpiId, selectedDataset]);
+    window.addEventListener('kpi-drilldown', handleKpiDrillDown);
+    return () => window.removeEventListener('kpi-drilldown', handleKpiDrillDown);
+  }, [kpiId, component.title]);
 
   useEffect(() => {
     setComponent(initialComponent);
     setChartExplanation(null);
     setExplanationExpanded(false);
-    autoRetryAttemptedRef.current = false;
   }, [initialComponent]);
 
   const chartType = component.config?.chart_type?.toLowerCase() || '';
+
+  // The dimension this chart is grouped by — the field a cross-filter click
+  // on this chart belongs to (config.group_by takes priority, else the x column).
+  const chartFilterField = useMemo(() => {
+    const cfg = component.config || {};
+    const gb = cfg.group_by;
+    if (Array.isArray(gb) && gb.length) return gb[0];
+    if (typeof gb === 'string' && gb.trim()) return gb;
+    const cols = cfg.columns || [];
+    return cols[0] || null;
+  }, [component.config]);
 
   const isAnalyticsComponent = useMemo(() => {
     return ['distribution_comparison', 'ridge_plot'].includes(chartType);
   }, [chartType]);
 
   const chartData = useMemo(() => {
-    const normalized = normalizePlotlyChartData(component);
-    if (!normalized || !Array.isArray(normalized.data)) return normalized;
-
-    // Enforce SaaS-tier styling on traces
-    const styledData = normalized.data.map((trace) => {
-      const isLine = chartType === 'line' || chartType === 'line_chart' || chartType === 'area';
-      const isBar = chartType === 'bar' || chartType === 'bar_chart' || chartType === 'grouped_bar';
-      const isScatter = chartType === 'scatter' || chartType === 'scatter_plot';
-      const isPie = chartType === 'pie' || chartType === 'pie_chart' || chartType === 'donut';
-
-      let newTrace = { ...trace };
-
-      if (isLine) {
-        newTrace.type = 'scatter';
-        // Force lines, smooth them out, hide markers until hover
-        newTrace.mode = 'lines+markers';
-        newTrace.line = { ...trace.line, shape: 'spline', smoothing: 1.3, width: 3 };
-        // Hide markers by default, they will appear on hover
-        newTrace.marker = { ...trace.marker, size: 6, opacity: 0 }; 
-        if (chartType === 'area') {
-            newTrace.fill = 'tozeroy';
-        }
-      } else if (isBar) {
-        newTrace.type = 'bar';
-        // Remove default bar borders for a cleaner look
-        newTrace.marker = { 
-            ...trace.marker, 
-            line: { width: 0 } 
-        };
-      } else if (isScatter) {
-        newTrace.type = 'scatter';
-        newTrace.mode = 'markers';
-        newTrace.marker = { 
-            ...trace.marker, 
-            size: 8, 
-            opacity: 0.75, 
-            line: { width: 1, color: colors?.cardBg || '#fff' } 
-        };
-      } else if (isPie) {
-        newTrace.type = 'pie';
-        newTrace.hole = 0.65; // Convert all pies to sleek donuts
-        newTrace.hoverinfo = 'label+percent';
-        newTrace.textinfo = 'none'; // Don't clutter the donut with text
-        newTrace.marker = {
-            ...trace.marker,
-            line: { width: 2, color: colors?.cardBg || 'transparent' } // Gap between slices
-        };
-      }
-
-      return newTrace;
-    });
-
-    return { ...normalized, data: styledData };
-  }, [component, chartType, colors]);
+    return normalizePlotlyChartData(component);
+  }, [component]);
   const chartHeight = getChartHeight(chartType, variant);
 
   const hasData = useMemo(() => {
@@ -250,53 +196,31 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
     return chartHasRenderableData(chartData);
   }, [chartData, isAnalyticsComponent]);
 
-  // Compute AI annotations from chart intelligence
-  const computedAnnotations = useMemo(() => {
-    if (!chartIntelligence?.intelligence) return [];
+  // True when the active cross-filter excluded every row for this chart
+  // (backend signals via metadata.empty_filtered).
+  const emptyUnderFilter = useMemo(() => {
+    const meta = chartData?.metadata || component?.metadata || {};
+    return Boolean(meta.empty_filtered) && !hasData;
+  }, [chartData, component, hasData]);
 
-    const annotations = [];
-    const { insight_annotation, anomaly_flag } = chartIntelligence.intelligence;
+  // ── Honesty badge: how many points are actually shown vs the source data ──
+  // Backend attaches metadata.sampling = {shown, original_count, method} when
+  // LTTB / category-caps downsampled the traces. Show it instead of silently
+  // truncating.
+  const samplingInfo = useMemo(() => {
+    const s = chartData?.metadata?.sampling;
+    if (!s || typeof s.shown !== 'number' || typeof s.original_count !== 'number') return null;
+    if (s.shown <= 0 || s.original_count <= s.shown) return null;
+    return s;
+  }, [chartData]);
 
-    if (insight_annotation) {
-      annotations.push({
-        x: 0.02,
-        y: 1.08,
-        xref: 'paper',
-        yref: 'paper',
-        text: insight_annotation,
-        showarrow: false,
-        font: { size: 11, color: colors.primary, family: 'Inter, sans-serif' },
-        bgcolor: `${colors.primary}10`,
-        bordercolor: `${colors.primary}30`,
-        borderwidth: 1,
-        borderpad: 4,
-        textangle: 0,
-        xanchor: 'left',
-        align: 'left',
-      });
-    }
+  const formatCompact = (n) => {
+    if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
+    if (n >= 1e3) return `${(n / 1e3).toFixed(1).replace(/\.0$/, '')}K`;
+    return `${n}`;
+  };
 
-    if (anomaly_flag) {
-      annotations.push({
-        x: 0.98,
-        y: 1.08,
-        xref: 'paper',
-        yref: 'paper',
-        text: `! ${anomaly_flag}`,
-        showarrow: false,
-        font: { size: 10, color: colors.warning, family: 'Inter, sans-serif' },
-        bgcolor: `${colors.warning}10`,
-        bordercolor: `${colors.warning}30`,
-        borderwidth: 1,
-        borderpad: 3,
-        xanchor: 'right',
-        align: 'right',
-      });
-    }
-
-    return annotations;
-  }, [chartIntelligence, colors.primary, colors.warning]);
-
+  // Chart intelligence — simplified for ECharts (tooltips handle annotations natively)
   const handleExplainChart = useCallback(async () => {
     const datasetId = selectedDataset?.id || selectedDataset?._id;
     if (!datasetId || explanationLoading) return;
@@ -350,10 +274,10 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
     setRetrying(true);
     setRetryError(null);
     try {
-      const token = getAuthToken();
       const res = await fetch(`/api/ai/${datasetId}/retry-chart`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Protection': '1' },
+        credentials: 'include',
         body: JSON.stringify({ component }),
       });
 
@@ -441,112 +365,189 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
     }
   }, [selectedDataset, component, retrying, initialComponent]);
 
+  // Note: automatic per-chart hydration now happens via the page-level
+  // useBulkChartHydration hook (ONE /hydrate-charts request for all config-only
+  // charts). This component only handles the manual Retry button below.
+
+  // ── Cross-filter: listen for brush events from ECharts ──
+  // Brush-select is multi-select: every brushed value toggles into the filter
+  // context on this chart's field (OR), so a brush across West+North keeps both.
   useEffect(() => {
-    if (component.type !== 'chart' || isAnalyticsComponent || hasData || retrying || autoRetryAttemptedRef.current) {
-      return;
+    const handleBrush = (e) => {
+      const { values } = e.detail || {};
+      if (values && values.length > 0) {
+        values.slice(0, 50).forEach((v) => {
+          toggleFilter({ field: chartFilterField, value: String(v) }, component.title);
+        });
+      }
+    };
+    const handleBrushClear = () => {
+      clearCrossFilter();
+    };
+
+    window.addEventListener('chart-brush', handleBrush);
+    window.addEventListener('chart-brush-clear', handleBrushClear);
+    return () => {
+      window.removeEventListener('chart-brush', handleBrush);
+      window.removeEventListener('chart-brush-clear', handleBrushClear);
+    };
+  }, [toggleFilter, clearCrossFilter, chartFilterField, component.title]);
+
+  const handleDrillDownNavigate = useCallback((index) => {
+    // Any navigation away from the drilled state invalidates the hierarchy
+    // drill — restore the drilled chart(s) to their baseline granularity.
+    restoreDrilledCharts();
+    if (index === 0) {
+      // Clicked root breadcrumb — clear everything
+      clearCrossFilter();
+      clearDrillDown();
+    } else {
+      // Clicked intermediate breadcrumb — pop stack and rebuild the filter
+      // context from the remaining drill levels ONLY (each level's values are
+      // that field's active multi-select selections). Independent filters on
+      // other fields are dropped — navigation means "back to this drill point".
+      const remaining = drillDownStack.slice(0, index + 1);
+      popDrillDown(index + 1);
+      const nextFilters = remaining
+        .filter((l) => l && l.field && Array.isArray(l.values) && l.values.length > 0)
+        .flatMap((l) => l.values.map((v) => ({ field: l.field, value: String(v) })));
+      if (nextFilters.length > 0) {
+        setFilters(nextFilters, drillDownStack[index]?.chartTitle || null);
+      } else {
+        clearCrossFilter();
+      }
     }
-
-    const datasetId = selectedDataset?.id || selectedDataset?._id;
-    if (!datasetId || !component.config) return;
-
-    autoRetryAttemptedRef.current = true;
-    handleRetryChart({ silent: true });
-  }, [component, handleRetryChart, hasData, isAnalyticsComponent, retrying, selectedDataset]);
+  }, [drillDownStack, clearCrossFilter, clearDrillDown, popDrillDown, setFilters]);
 
   const handlePointClick = useCallback((clickData) => {
     if (clickTimeout.current) {
       clearTimeout(clickTimeout.current);
       clickTimeout.current = null;
 
-      const xLabel = clickData.x !== null ? String(clickData.x) : '';
-      const yLabel = clickData.y !== null ? (typeof clickData.y === 'number' ? clickData.y.toLocaleString() : String(clickData.y)) : '';
-      const series = clickData.seriesName ? ` (${clickData.seriesName})` : '';
-      const chartTitle = component.title || 'the chart';
+      // Double-click → drill-down: push level, set cross-filter, and follow
+      // the validated hierarchy if this chart's field is a hierarchy level
+      // (e.g. US → states). Falls back to the plain filter drill otherwise.
+      const clickedValue = clickData.x !== null && clickData.x !== undefined ? String(clickData.x) : null;
+      const chartTitle = component.title || 'Data';
 
-      const query = `I clicked on a specific data point in "${chartTitle}" where ${xLabel} = ${yLabel}${series}. Can you tell me more about what might be driving this specific point or if it represents an anomaly?`;
+      if (clickedValue) {
+        // Is this chart's grouping field part of a drillable hierarchy?
+        const found = findHierarchyForField(hierarchies, chartFilterField);
 
-      window.dispatchEvent(new CustomEvent('open-chat-with-query', { detail: { query } }));
-
-      toast(
-        `🎯 Context sent to AI: ${xLabel}: ${yLabel}`,
-        {
-          duration: 2500,
-          style: {
-            background: '#1e293b',
-            color: '#e2e8f0',
-            border: '1px solid rgba(16, 185, 129, 0.3)',
-            fontSize: '13px',
-          },
-          icon: '✨',
+        // Push root level if this is the first drill-down
+        if (drillDownStack.length === 0) {
+          pushDrillDown({ label: 'All Data', values: [], filterValue: null, field: null, chartTitle });
         }
-      );
+        // Push the clicked level (multi-select values + field + hierarchy so
+        // restore is field-aware and provisional paths get flagged in the trail)
+        pushDrillDown({
+          label: clickedValue,
+          values: [clickedValue],
+          filterValue: clickedValue,
+          field: chartFilterField,
+          chartTitle,
+          hierarchy: found?.hierarchy || null,
+          provisional: found ? found.hierarchy.state === 'provisional' : false,
+        });
+        // Ensure the clicked value is part of the filter context — toggle in,
+        // never toggle out (a double-click is always a drill, not a deselect).
+        const alreadyActive = crossFilters.some(
+          (f) => f.field === chartFilterField && String(f.value) === String(clickedValue)
+        );
+        if (!alreadyActive) {
+          toggleFilter({ field: chartFilterField, value: clickedValue }, chartTitle);
+        }
+
+        drillChartAlongHierarchy({
+          datasetId: selectedDataset?.id || selectedDataset?._id,
+          component,
+          clickedValue,
+          chartFilterField,
+          chartTitle,
+        })
+          .then((outcome) => {
+            if (outcome?.drilled) {
+              toast(
+                `Drilled: ${clickedValue} → by ${outcome.nextLevel}${outcome.provisional ? ' (assumed)' : ''}`,
+                {
+                  duration: 2200,
+                  style: {
+                    background: '#1e293b',
+                    color: '#e2e8f0',
+                    border: `1px solid ${outcome.provisional ? 'rgba(245, 158, 11, 0.4)' : 'rgba(99, 102, 241, 0.3)'}`,
+                    fontSize: '13px',
+                  },
+                  icon: <Layers size={16} />,
+                }
+              );
+            } else {
+              toast(`Drilling into ${clickedValue}`, {
+                duration: 2000,
+                style: {
+                  background: '#1e293b',
+                  color: '#e2e8f0',
+                  border: '1px solid rgba(99, 102, 241, 0.3)',
+                  fontSize: '13px',
+                },
+                icon: <BarChart3 size={16} />,
+              });
+            }
+          })
+          .catch(() => {
+            toast(`Drilling into ${clickedValue}`, {
+              duration: 2000,
+              style: {
+                background: '#1e293b',
+                color: '#e2e8f0',
+                border: '1px solid rgba(99, 102, 241, 0.3)',
+                fontSize: '13px',
+              },
+              icon: <BarChart3 size={16} />,
+            });
+          });
+      }
       return;
     }
 
     clickTimeout.current = setTimeout(() => {
       clickTimeout.current = null;
-      // Set cross-chart visual filter
+      // Single-click → toggle this value in/out of the filter context on this
+      // chart's field (multi-select: clicking West then North keeps both; a
+      // chart on another field adds a second AND dimension).
       if (clickData.x !== null && clickData.x !== undefined) {
-        setCrossFilter(String(clickData.x));
+        toggleFilter({ field: chartFilterField, value: String(clickData.x) }, component.title);
       }
     }, 250);
-  }, [component.title, setCrossFilter]);
+  }, [component, component.title, toggleFilter, chartFilterField, drillDownStack, crossFilters, hierarchies, selectedDataset]);
 
   switch (component.type) {
     case 'kpi':
       return (
         <KpiCardErrorBoundary title={component.title}>
-          <EnterpriseKpiCard
+          <MetricCard
             id={kpiId}
             title={component.title}
-            column={component.column || component.title}
-            aggregation={component.aggregation || 'sum'}
-            value={component.value ?? 0}
+            value={component.value}
             format={component.format || 'number'}
-            definition={component.definition || component.subtitle || null}
-            comparisonValue={component.comparisonValue ?? component.comparison_value ?? null}
+            previousValue={component.comparisonValue ?? component.comparison_value ?? null}
+            deltaPct={component.deltaPercent ?? component.delta_percent ?? null}
+            deltaDirection={
+              component.delta_direction || component.trendDirection || component.trend_direction || null
+            }
             comparisonLabel={component.comparisonLabel || component.comparison_label || null}
-            deltaPercent={component.deltaPercent ?? component.delta_percent ?? null}
-            benchmarkValue={component.benchmarkValue ?? component.benchmark_value ?? null}
-            benchmarkLabel={component.benchmarkLabel ?? component.benchmark_label ?? null}
-            benchmarkText={component.benchmarkText || component.benchmark_text || null}
-            isOutlier={component.isOutlier || false}
-            aiSuggestion={component.aiSuggestion || component.ai_suggestion || null}
-            targetValue={component.targetValue}
-            targetLabel={component.targetLabel}
-            achievementPercent={component.achievementPercent ?? component.achievement_pct ?? null}
-            periodStatus={component.periodStatus || component.period_status || 'on-track'}
-            sparklineData={component.sparklineData || component.sparkline_data || []}
-            topValues={component.topValues || null}
-            recordCount={component.recordCount ?? component.record_count ?? null}
-            datasetData={datasetData}
-            unitPrefix={component.unitPrefix || component.unit_prefix || null}
-            unitSuffix={component.unitSuffix || component.unit_suffix || null}
-            state={component.state || 'ready'}
-            staleMinutes={component.staleMinutes ?? component.cache_age_min ?? null}
-            icon={component.icon || 'BarChart3'}
-            animationDelay={0}
+            sparklineData={component.sparklineData || component.sparkline_data || null}
+            businessCategory={
+              component.businessCategory || component.business_category || component.archetype || null
+            }
+            iconName={component.icon || null}
             accentColor={component.accentColor || component.accent_color || null}
-            actionPrompt={component.actionPrompt || component.action_prompt || null}
-            businessCategory={component.businessCategory || component.business_category || component.archetype || null}
-            periodLabel={component.periodLabel || component.period_label || null}
-            previousPeriodLabel={component.previousPeriodLabel || component.previous_period_label || null}
-            periodType={component.periodType || component.period_type || null}
-            baselineValue={component.baselineValue ?? component.baseline_value ?? null}
-            baselineLabel={component.baselineLabel || component.baseline_label || null}
-            vsBaselinePct={component.vsBaselinePct ?? component.vs_baseline_pct ?? null}
-            baselineStd={component.baselineStd ?? component.baseline_std ?? null}
-            normalRangeLow={component.normalRangeLow ?? component.normal_range_low ?? null}
-            normalRangeHigh={component.normalRangeHigh ?? component.normal_range_high ?? null}
-            isAnomaly={component.isAnomaly || false}
-            anomalyDirection={component.anomalyDirection || component.anomaly_direction || null}
-            zScore={component.zScore ?? component.z_score ?? null}
-            anomalySeverity={component.anomalySeverity || component.anomaly_severity || null}
-            expectedValue={component.expectedValue ?? component.expected_value ?? null}
-            trendDirection={component.trendDirection || component.trend_direction || null}
-            topDriver={component.topDriver || component.top_driver || null}
-            vsPreviousPct={component.vsPreviousPct ?? component.vs_previous_pct ?? null}
-            compact={variant === 'compact'}
+            loading={component.state === 'loading'}
+            error={component.state === 'error' ? (component.aiSuggestion || component.ai_suggestion || 'Failed to load') : null}
+            onDrillDown={() => {
+              window.dispatchEvent(new CustomEvent('kpi-drilldown', {
+                detail: { kpiId, title: component.title, value: component.value },
+              }));
+            }}
           />
         </KpiCardErrorBoundary>
       );
@@ -637,6 +638,43 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
               <h3 className="font-semibold text-[15px] tracking-tight truncate" style={{ fontFamily: 'Inter, system-ui, sans-serif', color: colors.text }}>
                 {component.title || 'Data Visualization'}
               </h3>
+              {samplingInfo && (
+                <span
+                  className="px-2 py-0.5 rounded-full text-[10px] font-medium whitespace-nowrap border shrink-0"
+                  style={{
+                    background: `${colors.text}08`,
+                    borderColor: colors.border,
+                    color: colors.textMuted,
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  }}
+                  title={`Showing ${samplingInfo.shown.toLocaleString()} of ${samplingInfo.original_count.toLocaleString()} data points (${samplingInfo.method || 'downsampled'})`}
+                >
+                  {formatCompact(samplingInfo.shown)} of {formatCompact(samplingInfo.original_count)} pts
+                </span>
+              )}
+
+              {/* Hierarchy drill indicator — this chart is showing the next level down */}
+              {hierarchyDrill && (
+                hierarchyDrill.componentId === component.id ||
+                (!hierarchyDrill.componentId && hierarchyDrill.chartTitle === component.title)
+              ) && (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border shrink-0 whitespace-nowrap"
+                  style={{
+                    background: hierarchyDrill.provisional ? 'rgba(245, 158, 11, 0.1)' : `${colors.primary}08`,
+                    borderColor: hierarchyDrill.provisional ? 'rgba(245, 158, 11, 0.3)' : `${colors.primary}25`,
+                    color: hierarchyDrill.provisional ? '#f59e0b' : colors.primary,
+                  }}
+                  title={hierarchyDrill.provisional
+                    ? `Assumed hierarchy: ${(hierarchyDrill.hierarchy?.columns || []).join(' → ')} (${Math.round((hierarchyDrill.hierarchy?.confidence || 0) * 100)}% confidence) — validate it in the assumptions review`
+                    : `Drilled along ${(hierarchyDrill.hierarchy?.columns || []).join(' → ')}`}
+                >
+                  {hierarchyDrill.provisional
+                    ? <ShieldAlert size={10} className="shrink-0" />
+                    : <Layers size={10} className="shrink-0" />}
+                  by {hierarchyDrill.nextLevel}
+                </span>
+              )}
             </div>
             
             <button
@@ -708,7 +746,7 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
                         )}
                         {chartExplanation.readingGuide && (
                           <div className="pt-2 border-t" style={{ borderColor: `${colors.primary}15` }}>
-                            <p className="font-medium" style={{ color: colors.text }}>💡 {chartExplanation.readingGuide}</p>
+                            <p className="font-medium flex items-center gap-1.5" style={{ color: colors.text }}><Lightbulb size={14} className="shrink-0" />{chartExplanation.readingGuide}</p>
                           </div>
                         )}
                       </div>
@@ -732,6 +770,15 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
             )}
           </AnimatePresence>
 
+          {/* Drill-down breadcrumbs */}
+          {drillDownStack.length > 1 && (
+            <DrillDownBreadcrumbs
+              stack={drillDownStack}
+              onNavigate={handleDrillDownNavigate}
+              colors={colors}
+            />
+          )}
+
           {/* Chart body */}
           <div className="px-2 pb-3 w-full flex-grow relative z-0" style={{ height: `${chartHeight}px` }}>
             {hasData ? (
@@ -749,58 +796,45 @@ const DashboardComponent = ({ component: initialComponent, variant, chartIntelli
                   )}
                 </div>
               ) : (
-                <PlotlyChart
-                  data={chartData.data}
+                <ChartRenderer
+                  data={chartData.data || chartData.traces || []}
                   layout={{
                     ...chartData.layout,
-                    title: null, // REMOVED: redundant internal Plotly title
-                    paper_bgcolor: 'transparent',
-                    plot_bgcolor: 'transparent',
-                    font: { color: colors.textMuted, family: 'Inter, system-ui, sans-serif', size: 12 },
-                    autosize: true,
-                    margin: { t: computedAnnotations.length > 0 ? 30 : 15, b: 40, l: 45, r: 20, pad: 0 },
-                    xaxis: {
-                      ...chartData.layout?.xaxis,
-                      title: null, // Often redundant if clear from chart title, but left to backend preference
-                      tickangle: (chartType === 'line' || chartType === 'line_chart') ? 0 : -40,
-                      automargin: true,
-                      gridcolor: `${colors.border}80`,
-                      showgrid: chartType === 'line' || chartType === 'line_chart' || chartType === 'scatter',
-                      zeroline: false,
-                      linecolor: 'transparent',
-                      tickfont: { size: 11, color: colors.textMuted },
-                    },
-                    yaxis: {
-                      ...chartData.layout?.yaxis,
-                      automargin: true,
-                      gridcolor: `${colors.border}80`,
-                      showgrid: true,
-                      griddash: 'dash',
-                      zeroline: false,
-                      linecolor: 'transparent',
-                      tickfont: { size: 11, color: colors.textMuted },
-                    },
-                    hoverlabel: {
-                      bgcolor: colors.cardBg,
-                      bordercolor: colors.border,
-                      font: { color: colors.text, family: 'Inter, system-ui, sans-serif', size: 13 },
-                      align: 'left',
-                    },
-                    annotations: [...computedAnnotations, ...(chartData.layout?.annotations || [])],
                   }}
                   chartType={chartType}
-                  colorOffset={colorOffset}
-                  config={{
-                    responsive: true,
-                    displayModeBar: false, // Completely hide Plotly controls for SaaS feel
-                    displaylogo: false,
-                  }}
                   style={{ width: '100%', height: '100%' }}
                   onPointClick={handlePointClick}
                   chartTitle={component.title}
+                  crossFilters={crossFilters}
                   crossFilter={crossFilter}
+                  chartFilterField={chartFilterField}
                 />
               )
+            ) : emptyUnderFilter ? (
+              <div className="flex flex-col items-center justify-center h-full space-y-2" role="status">
+                <div className="p-2 rounded-xl border" style={{ background: `${colors.text}08`, borderColor: colors.border }}>
+                  <Filter className="w-5 h-5" style={{ color: colors.textMuted }} />
+                </div>
+                <p className="text-xs font-medium" style={{ color: colors.textMuted }}>
+                  No data matches the active filter
+                </p>
+                {crossFilter && (
+                  <p className="text-[11px]" style={{ color: colors.textMuted }}>
+                    {crossFilters.length > 1
+                      ? `${crossFilters.length} active filters excluded everything here`
+                      : `${crossFilter.field ? `${crossFilter.field}: ` : ''}"${crossFilter.value}" excluded everything here`}
+                  </p>
+                )}
+              </div>
+            ) : bulkHydrating ? (
+              <div className="flex flex-col items-center justify-center h-full space-y-3" role="status">
+                <div className="p-3 rounded-xl border" style={{ background: `${colors.categorical[0]}10`, borderColor: `${colors.categorical[0]}20` }}>
+                  <Loader2 className="w-5 h-5 animate-spin" style={{ color: colors.categorical[0] }} />
+                </div>
+                <p className="text-xs font-medium" style={{ color: colors.textMuted }}>
+                  Preparing chart…
+                </p>
+              </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-full space-y-3" role="status">
                 <div className="p-3 rounded-xl border" style={{ background: `${colors.categorical[0]}10`, borderColor: `${colors.categorical[0]}20` }}>

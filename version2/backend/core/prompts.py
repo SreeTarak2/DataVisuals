@@ -16,7 +16,7 @@ import logging
 from typing import Dict, Any, List, Optional, Union, Literal
 from enum import Enum
 from pydantic import BaseModel, Field, ValidationError, field_validator
-from core.prompt_templates import SYSTEM_JSON_RULES, PERSONA, RULES
+from prompts._identity import SYSTEM_JSON_RULES, PERSONA, RULES
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +224,7 @@ class ChartItemV2(BaseModel):
         "line",
         "scatter",
         "pie",
+        "donut",
         "histogram",
         "box_plot",
         "area",
@@ -238,6 +239,15 @@ class ChartItemV2(BaseModel):
         "heatmap",
         "treemap",
         "sunburst",
+        "map",
+        "pictorial_bar",
+        "effect_scatter",
+        "graph",
+        "sankey",
+        "parallel",
+        "lines",
+        "tree",
+        "theme_river",
     ]
     x: str
     y: Optional[str] = None
@@ -731,6 +741,9 @@ class PromptFactory:
             f"Column names: {', '.join(self.columns[:15])}{'...' if len(self.columns) > 15 else ''}."
         )
 
+        # Also build a compact context that always includes sample values
+        self.compact_context = self._build_compact_context()
+
         self.rich_context = self._build_rich_context()
 
     def _build_rich_context(self) -> str:
@@ -748,6 +761,20 @@ class PromptFactory:
                 else ""
             )
             lines.append(f"• {name} ({typ}){money} — e.g. {sample}")
+        return "\n".join(lines)
+
+    def _build_compact_context(self) -> str:
+        """Compact context that always includes sample values.
+
+        Unlike tiny_context, this shows column names WITH sample values
+        to help the LLM understand what columns actually represent.
+        """
+        lines = [f"Dataset: {self.row_count:,} rows", "Columns:"]
+        for col in self.metadata.get("column_metadata", [])[:20]:
+            name = col["name"]
+            typ = col.get("type", "unknown")
+            sample = col.get("sample_value", "")
+            lines.append(f"• {name} ({typ}) — e.g. {sample}")
         return "\n".join(lines)
 
     def _needs_rich_context(self, message: str) -> bool:
@@ -810,11 +837,19 @@ class PromptFactory:
             "median",
             "skew",
             "between",
+            # Chart / visualization triggers
+            "chart",
+            "visual",
+            "plot",
+            "graph",
+            "multi-series",
+            "multiseries",
+            "series",
         ]
         return any(t in msg for t in triggers)
 
     def get_context(self, user_message: str = "") -> str:
-        return self.rich_context if self._needs_rich_context(user_message) else self.tiny_context
+        return self.rich_context if self._needs_rich_context(user_message) else self.compact_context
 
     def _format_conversation_history(self, messages: list, max_recent: int = 10) -> str:
         """
@@ -955,13 +990,19 @@ CHARTS (6–8 total, follow this exact structure):
   CHART TYPE SELECTION BY INTENT:
     Trend over time        → line, area, multi_line
     Compare categories     → bar, grouped_bar
-    Part of whole          → stacked_bar, stacked_area, pie (≤8 slices)
+    Part of whole          → stacked_bar, stacked_area, pie (≤8 slices), donut (≤8 slices)
     Distribution           → histogram, box_plot, violin
     Correlation            → scatter, bubble, heatmap
     Ranking                → bar (sorted), treemap
-    Anomaly detection      → scatter with outliers, box_plot
+    Anomaly detection      → scatter with outliers, box_plot, effect_scatter
     Multi-series analysis  → dual_axis (different scales), combo (bar+line),
                              small_multiples (>6 series), facet (4–6 series)
+    Geographic / Geo       → map (choropleth)
+    Flow / Relationships   → sankey, graph
+    Hierarchy / Tree       → tree, treemap, sunburst
+    Multi-dimension        → parallel
+    Pictorial / Icon       → pictorial_bar
+    Migration / Paths      → lines
 
   MULTI-SERIES CHART RULES:
     → Use dual_axis when series have vastly different scales (e.g., revenue $M vs rate %)
@@ -981,7 +1022,7 @@ CHARTS (6–8 total, follow this exact structure):
     diversity_role   → "TREND" | "COMPARISON" | "DISTRIBUTION" | "COMPOSITION" | "CORRELATION" | "ANOMALY" | "RANKING"
     position         → "hero" | "primary" | "supporting"
     span             → 4 | 2 | 1
-    type             → "bar" | "line" | "scatter" | "pie" | "histogram" | "box_plot" | "area" | "grouped_bar" | "stacked_bar" | "stacked_area" | "multi_line" | "dual_axis" | "combo" | "facet" | "small_multiples" | "heatmap" | "treemap" | "sunburst"
+    type             → "bar" | "line" | "scatter" | "pie" | "donut" | "histogram" | "box_plot" | "area" | "grouped_bar" | "stacked_bar" | "stacked_area" | "multi_line" | "dual_axis" | "combo" | "facet" | "small_multiples" | "heatmap" | "treemap" | "sunburst" | "map" | "pictorial_bar" | "effect_scatter" | "graph" | "sankey" | "parallel" | "lines" | "tree" | "theme_river"
     x                → EXACT column name
     y                → EXACT column name or null
     group_by         → EXACT column name to split into multiple series, or null.
@@ -1040,7 +1081,7 @@ Return ONLY valid JSON:
         "type": "chart",
         "title": "...", "span": 4,
         "config": {{
-          "chart_type": "bar | line | scatter | pie | histogram | box_plot | area | grouped_bar | stacked_bar | stacked_area | multi_line | dual_axis | combo | facet | small_multiples | heatmap | treemap | sunburst",
+          "chart_type": "bar | line | scatter | pie | donut | histogram | box_plot | area | grouped_bar | stacked_bar | stacked_area | multi_line | dual_axis | combo | facet | small_multiples | heatmap | treemap | sunburst | map | pictorial_bar | effect_scatter | graph | sankey | parallel | lines",
           "x": "exact_column_name", "y": "exact_column_name_or_null",
           "group_by": "low_card_categorical_column_or_null",
           "aggregation": "...", "sort_by": "value_desc", "limit": 15,
@@ -1106,12 +1147,12 @@ FINAL RULES:
             return self._quis_answer_prompt(json_base, **kwargs)
 
         if prompt_type == PromptType.DEEP_REASONING:
-            from core.prompt_templates import get_deep_reasoning_prompt
+            from prompts.sql import get_deep_reasoning_prompt
 
             return get_deep_reasoning_prompt(context, user_message)
 
         if prompt_type == PromptType.SELF_CRITIQUE:
-            from core.prompt_templates import get_self_critique_prompt
+            from prompts.sql import get_self_critique_prompt
 
             return get_self_critique_prompt(
                 kwargs.get("blueprint", ""), kwargs.get("data_summary", "")
@@ -1182,7 +1223,7 @@ OUTPUT:
     def _chart_recommendation_prompt(self, base: str, query: str):
         return f"""{base}
 USER_QUERY: {sanitize_text(query, 500)}
-    CHART_TYPES: bar, line, pie, scatter, histogram, heatmap, grouped_bar, stacked_bar, area, treemap, sunburst
+    CHART_TYPES: bar, line, pie, donut, scatter, histogram, heatmap, grouped_bar, stacked_bar, area, treemap, sunburst, map, pictorial_bar, effect_scatter, graph, sankey, parallel, lines, tree, theme_river
     TASK: Recommend best chart + full config.
     - Set group_by (string or list[string]) for segmentation (up to 12 unique values).
     - Use SUNBURST or TREEMAP for hierarchical/multi-level data (provide list for group_by).

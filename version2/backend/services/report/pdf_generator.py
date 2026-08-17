@@ -32,11 +32,16 @@ class ReportGenerator:
         self.template_path = self.template_dir / "report_template.html"
 
     async def generate(
-        self, dataset_id: str, include_charts: bool = True, preview: bool = False
+        self,
+        dataset_id: str,
+        user_id: str,
+        include_charts: bool = True,
+        preview: bool = False,
+        workspace_id: Optional[str] = None,
     ) -> bytes:
         logger.info(f"Generating PDF report for dataset: {dataset_id}")
 
-        dataset = await self._fetch_dataset_data(dataset_id)
+        dataset = await self._fetch_dataset_data(dataset_id, user_id, workspace_id)
         if not dataset:
             raise ValueError(f"Dataset not found: {dataset_id}")
 
@@ -53,14 +58,20 @@ class ReportGenerator:
     #  DATA FETCHING
     # ──────────────────────────────────────────────────────────────────
 
-    async def _fetch_dataset_data(self, dataset_id: str) -> Optional[Dict]:
+    async def _fetch_dataset_data(
+        self,
+        dataset_id: str,
+        user_id: str,
+        workspace_id: Optional[str] = None,
+    ) -> Optional[Dict]:
         try:
-            db = get_database()
-            try:
-                dataset = await db.uploads.find_one({"_id": ObjectId(dataset_id)})
-            except Exception:
-                dataset = await db.uploads.find_one({"_id": dataset_id})
-            return dataset
+            from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+
+            # Strictly workspace-scoped read — the PDF generator must never
+            # fetch a dataset by id alone (that would bypass tenant isolation).
+            return await enhanced_dataset_service.get_dataset_doc(
+                dataset_id, user_id, workspace_id=workspace_id
+            )
         except Exception as e:
             logger.error(f"Error fetching dataset: {e}")
             return None
@@ -973,9 +984,17 @@ class ReportGenerator:
 
 
 async def generate_pdf_report(
-    dataset_id: str, include_charts: bool = True, preview: bool = False
+    dataset_id: str,
+    user_id: str,
+    include_charts: bool = True,
+    preview: bool = False,
+    workspace_id: Optional[str] = None,
 ) -> bytes:
     generator = ReportGenerator()
     return await generator.generate(
-        dataset_id=dataset_id, include_charts=include_charts, preview=preview
+        dataset_id=dataset_id,
+        user_id=user_id,
+        include_charts=include_charts,
+        preview=preview,
+        workspace_id=workspace_id,
     )

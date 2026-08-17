@@ -180,10 +180,7 @@ def classify_sql_error(error_msg: str, sql: str = "") -> SQLErrorClass:
             )
 
     # E-04: UNION column count mismatch
-    if (
-        "set operations can only apply" in msg_lower
-        or "same number of result columns" in msg_lower
-    ):
+    if "set operations can only apply" in msg_lower or "same number of result columns" in msg_lower:
         return SQLErrorClass(
             error_type=SQLErrorType.UNION_MISMATCH,
             original_error=error_msg,
@@ -283,9 +280,7 @@ def repair_truncated_sql(sql: str) -> str:
     gap = open_count - close_count
     if gap > 0:
         repaired += ")" * gap
-        logger.info(
-            f"[repair_truncated] Added {gap} closing parenthesis(es) to incomplete SQL"
-        )
+        logger.info(f"[repair_truncated] Added {gap} closing parenthesis(es) to incomplete SQL")
 
     # Close unclosed string literals (single quote count must be even)
     if repaired.count("'") % 2 != 0:
@@ -328,9 +323,7 @@ def repair_missing_alias(sql: str) -> str:
         fn_match = re.match(r"(\w+)\s*\(", expr)
         base = fn_match.group(1).lower() if fn_match else "col"
         alias = f"{base}_{alias_counter[0]}"
-        logger.info(
-            f"[repair_missing_alias] Fixed 'AS)' → 'AS {alias})' for expr: {expr[:40]}"
-        )
+        logger.info(f"[repair_missing_alias] Fixed 'AS)' → 'AS {alias})' for expr: {expr[:40]}")
         return f"{expr} AS {alias})"
 
     repaired = re.sub(
@@ -378,19 +371,11 @@ def repair_union_mismatch(sql: str, columns: list[str]) -> str:
     logger.info("[repair_union_mismatch] UNION detected — attempting fallback rewrite")
 
     cat_col = next(
-        (
-            c
-            for c in columns
-            if not any(c.lower().endswith(s) for s in ("_id", "_key", "_uuid"))
-        ),
+        (c for c in columns if not any(c.lower().endswith(s) for s in ("_id", "_key", "_uuid"))),
         None,
     )
     num_col = next(
-        (
-            c
-            for c in columns
-            if c != cat_col and not c.lower().endswith(("_id", "_key", "_uuid"))
-        ),
+        (c for c in columns if c != cat_col and not c.lower().endswith(("_id", "_key", "_uuid"))),
         None,
     )
 
@@ -403,14 +388,11 @@ def repair_union_mismatch(sql: str, columns: list[str]) -> str:
             f"LIMIT 20;"
         )
         logger.info(
-            f"[repair_union_mismatch] Rewrote UNION as simple GROUP BY on "
-            f"({cat_col}, {num_col})"
+            f"[repair_union_mismatch] Rewrote UNION as simple GROUP BY on ({cat_col}, {num_col})"
         )
         return fallback
 
-    logger.warning(
-        "[repair_union_mismatch] Could not identify suitable columns for fallback"
-    )
+    logger.warning("[repair_union_mismatch] Could not identify suitable columns for fallback")
     return sql
 
 
@@ -546,12 +528,8 @@ class SQLRepairAgent:
         columns = extract_columns_from_df(df)
         error_class = classify_sql_error(error_msg, sql)
 
-        attempt_log.append(
-            f"Classified error as {error_class.error_type.value}: {error_msg[:120]}"
-        )
-        logger.info(
-            f"[SQLRepairAgent] Error classified: {error_class.error_type.value}"
-        )
+        attempt_log.append(f"Classified error as {error_class.error_type.value}: {error_msg[:120]}")
+        logger.info(f"[SQLRepairAgent] Error classified: {error_class.error_type.value}")
 
         # Rule-based repair (no LLM cost)
         if error_class.can_rule_repair:
@@ -572,9 +550,7 @@ class SQLRepairAgent:
                     attempt_log.append(
                         f"Rule repair produced invalid SQL: {validation_error} — escalating to LLM"
                     )
-                    logger.warning(
-                        f"[SQLRepairAgent] Rule repair invalid: {validation_error}"
-                    )
+                    logger.warning(f"[SQLRepairAgent] Rule repair invalid: {validation_error}")
 
         # LLM-guided repair
         for llm_attempt in range(1, self._max_repair_attempts + 1):
@@ -602,9 +578,7 @@ class SQLRepairAgent:
 
                 if is_valid:
                     attempt_log.append(f"LLM repair attempt {llm_attempt} succeeded")
-                    logger.info(
-                        f"[SQLRepairAgent] LLM repair succeeded on attempt {llm_attempt}"
-                    )
+                    logger.info(f"[SQLRepairAgent] LLM repair succeeded on attempt {llm_attempt}")
                     return RepairResult(
                         sql=repaired_sql,
                         was_repaired=True,
@@ -613,9 +587,7 @@ class SQLRepairAgent:
                         attempt_log=attempt_log,
                     )
                 else:
-                    attempt_log.append(
-                        f"LLM repair {llm_attempt} invalid: {validation_error}"
-                    )
+                    attempt_log.append(f"LLM repair {llm_attempt} invalid: {validation_error}")
                     logger.warning(
                         f"[SQLRepairAgent] LLM repair {llm_attempt} invalid: {validation_error}"
                     )
@@ -634,8 +606,7 @@ class SQLRepairAgent:
             f"using simplified fallback SQL"
         )
         logger.warning(
-            f"[SQLRepairAgent] All repairs failed for error: {error_msg[:80]}. "
-            f"Using fallback SQL."
+            f"[SQLRepairAgent] All repairs failed for error: {error_msg[:80]}. Using fallback SQL."
         )
         return RepairResult(
             sql=fallback,
@@ -694,9 +665,7 @@ class SQLRepairAgent:
                 f"Unbalanced parentheses: {sql.count('(')} open vs {sql.count(')')} close",
             )
 
-        if re.search(
-            r"\bAS\s+(?:FROM|WHERE|GROUP|ORDER|LIMIT|;?\s*$)", sql, re.IGNORECASE
-        ):
+        if re.search(r"\bAS\s+(?:FROM|WHERE|GROUP|ORDER|LIMIT|;?\s*$)", sql, re.IGNORECASE):
             return False, "Dangling AS keyword with no alias name"
 
         return True, ""
@@ -710,10 +679,11 @@ class SQLRepairAgent:
             ),
             columns[0] if columns else "rowid",
         )
+        quoted = f'"{cat_col}"' if " " in cat_col else cat_col
         fallback = (
-            f"SELECT {cat_col}, COUNT(*) AS row_count\n"
+            f"SELECT {quoted}, COUNT(*) AS row_count\n"
             f"FROM data\n"
-            f"GROUP BY {cat_col}\n"
+            f"GROUP BY {quoted}\n"
             f"ORDER BY row_count DESC\n"
             f"LIMIT 20;"
         )
@@ -753,9 +723,9 @@ if __name__ == "__main__":
         extract_columns_from_df,
         df,
     )
-    assert (
-        cols is not None and "record_id" not in cols and "constant_col" not in cols
-    ), f"Expected ID/constant cols removed, got: {cols}"
+    assert cols is not None and "record_id" not in cols and "constant_col" not in cols, (
+        f"Expected ID/constant cols removed, got: {cols}"
+    )
     print(f"    Columns: {cols}")
 
     ec = _run_test(
@@ -793,12 +763,8 @@ if __name__ == "__main__":
     print(f"    Repaired: {fixed}")
 
     bad_alias_sql = "SELECT country, COUNT(*) AS) FROM data GROUP BY country;"
-    fixed = _run_test(
-        "repair_missing_alias fixes AS) pattern", repair_missing_alias, bad_alias_sql
-    )
-    assert fixed is not None and "AS)" not in fixed, (
-        f"Expected AS) to be fixed, got: {fixed}"
-    )
+    fixed = _run_test("repair_missing_alias fixes AS) pattern", repair_missing_alias, bad_alias_sql)
+    assert fixed is not None and "AS)" not in fixed, f"Expected AS) to be fixed, got: {fixed}"
     print(f"    Repaired: {fixed}")
 
     union_sql = (

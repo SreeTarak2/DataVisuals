@@ -1,6 +1,6 @@
 import math
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import polars as pl
@@ -10,6 +10,19 @@ logger = logging.getLogger(__name__)
 
 
 def convert_types_for_json(obj: Any) -> Any:
+    """
+    Recursively convert a nested structure to JSON-safe types.
+
+    Handles:
+    - dict / list → recursive walk
+    - datetime / Polars temporal → ISO string
+    - ObjectId → string
+    - numpy scalars (int64, float64, bool_) → Python native types via .item()
+    - numpy ndarray → Python list
+    - float with NaN / Inf → None (MongoDB rejects non-finite floats)
+    - Polars Series → Python list
+    Everything else is returned as-is.
+    """
     if isinstance(obj, dict):
         return {k: convert_types_for_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -18,12 +31,28 @@ def convert_types_for_json(obj: Any) -> Any:
         return obj.isoformat()
     elif isinstance(obj, ObjectId):
         return str(obj)
-    elif hasattr(obj, "item"):
-        return obj.item()
     elif isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
         return obj
+    # numpy scalar types (int64, float64, bool_, etc.) — convert to Python native
+    elif hasattr(obj, "item") and callable(obj.item):
+        try:
+            return obj.item()
+        except Exception:
+            pass
+    # numpy ndarray → Python list
+    elif hasattr(obj, "tolist") and callable(obj.tolist):
+        try:
+            return obj.tolist()
+        except Exception:
+            pass
+    # Polars Series — extract to list
+    elif hasattr(obj, "to_list") and callable(obj.to_list):
+        try:
+            return obj.to_list()
+        except Exception:
+            pass
     return obj
 
 
@@ -41,7 +70,7 @@ def update_progress(
     update_doc = {
         "processing_status": stage or status.lower().replace(" ", "_"),
         "processing_progress": progress,
-        "updated_at": datetime.utcnow(),
+        "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
     }
 
     datasets_collection.update_one({"_id": dataset_id}, {"$set": update_doc})

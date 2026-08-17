@@ -10,13 +10,18 @@ Deterministically classifies columns into:
 Every classification produces a confidence score.
 Low-confidence items are flagged as needs_review.
 No LLM calls.
+
+After deterministic classification, the Metric Correction Store is checked:
+if a user has submitted a correction for this column, the corrected role
+overrides the deterministic result. This gives users governed control
+over the semantic layer.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
+from typing import Dict, Optional
 
 from services.profiling.models import RawColumnProfile
 
@@ -32,19 +37,19 @@ logger = logging.getLogger(__name__)
 
 # ── Column Name Patterns ──────────────────────────────────────────────────────
 
-_ID_RE = re.compile(
-    r"\b(id|uuid|guid|key|hash|token|code|zip|postal|phone|ip|sku|barcode)\b", re.I
-)
+_ID_RE = re.compile(r"\b(id|uuid|guid|key|hash|token|code|zip|postal|phone|ip|sku|barcode)\b", re.I)
 _TIME_RE = re.compile(
     r"\b(date|time|year|month|day|created|updated|timestamp|period|week|quarter)\b", re.I
 )
 _RATE_RE = re.compile(
     r"\b(rate|ratio|percent|pct|margin|efficiency|factor|score|index|grade|"
-    r"accuracy|precision|recall|auc|ctr)\b", re.I
+    r"accuracy|precision|recall|auc|ctr)\b",
+    re.I,
 )
 _COUNT_RE = re.compile(
     r"\b(count|num|number|qty|quantity|units|items|orders|transactions|"
-    r"sessions|visits|clicks|impressions|requests)\b", re.I
+    r"sessions|visits|clicks|impressions|requests)\b",
+    re.I,
 )
 _ENTITY_ID_SUFFIX = re.compile(r"(_id|_key|_uuid|_guid)$", re.I)
 
@@ -52,36 +57,56 @@ _ENTITY_ID_SUFFIX = re.compile(r"(_id|_key|_uuid|_guid)$", re.I)
 # ── Business Category → Polarity Mapping ──────────────────────────────────────
 
 _CATEGORY_PATTERNS: list[tuple[BusinessCategory, str, str]] = [
-    (BusinessCategory.REVENUE,
-     r"\b(revenue|sales|gmv|income|earnings|gross|mrr|arr|net_sales|turnover|proceeds|receipts)\b",
-     "higher_is_better"),
-    (BusinessCategory.COST,
-     r"\b(cost|expense|opex|capex|cogs|spend|expenditure|loss|burn|overhead|tax|fee|charge|penalty)\b",
-     "lower_is_better"),
-    (BusinessCategory.VOLUME,
-     r"\b(orders|transactions|purchases|bookings|units|items|shipments|deliveries|installs)\b",
-     "higher_is_better"),
-    (BusinessCategory.USERS,
-     r"\b(users|customers|subscribers|members|accounts|clients|visitors|leads|prospects|buyers)\b",
-     "higher_is_better"),
-    (BusinessCategory.RATE_METRIC,
-     r"\b(rate|ratio|percent|pct|margin|conversion|retention|satisfaction|engagement|utilization)\b",
-     "higher_is_better"),
-    (BusinessCategory.CHURN_RISK,
-     r"\b(churn|attrition|cancellation|dropout|refund|return|complaint|defect|error|failure|bug|issue)\b",
-     "lower_is_better"),
-    (BusinessCategory.PRICE,
-     r"\b(price|amount|value|aov|arpu|arpc|ltv|cac|worth|bid|ask)\b",
-     "higher_is_better"),
-    (BusinessCategory.PERFORMANCE,
-     r"\b(score|rating|nps|csat|satisfaction|quality|performance|rank|grade)\b",
-     "higher_is_better"),
-    (BusinessCategory.DURATION,
-     r"\b(duration|latency|age|tenure|days|hours|minutes|seconds|ms|response_time|wait_time|cycle_time)\b",
-     "lower_is_better"),
-    (BusinessCategory.QUANTITY,
-     r"\b(count|num|qty|quantity|volume|capacity|inventory|stock|supply)\b",
-     "higher_is_better"),
+    (
+        BusinessCategory.REVENUE,
+        r"\b(revenue|sales|gmv|income|earnings|gross|mrr|arr|net_sales|turnover|proceeds|receipts)\b",
+        "higher_is_better",
+    ),
+    (
+        BusinessCategory.COST,
+        r"\b(cost|expense|opex|capex|cogs|spend|expenditure|loss|burn|overhead|tax|fee|charge|penalty)\b",
+        "lower_is_better",
+    ),
+    (
+        BusinessCategory.VOLUME,
+        r"\b(orders|transactions|purchases|bookings|units|items|shipments|deliveries|installs)\b",
+        "higher_is_better",
+    ),
+    (
+        BusinessCategory.USERS,
+        r"\b(users|customers|subscribers|members|accounts|clients|visitors|leads|prospects|buyers)\b",
+        "higher_is_better",
+    ),
+    (
+        BusinessCategory.RATE_METRIC,
+        r"\b(rate|ratio|percent|pct|margin|conversion|retention|satisfaction|engagement|utilization)\b",
+        "higher_is_better",
+    ),
+    (
+        BusinessCategory.CHURN_RISK,
+        r"\b(churn|attrition|cancellation|dropout|refund|return|complaint|defect|error|failure|bug|issue)\b",
+        "lower_is_better",
+    ),
+    (
+        BusinessCategory.PRICE,
+        r"\b(price|amount|value|aov|arpu|arpc|ltv|cac|worth|bid|ask)\b",
+        "higher_is_better",
+    ),
+    (
+        BusinessCategory.PERFORMANCE,
+        r"\b(score|rating|nps|csat|satisfaction|quality|performance|rank|grade)\b",
+        "higher_is_better",
+    ),
+    (
+        BusinessCategory.DURATION,
+        r"\b(duration|latency|age|tenure|days|hours|minutes|seconds|ms|response_time|wait_time|cycle_time)\b",
+        "lower_is_better",
+    ),
+    (
+        BusinessCategory.QUANTITY,
+        r"\b(count|num|qty|quantity|volume|capacity|inventory|stock|supply)\b",
+        "higher_is_better",
+    ),
 ]
 
 
@@ -89,15 +114,26 @@ class SemanticClassifier:
     """Deterministic column role classifier.
 
     Takes raw profiling data (RawColumnProfile) and adds semantic meaning.
+    Supports optional Metric Correction Store overrides.
     """
 
     def classify(
-        self, profile: RawColumnProfile
+        self,
+        profile: RawColumnProfile,
+        corrections: Optional[Dict[str, Any]] = None,
     ) -> ColumnIntelligence:
         """Classify a single column into semantic roles.
 
+        After deterministic classification, checks the corrections dict
+        (from MetricCorrectionStore) for user overrides. If a correction
+        exists for this column, the corrected role overrides the deterministic
+        result.
+
         Args:
             profile: Raw column profile from the profiling layer.
+            corrections: Optional dict of {column_name: correction_data}
+                from MetricCorrectionStore.get_corrections(). If provided,
+                user overrides are applied.
 
         Returns:
             ColumnIntelligence with all semantic classifications.
@@ -114,15 +150,23 @@ class SemanticClassifier:
 
         # ── 1. Semantic Role ──
         semantic_role = self._classify_semantic_role(
-            profile.name, profile.dtype, norm, is_numeric,
-            card_ratio, n_rows, card.unique_count,
+            profile.name,
+            profile.dtype,
+            norm,
+            is_numeric,
+            card_ratio,
+            n_rows,
+            card.unique_count,
             is_bounded_01=is_bounded_01,
             is_integer_valued=is_integer_valued,
         )
 
         # ── 2. Behavioral Role ──
         behavioral_role = self._classify_behavioral_role(
-            profile.name, norm, is_numeric, semantic_role,
+            profile.name,
+            norm,
+            is_numeric,
+            semantic_role,
             card_ratio,
         )
 
@@ -130,9 +174,65 @@ class SemanticClassifier:
         category, polarity = self._classify_business_category(norm)
 
         # ── 4. Confidence ──
-        confidence = self._compute_confidence(
-            semantic_role, behavioral_role, card_ratio, profile
+        confidence = self._compute_confidence(semantic_role, behavioral_role, card_ratio, profile)
+        needs_review = confidence < 0.7
+
+        result = ColumnIntelligence(
+            name=profile.name,
+            semantic_role=semantic_role,
+            behavioral_role=behavioral_role,
+            business_category=category,
+            polarity=polarity,
+            classification_confidence=round(confidence, 4),
+            needs_review=needs_review,
         )
+
+        # ── 5. Apply Metric Correction Store overrides ──
+        if corrections and profile.name in corrections:
+            corr = corrections[profile.name]
+            if corr.corrected_role:
+                from .models import SemanticRole as SR
+
+                try:
+                    result.semantic_role = SR(corr.corrected_role)
+                except (ValueError, TypeError):
+                    logger.warning(
+                        f"[SemanticClassifier] Invalid corrected_role '{corr.corrected_role}' "
+                        f"for column '{profile.name}'"
+                    )
+            if corr.corrected_behavioral_role:
+                from .models import BehavioralRole as BR
+
+                try:
+                    result.behavioral_role = BR(corr.corrected_behavioral_role)
+                except (ValueError, TypeError):
+                    logger.warning(
+                        f"[SemanticClassifier] Invalid corrected_behavioral_role "
+                        f"'{corr.corrected_behavioral_role}' for column '{profile.name}'"
+                    )
+            if corr.aggregation_overrides:
+                for key, val in corr.aggregation_overrides.items():
+                    if hasattr(result.aggregation_suitability, key):
+                        setattr(result.aggregation_suitability, key, val)
+            result.classification_confidence = 0.99
+            result.needs_review = False
+
+        return result
+
+        # ── 2. Behavioral Role ──
+        behavioral_role = self._classify_behavioral_role(
+            profile.name,
+            norm,
+            is_numeric,
+            semantic_role,
+            card_ratio,
+        )
+
+        # ── 3. Business Category + Polarity ──
+        category, polarity = self._classify_business_category(norm)
+
+        # ── 4. Confidence ──
+        confidence = self._compute_confidence(semantic_role, behavioral_role, card_ratio, profile)
         needs_review = confidence < 0.7
 
         return ColumnIntelligence(
@@ -229,7 +329,11 @@ class SemanticClassifier:
                 return BehavioralRole.POSTAL_CODE
             # Check for status/boolean
             if re.search(r"\b^is_|^has_|_flag$|_yn$|(active|enabled|status)\b", name.lower()):
-                return BehavioralRole.STATUS if "status" in name.lower() else BehavioralRole.BOOLEAN_FLAG
+                return (
+                    BehavioralRole.STATUS
+                    if "status" in name.lower()
+                    else BehavioralRole.BOOLEAN_FLAG
+                )
             return BehavioralRole.CATEGORY
 
         if semantic_role == SemanticRole.RATE:
@@ -250,9 +354,7 @@ class SemanticClassifier:
 
         return BehavioralRole.UNKNOWN
 
-    def _classify_business_category(
-        self, norm: str
-    ) -> tuple[BusinessCategory, str]:
+    def _classify_business_category(self, norm: str) -> tuple[BusinessCategory, str]:
         """Classify business category and polarity from column name."""
         for cat, pattern, polarity in _CATEGORY_PATTERNS:
             if re.search(pattern, norm, re.I):

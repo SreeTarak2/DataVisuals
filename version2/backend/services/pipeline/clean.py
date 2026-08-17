@@ -5,7 +5,41 @@ import polars as pl
 logger = logging.getLogger(__name__)
 
 
-def clean_dataframe(df: pl.LazyFrame, schema: dict) -> tuple[pl.DataFrame, int, int]:
+# Sentinel values that get replaced with null during cleaning.
+# These cover the common null-indicating strings across CSV/Excel exports.
+_NULL_SENTINELS_FOR_AUDIT: list[str] = [
+    "",
+    "NA",
+    "N/A",
+    "n/a",
+    "null",
+    "NULL",
+    "None",
+    "none",
+    "NONE",
+    "NaN",
+    "nan",
+    "#N/A",
+    "-",
+    "--",
+    "---",
+    "inf",
+    "-inf",
+    "Inf",
+    "-Inf",
+    "True",
+    "False",
+    "TRUE",
+    "FALSE",
+]
+
+
+def clean_dataframe(
+    df: pl.LazyFrame,
+    schema: dict,
+    deduplicate: bool = True,
+    track_sentinels: bool = True,
+) -> tuple[pl.DataFrame, dict[str, dict[str, int]]]:
     string_columns = [
         name for name, dtype in schema.items() if dtype in (pl.Utf8, pl.String)
     ]
@@ -26,6 +60,33 @@ def clean_dataframe(df: pl.LazyFrame, schema: dict) -> tuple[pl.DataFrame, int, 
             pl.UInt8,
         )
     ]
+
+    # ── Audit: count null sentinel values BEFORE replacement ─────────────
+    null_sentinel_audit: dict[str, dict[str, int]] = {}
+    if string_columns and track_sentinels:
+        # Build one lazy query that counts exact matches for every sentinel
+        # in every string column — single scan, single collect.
+        count_exprs = []
+        name_to_col_sentinel: dict[str, tuple[str, str]] = {}
+        counter = 0
+        for col in string_columns:
+            for sentinel in _NULL_SENTINELS_FOR_AUDIT:
+                alias = f"__sa_{counter}"
+                count_exprs.append(
+                    pl.col(col).eq(pl.lit(sentinel)).sum().alias(alias)
+                )
+                name_to_col_sentinel[alias] = (col, sentinel)
+                counter += 1
+
+        if count_exprs:
+            try:
+                audit_row = df.select(count_exprs).collect()
+                for alias, (col, sentinel) in name_to_col_sentinel.items():
+                    count = audit_row[alias][0]
+                    if count > 0:
+                        null_sentinel_audit.setdefault(col, {})[sentinel] = int(count)
+            except Exception as e:
+                logger.debug("[Clean] Null sentinel audit failed: %s", e)
 
     if string_columns:
         df = df.with_columns(
@@ -68,18 +129,37 @@ def clean_dataframe(df: pl.LazyFrame, schema: dict) -> tuple[pl.DataFrame, int, 
         df = df.rename(rename_dict)
         logger.info(f"✓ Renamed {len(rename_dict)} duplicate columns")
 
-    df = df.unique()
+    if deduplicate:
+        df = df.unique()
+        logger.info("✓ Row deduplication applied")
+    else:
+        logger.info("  Row deduplication skipped (opt-in — use UI toggle to enable)")
 
     try:
         df_eager = df.collect(streaming=True)
     except Exception:
         df_eager = df.collect()
 
-    return df_eager
+    # Log audit summary
+    if null_sentinel_audit:
+        total_sentinel_cells = sum(
+            sum(c.values()) for c in null_sentinel_audit.values()
+        )
+        sentinel_cols = len(null_sentinel_audit)
+        logger.info(
+            "[Clean] Null sentinel audit: %d sentinel-valued cells in %d columns",
+            total_sentinel_cells,
+            sentinel_cols,
+        )
+
+    return df_eager, null_sentinel_audit
 
 
 def calculate_quality_metrics(
-    column_metadata: list, original_rows: int, duplicates_removed: int
+    column_metadata: list,
+    original_rows: int,
+    duplicates_removed: int,
+    deduplication_applied: bool = True,
 ) -> dict:
     total_nulls = sum(col.get("null_count", 0) for col in column_metadata)
     total_cells = original_rows * len(column_metadata) if column_metadata else 0
@@ -92,6 +172,7 @@ def calculate_quality_metrics(
         if original_rows > 0
         else 100.0,
         "duplicates_removed": duplicates_removed,
+        "deduplication_applied": deduplication_applied,
         "original_rows": original_rows,
         "cleaned_rows": original_rows - duplicates_removed,
         "data_cleaning_applied": True,

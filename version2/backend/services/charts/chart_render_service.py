@@ -20,11 +20,19 @@ import logging
 import asyncio
 import math
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import polars as pl
 
 from services.charts.render import ChartRenderer
-from services.charts.hydrate import hydrate_chart, HydrationError
+from services.charts.hydrate import (
+    hydrate_chart,
+    HydrationError,
+    aggregate_sampling_metadata,
+)
+from services.charts.semantic_types import (
+    infer_semantic_types,
+    apply_auto_layout,
+)
 from db.schemas_dashboard import ChartConfig, ChartType, ComponentType
 from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 
@@ -215,6 +223,379 @@ class ChartRenderService:
             logger.warning(f"Point intelligence computation failed (non-fatal): {e}")
             return {}
 
+    def _compute_and_attach_overlays(
+        self,
+        chart_payload: Dict[str, Any],
+        chart_config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Compute statistical overlays (trend lines, reference lines, confidence
+        bands, outlier markers) and attach them directly to the chart payload.
+
+        Injects:
+        - layout.shapes: reference/trend lines and confidence bands
+        - layout.annotations: labels for overlays + outlier markers
+        - traces (appended): trend line as an overlay trace
+
+        Returns the modified payload.
+        """
+        try:
+            traces = chart_payload.get("traces", [])
+            layout = chart_payload.get("layout", {})
+            point_intel = chart_payload.get("point_intelligence", {})
+
+            if not traces:
+                return chart_payload
+
+            # ── Identify the primary data trace (skip overlay/aux traces) ──
+            primary = None
+            for t in traces:
+                ttype = (t.get("type") or "").lower()
+                # Skip pie/donut, heatmap, and overlay fill traces
+                if ttype in ("pie", "heatmap", "choropleth"):
+                    continue
+                if t.get("fill") == "tozeroy" and t.get("showlegend") is False:
+                    continue  # Skip the fill-underlay trace added by PlotlyRenderer
+                if t.get("x") and t.get("y") and len(t["x"]) >= 2:
+                    primary = t
+                    break
+
+            if not primary or not primary.get("x") or not primary.get("y"):
+                # Fallback: use any trace with x/y data
+                for t in traces:
+                    if t.get("x") and t.get("y"):
+                        primary = t
+                        break
+
+            if not primary:
+                return chart_payload
+
+            x_arr = primary.get("x", [])
+            y_arr = [v for v in primary.get("y", []) if isinstance(v, (int, float))]
+
+            if len(x_arr) < 2 or len(y_arr) < 2:
+                return chart_payload
+
+            # Ensure same length
+            n = min(len(x_arr), len(y_arr))
+            x_arr = x_arr[:n]
+            y_arr = y_arr[:n]
+
+            shapes = list(layout.get("shapes", []))
+            annotations = list(layout.get("annotations", []))
+            overlay_traces = []
+
+            chart_type = chart_config.get("chart_type", "").lower()
+
+            stats = point_intel.get("stats", {})
+            points_data = point_intel.get("points", {})
+
+            # ────────────────────────────────────────────────────────────────
+            # 1. MEAN & MEDIAN REFERENCE LINES
+            # ────────────────────────────────────────────────────────────────
+            y_values = y_arr
+            if len(y_values) >= 3:
+                y_sorted = sorted(y_values)
+                mean_val = sum(y_values) / len(y_values)
+                median_val = (
+                    y_sorted[len(y_sorted) // 2]
+                    if len(y_sorted) % 2
+                    else (y_sorted[len(y_sorted) // 2 - 1] + y_sorted[len(y_sorted) // 2]) / 2
+                )
+
+                # Use stats from point_intelligence if available (more precise)
+                if stats:
+                    mean_val = stats.get("mean", mean_val)
+                    median_val = stats.get("median", median_val)
+
+                def _fmt_label(v):
+                    if abs(v) >= 1e9:
+                        return f"{v/1e9:.1f}B"
+                    if abs(v) >= 1e6:
+                        return f"{v/1e6:.1f}M"
+                    if abs(v) >= 1e3:
+                        return f"{v/1e3:.1f}K"
+                    return f"{v:.1f}"
+
+                # Mean line (solid, lower opacity)
+                shapes.append({
+                    "type": "line",
+                    "xref": "paper",
+                    "x0": 0,
+                    "x1": 1,
+                    "y0": mean_val,
+                    "y1": mean_val,
+                    "line": {
+                        "color": "rgba(59, 130, 246, 0.5)",
+                        "width": 1.5,
+                        "dash": "dash",
+                    },
+                })
+                annotations.append({
+                    "xref": "paper",
+                    "x": 1.02,
+                    "yref": "y",
+                    "y": mean_val,
+                    "text": f"Mean: {_fmt_label(mean_val)}",
+                    "showarrow": False,
+                    "font": {"size": 10, "color": "rgba(59, 130, 246, 0.7)"},
+                    "xanchor": "left",
+                    "bgcolor": "rgba(59, 130, 246, 0.08)",
+                    "borderpad": 2,
+                })
+
+                # Median line only if significantly different from mean (>5%)
+                if abs(mean_val - median_val) / (abs(mean_val) or 1) > 0.05:
+                    shapes.append({
+                        "type": "line",
+                        "xref": "paper",
+                        "x0": 0,
+                        "x1": 1,
+                        "y0": median_val,
+                        "y1": median_val,
+                        "line": {
+                            "color": "rgba(251, 146, 60, 0.5)",
+                            "width": 1,
+                            "dash": "dot",
+                        },
+                    })
+                    annotations.append({
+                        "xref": "paper",
+                        "x": 1.02,
+                        "yref": "y",
+                        "y": median_val,
+                        "text": f"Median: {_fmt_label(median_val)}",
+                        "showarrow": False,
+                        "font": {"size": 10, "color": "rgba(251, 146, 60, 0.7)"},
+                        "xanchor": "left",
+                        "bgcolor": "rgba(251, 146, 60, 0.08)",
+                        "borderpad": 2,
+                    })
+
+                # ── IQR band (Q1-Q3 range) for context ──
+                q1 = stats.get("q1", y_sorted[len(y_sorted) // 4] if y_sorted else 0)
+                q3 = stats.get("q3", y_sorted[3 * len(y_sorted) // 4] if y_sorted else 0)
+                if q1 < q3:
+                    shapes.append({
+                        "type": "rect",
+                        "xref": "paper",
+                        "x0": 0,
+                        "x1": 1,
+                        "y0": q1,
+                        "y1": q3,
+                        "fillcolor": "rgba(16, 185, 129, 0.04)",
+                        "line": {"width": 0},
+                        "layer": "below",
+                    })
+
+            # ────────────────────────────────────────────────────────────────
+            # 2. TREND LINE (Linear Regression)
+            # ────────────────────────────────────────────────────────────────
+            # Only for line, bar, scatter, area charts with enough points
+            if chart_type in ("line", "bar", "scatter", "area", "multi_line") and len(y_values) >= 4:
+                try:
+                    import numpy as np
+
+                    # Use numeric indices for x if x is categorical
+                    numeric_indices = list(range(len(y_values)))
+                    x_numeric = [
+                        float(v) if isinstance(v, (int, float)) else i
+                        for i, v in enumerate(x_arr)
+                    ]
+                    if all(v == 0 for v in x_numeric):
+                        x_numeric = numeric_indices
+
+                    x_arr_np = np.array(x_numeric, dtype=float)
+                    y_arr_np = np.array(y_values, dtype=float)
+
+                    # Linear regression: y = slope * x + intercept
+                    A = np.vstack([x_arr_np, np.ones_like(x_arr_np)]).T
+                    slope, intercept = np.linalg.lstsq(A, y_arr_np, rcond=None)[0]
+
+                    # R-squared
+                    y_pred = slope * x_arr_np + intercept
+                    ss_res = np.sum((y_arr_np - y_pred) ** 2)
+                    ss_tot = np.sum((y_arr_np - np.mean(y_arr_np)) ** 2)
+                    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+                    # Only show trend if reasonably predictive (R² > 0.15 or slope is notable)
+                    if r_squared > 0.15 or abs(slope / (np.mean(y_arr_np) or 1)) > 0.05:
+                        trend_y = slope * x_arr_np + intercept
+
+                        # Build categorical x labels for trend trace
+                        trend_trace = {
+                            "type": "scatter",
+                            "mode": "lines",
+                            "x": list(x_arr),
+                            "y": list(trend_y),
+                            "line": {
+                                "color": "rgba(139, 92, 246, 0.6)",
+                                "width": 2,
+                                "dash": "dot",
+                            },
+                            "name": f"Trend",
+                            "showlegend": True,
+                            "hoverinfo": "skip",
+                            "legendgroup": "trend",
+                        }
+                        overlay_traces.append(trend_trace)
+
+                        # Confidence band (±1.96 * SE around prediction)
+                        if len(y_values) >= 6 and r_squared > 0.3:
+                            n_points = len(y_arr_np)
+                            se = np.sqrt(ss_res / max(n_points - 2, 1))
+                            x_mean = np.mean(x_arr_np)
+                            x_var = np.sum((x_arr_np - x_mean) ** 2)
+
+                            ci = []
+                            for xi in x_arr_np:
+                                se_fit = se * np.sqrt(
+                                    1 / n_points + (xi - x_mean) ** 2 / max(x_var, 1e-10)
+                                )
+                                ci.append(1.96 * se_fit)
+
+                            y_upper = [y_pred[i] + ci[i] for i in range(n_points)]
+                            y_lower = [y_pred[i] - ci[i] for i in range(n_points)]
+
+                            # Build confidence band as filled polygon
+                            band_x = list(x_arr) + list(reversed(list(x_arr)))
+                            band_y = y_upper + list(reversed(y_lower))
+
+                            overlay_traces.append({
+                                "type": "scatter",
+                                "mode": "lines",
+                                "x": band_x,
+                                "y": band_y,
+                                "fill": "toself",
+                                "fillcolor": "rgba(139, 92, 246, 0.08)",
+                                "line": {"color": "rgba(139, 92, 246, 0)", "width": 0},
+                                "name": f"95% CI (R²={r_squared:.2f})",
+                                "showlegend": True,
+                                "hoverinfo": "skip",
+                                "legendgroup": "trend",
+                            })
+                except ImportError:
+                    pass  # numpy not available — skip trend line
+                except Exception:
+                    pass  # Non-fatal — trend line is best-effort
+
+            # ────────────────────────────────────────────────────────────────
+            # 3. OUTLIER MARKERS (from point_intelligence)
+            # ────────────────────────────────────────────────────────────────
+            if points_data:
+                outlier_points = []
+                for x_key, pt in points_data.items():
+                    if pt.get("is_outlier"):
+                        # Find the matching x value from the trace
+                        matching_idx = None
+                        for i, xv in enumerate(x_arr):
+                            if str(xv) == x_key:
+                                matching_idx = i
+                                break
+                        if matching_idx is not None and matching_idx < len(y_arr):
+                            outlier_points.append({
+                                "x": x_arr[matching_idx],
+                                "y": y_arr[matching_idx],
+                                "insight": pt.get("insight", "Outlier"),
+                                "z_score": pt.get("z_score", 0),
+                            })
+
+                if len(outlier_points) >= 1 and len(outlier_points) <= len(x_arr) * 0.3:
+                    for op in outlier_points:
+                        is_high = op["z_score"] > 0
+                        color = "#ef4444" if is_high else "#f59e0b"
+                        arrow_dir = -30 if is_high else 28
+
+                        annotations.append({
+                            "x": op["x"],
+                            "y": op["y"],
+                            "xref": "x",
+                            "yref": "y",
+                            "text": f"{'⬆' if is_high else '⬇'} {op['insight'][:50]}",
+                            "showarrow": True,
+                            "arrowhead": 0,
+                            "arrowcolor": color,
+                            "ax": 0,
+                            "ay": arrow_dir,
+                            "font": {"size": 9, "color": color},
+                            "bgcolor": f"{color}15",
+                            "bordercolor": f"{color}40",
+                            "borderwidth": 1,
+                            "borderpad": 3,
+                        })
+
+            # ── Apply to payload ──
+            layout["shapes"] = shapes
+            layout["annotations"] = annotations
+            if overlay_traces:
+                chart_payload["traces"] = traces + overlay_traces
+
+            # Add overlay metadata so frontend knows what's available
+            chart_payload["statistical_overlays"] = {
+                "has_trend_line": any(
+                    t.get("name", "") == "Trend" for t in overlay_traces
+                ),
+                "has_reference_lines": any(
+                    s.get("type") == "line" and s.get("xref") == "paper"
+                    for s in shapes
+                ),
+                "has_outlier_markers": len(
+                    [a for a in annotations if a.get("showarrow")]
+                )
+                > 0,
+            }
+
+        except Exception as e:
+            logger.warning(f"Statistical overlay computation failed (non-fatal): {e}")
+
+        return chart_payload
+
+    def _apply_semantic_autolayout(
+        self,
+        chart_payload: Dict[str, Any],
+        chart_config: Dict[str, Any],
+        df: pl.DataFrame,
+    ) -> Dict[str, Any]:
+        """
+        Apply Flint-inspired semantic auto-layout to the rendered payload.
+
+        - Infers semantic types (currency, percentage, date, ...) for the
+          columns used by the chart from column names, dtypes, and values.
+        - Declares them on chart_config (so consumers can see them) and
+          attaches them to the payload + trace `_axis_metadata`.
+        - Runs the auto-layout pass: axis titles, tick formatting,
+          zero baselines for bars, label rotation for dense categories.
+
+        Best-effort: never raises.
+        """
+        try:
+            # Work on a copy so we never mutate the caller's chart_config
+            # (avoids stale inferred types leaking into cached/reused configs).
+            config = dict(chart_config or {})
+            semantic_types = infer_semantic_types(df, config)
+
+            # Expose declared semantic types on the payload so the
+            # frontend + consumers can reference them without re-inferring.
+            declared = {col: st.value for col, st in semantic_types.items()}
+            if declared:
+                chart_payload["semantic_types"] = declared
+
+            layout = chart_payload.get("layout", {})
+            # Single-series payloads use "traces"; multi-series use "data".
+            traces = chart_payload.get("traces") or chart_payload.get("data") or []
+
+            apply_auto_layout(
+                layout=layout,
+                semantic_types=semantic_types,
+                chart_config=config,
+                traces=traces,
+            )
+            chart_payload["layout"] = layout
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Semantic auto-layout failed (non-fatal): {e}")
+
+        return chart_payload
+
     def _generate_point_insight(
         self,
         val,
@@ -284,7 +665,7 @@ class ChartRenderService:
         Returns:
             Dict with Plotly chart data, layout, and metadata
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
         try:
             # Validate inputs
@@ -331,8 +712,22 @@ class ChartRenderService:
                 "total_rows": len(df),
                 "columns": config.columns,
                 "chart_type": chart_type_str,
-                "render_time_ms": (datetime.utcnow() - start_time).total_seconds() * 1000,
+                "render_time_ms": (datetime.now(timezone.utc).replace(tzinfo=None) - start_time).total_seconds() * 1000,
             }
+
+            # ── Honest sampling metadata ──
+            # Tells the frontend how many points are actually shown vs the
+            # original count when LTTB/category-caps downsampled the traces,
+            # so it can display a "shown of total" badge instead of silently
+            # truncating. Best-effort: never raises.
+            try:
+                sampling = aggregate_sampling_metadata(
+                    chart_payload.get("traces", traces)
+                )
+                if sampling:
+                    chart_payload["metadata"]["sampling"] = sampling
+            except Exception as e:
+                logger.debug(f"Sampling metadata aggregation skipped: {e}")
 
             # ── Compute per-point statistical intelligence ──
             try:
@@ -345,6 +740,23 @@ class ChartRenderService:
                     chart_payload["point_intelligence"] = point_intel
             except Exception as e:
                 logger.warning(f"Point intelligence skipped: {e}")
+
+            # ── Compute and attach statistical overlays ──
+            try:
+                chart_payload = self._compute_and_attach_overlays(
+                    chart_payload=chart_payload,
+                    chart_config=chart_config,
+                )
+            except Exception as e:
+                logger.warning(f"Statistical overlays skipped: {e}")
+
+            # ── Semantic auto-layout (Flint-inspired) ──
+            # Method is fully self-guarded (documented never to raise).
+            chart_payload = self._apply_semantic_autolayout(
+                chart_payload=chart_payload,
+                chart_config=chart_config,
+                df=df,
+            )
 
             self._render_count += 1
             logger.info(
@@ -601,7 +1013,7 @@ class ChartRenderService:
             multi_series_chart_service,
         )
 
-        return await multi_series_chart_service.generate_chart(
+        result = await multi_series_chart_service.generate_chart(
             df=df,
             metric_columns=metric_columns,
             x_column=x_column,
@@ -610,6 +1022,40 @@ class ChartRenderService:
             time_indexed=time_indexed,
             auto_strategy=True,
         )
+
+        # ── Semantic auto-layout for multi-series charts ──
+        # The multi-series path bypasses render_chart(), so apply the same
+        # Flint-inspired semantic pass here. _apply_semantic_autolayout is
+        # fully self-guarded (never raises), so no extra try/except needed.
+        # Note: with multiple metrics, axis format/tooltip hints reflect the
+        # FIRST metric's semantic type (best-effort for mixed-unit charts).
+        chart = result.get("chart")
+        if isinstance(chart, dict) and "layout" in chart:
+            # Map the auto-selected strategy to a chart_type so the
+            # auto-layout rules (e.g. zero baseline for bars) apply
+            # correctly instead of assuming multi_line.
+            strategy = result.get("strategy_used", "overlay")
+            chart_type = {
+                "grouped": "grouped_bar",
+                "stacked": "stacked_bar",
+                "facet": "multi_line",
+                "small_multiples": "multi_line",
+                "combo": "combo",
+                "dual_axis": "dual_axis",
+            }.get(strategy, "multi_line")
+            chart_config = {
+                "columns": [x_column] + list(metric_columns),
+                "chart_type": chart_type,
+                "title": title,
+            }
+            chart = self._apply_semantic_autolayout(
+                chart_payload=chart,
+                chart_config=chart_config,
+                df=df,
+            )
+            result["chart"] = chart
+
+        return result
 
     async def render_chart_smart(
         self,

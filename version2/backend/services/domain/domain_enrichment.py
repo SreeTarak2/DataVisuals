@@ -342,7 +342,7 @@ async def enrich_domain(
     prompt = _build_enrichment_prompt(profiles, df, domain_id)
 
     try:
-        from services.llm_router import llm_router
+        from llm.router import llm_router
 
         response = await llm_router.call(
             prompt=prompt,

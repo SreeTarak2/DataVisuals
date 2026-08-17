@@ -1,14 +1,22 @@
 from fastapi import HTTPException, Depends, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from passlib.context import CryptContext
+from core.auth import get_token_from_request
+from core.config import settings
 import bcrypt
 from jose import JWTError, jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import os
 import time
 from db.database import get_database
 from db.schemas import User, UserCreate, UserLogin, Token, TokenData, LoginResponse
+from services.workspace import workspace_service
+from services.auth.sessions import (
+    hash_refresh_token,
+    generate_refresh_token,
+    revoked_jti_store,
+    session_store,
+)
 import logging
 from bson import ObjectId
 
@@ -66,12 +74,10 @@ if len(SECRET_KEY) < 32:
         f"FATAL: SECRET_KEY must be at least 32 characters (got {len(SECRET_KEY)}). "
         'Generate a secure key with: python -c "import secrets; print(secrets.token_hex(32))"'
     )
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
-
-# Security scheme
-security = HTTPBearer()
-
+ALGORITHM = settings.ALGORITHM or "HS256"
+# Short-lived access token (default 50 min). Long-lived sessions are
+# maintained by refresh-token rotation — see services/auth/sessions.py.
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
 
 class AuthService:
     def __init__(self):
@@ -85,11 +91,24 @@ class AuthService:
             user_id: str = payload.get("sub")
             if user_id is None:
                 return None
+            # Reject tokens whose session was revoked (logout / logout-all)
+            jti = payload.get("jti")
+            if jti and revoked_jti_store.is_revoked(jti):
+                logger.debug(f"Rejecting WebSocket auth — session {jti[:8]} revoked")
+                return None
         except JWTError:
             return None
 
         try:
             user = await self.get_user_by_id(user_id)
+            if user is not None:
+                # Attach the tenant boundary from the JWT (set at login) so
+                # WebSocket callers resolve the same personal workspace id that
+                # HTTP writes/reads use — prevents upload→404 mismatches.
+                if payload.get("workspace_id"):
+                    user["workspace_id"] = payload.get("workspace_id")
+                if payload.get("jti"):
+                    user["jti"] = payload.get("jti")
             return user
         except DatabaseUnavailableError:
             logger.warning(f"DB unavailable for WebSocket auth (user {user_id}) — rejecting connection")
@@ -127,14 +146,24 @@ class AuthService:
             )
 
     def create_access_token(
-        self, data: dict, expires_delta: Optional[timedelta] = None
+        self,
+        data: dict,
+        expires_delta: Optional[timedelta] = None,
+        jti: Optional[str] = None,
     ):
-        """Create JWT access token"""
+        """Create JWT access token.
+
+        ``jti`` is the session id — lets ``get_current_user`` reject tokens
+        whose session was revoked (via the in-memory denylist) without a
+        per-request database hit.
+        """
         to_encode = data.copy()
+        if jti:
+            to_encode["jti"] = jti
         if expires_delta:
-            expire = datetime.utcnow() + expires_delta
+            expire = datetime.now(timezone.utc).replace(tzinfo=None) + expires_delta
         else:
-            expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            expire = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
         to_encode.update({"exp": expire})
         encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -236,8 +265,8 @@ class AuthService:
                 "hashed_password": hashed_password,
                 "is_active": True,
                 "is_verified": False,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+                "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
                 "last_login": None,
             }
 
@@ -250,6 +279,16 @@ class AuthService:
 
             # Remove password from response
             user_doc.pop("hashed_password", None)
+
+            # ── Auto-create personal workspace ──
+            try:
+                await workspace_service.create_personal_workspace(
+                    user_id=user_doc["id"],
+                    username=user_data.username,
+                )
+                logger.info(f"Personal workspace created for user: {user_data.email}")
+            except Exception as ws_err:
+                logger.warning(f"Failed to create personal workspace for {user_data.email}: {ws_err}")
 
             logger.info(f"User created successfully: {user_data.email}")
             return user_doc
@@ -277,7 +316,7 @@ class AuthService:
             db = self._get_db()
             await db.users.update_one(
                 {"_id": ObjectId(user["id"])},
-                {"$set": {"last_login": datetime.utcnow()}},
+                {"$set": {"last_login": datetime.now(timezone.utc).replace(tzinfo=None)}},
             )
 
             # Remove password from response
@@ -288,7 +327,56 @@ class AuthService:
             logger.error(f"Error authenticating user: {e}")
             return None
 
-    async def login_user(self, login_data: UserLogin) -> LoginResponse:
+    async def _resolve_user_workspace_id(self, user_id: str) -> str:
+        """Resolve the default workspace ID for a user."""
+        try:
+            personal = await workspace_service.get_personal_workspace(user_id)
+            if personal:
+                return personal["id"]
+        except Exception as e:
+            logger.warning(f"Failed to resolve workspace for user {user_id}: {e}")
+        return user_id  # Fallback to user_id for backward compatibility
+
+    async def _issue_token_pair(
+        self,
+        user: dict,
+        workspace_id: str,
+        device_name: Optional[str] = None,
+        ip: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> tuple:
+        """Create a session and return (access_token, refresh_token).
+
+        The access token carries the session's ``jti``; the refresh token is
+        stored hashed in the ``sessions`` collection and rotated on refresh.
+        """
+        refresh_token = generate_refresh_token()
+        session = await session_store.create_session(
+            user_id=str(user["id"]),
+            workspace_id=workspace_id,
+            refresh_token=refresh_token,
+            device_name=device_name,
+            ip=ip,
+            user_agent=user_agent,
+        )
+        access_token = self.create_access_token(
+            data={
+                "sub": str(user["id"]),
+                "email": user.get("email"),
+                "workspace_id": workspace_id,
+            },
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+            jti=session["jti"],
+        )
+        return access_token, refresh_token
+
+    async def login_user(
+        self,
+        login_data: UserLogin,
+        device_name: Optional[str] = None,
+        ip: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> LoginResponse:
         """Login user and return access token with user data"""
         try:
             user = await self.authenticate_user(login_data.email, login_data.password)
@@ -305,11 +393,11 @@ class AuthService:
                     detail="Account is disabled",
                 )
 
-            # Create access token
-            access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-            access_token = self.create_access_token(
-                data={"sub": str(user["id"]), "email": user["email"]},
-                expires_delta=access_token_expires,
+            # ── Resolve workspace for JWT ──
+            workspace_id = await self._resolve_user_workspace_id(user["id"])
+
+            access_token, refresh_token = await self._issue_token_pair(
+                user, workspace_id, device_name=device_name, ip=ip, user_agent=user_agent
             )
 
             return LoginResponse(
@@ -317,6 +405,7 @@ class AuthService:
                 token_type="bearer",
                 expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
                 user=User(**user),
+                refresh_token=refresh_token,
             )
 
         except HTTPException:
@@ -328,7 +417,14 @@ class AuthService:
             )
 
     async def google_oauth_user(
-        self, email: str, name: str, google_id: str, picture: str = None
+        self,
+        email: str,
+        name: str,
+        google_id: str,
+        picture: str = None,
+        device_name: Optional[str] = None,
+        ip: Optional[str] = None,
+        user_agent: Optional[str] = None,
     ) -> LoginResponse:
         """Handle Google OAuth user - find existing or create new user"""
         try:
@@ -347,7 +443,7 @@ class AuthService:
 
                 await db.users.update_one(
                     {"_id": ObjectId(existing_user["id"])},
-                    {"$set": {"last_login": datetime.utcnow()}},
+                    {"$set": {"last_login": datetime.now(timezone.utc).replace(tzinfo=None)}},
                 )
 
                 user = existing_user
@@ -367,9 +463,9 @@ class AuthService:
                     "is_verified": True,
                     "google_id": google_id,
                     "avatar": picture,
-                    "created_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow(),
-                    "last_login": datetime.utcnow(),
+                    "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+                    "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
+                    "last_login": datetime.now(timezone.utc).replace(tzinfo=None),
                 }
 
                 result = await db.users.insert_one(user_doc)
@@ -378,12 +474,24 @@ class AuthService:
                 user_doc.pop("hashed_password", None)
 
                 user = user_doc
+
+                # ── Auto-create personal workspace for Google OAuth users ──
+                try:
+                    await workspace_service.create_personal_workspace(
+                        user_id=user["id"],
+                        username=username,
+                    )
+                    logger.info(f"Personal workspace created for Google user: {email}")
+                except Exception as ws_err:
+                    logger.warning(f"Failed to create personal workspace for {email}: {ws_err}")
+
                 logger.info(f"Google OAuth user created: {email}")
 
-            access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-            access_token = self.create_access_token(
-                data={"sub": str(user["id"]), "email": user["email"]},
-                expires_delta=access_token_expires,
+            # ── Resolve workspace for JWT ──
+            workspace_id = await self._resolve_user_workspace_id(user["id"])
+
+            access_token, refresh_token = await self._issue_token_pair(
+                user, workspace_id, device_name=device_name, ip=ip, user_agent=user_agent
             )
 
             return LoginResponse(
@@ -391,6 +499,7 @@ class AuthService:
                 token_type="bearer",
                 expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
                 user=User(**user),
+                refresh_token=refresh_token,
             )
 
         except HTTPException:
@@ -402,22 +511,32 @@ class AuthService:
                 detail="Google OAuth failed",
             )
 
-    async def get_current_user(
-        self, credentials: HTTPAuthorizationCredentials = Depends(security)
-    ) -> dict:
+    async def get_current_user(self, token: str) -> dict:
         """Get current authenticated user.
+
+        ``token`` is a raw JWT string extracted from HttpOnly cookie or
+        Authorization header by the ``get_token_from_request`` dependency.
 
         If the JWT is valid but the database is unreachable, returns 503 instead of
         401 so the frontend can retry rather than force-logout the user.
         """
         try:
-            token = credentials.credentials
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             user_id: str = payload.get("sub")
             if user_id is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Could not validate credentials",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            # Session revoked (logout / logout-all / per-device revoke) — the
+            # denylist check is O(1) and covers the access token's lifetime.
+            jti = payload.get("jti")
+            if jti and revoked_jti_store.is_revoked(jti):
+                logger.debug(f"Rejecting request — session {jti[:8]} revoked")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Session revoked — please log in again",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
         except JWTError:
@@ -435,6 +554,16 @@ class AuthService:
                     detail="User not found",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
+            # Attach the tenant boundary from the JWT (resolved at login to the
+            # user's personal workspace). Without this, routes that scope via
+            # current_user.get("workspace_id", ...) fall back to the raw user_id
+            # while reads resolve the personal workspace id — a mismatch that
+            # made freshly-uploaded datasets 404 (get/stages/reprocess) while
+            # still matching duplicate detection (409).
+            if payload.get("workspace_id"):
+                user["workspace_id"] = payload.get("workspace_id")
+            if jti:
+                user["jti"] = jti
             return user
         except DatabaseUnavailableError:
             # JWT is valid but DB is unreachable — don't log the user out
@@ -475,7 +604,7 @@ class AuthService:
                 {
                     "$set": {
                         "hashed_password": new_hashed_password,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
                     }
                 },
             )
@@ -524,7 +653,7 @@ class AuthService:
                         detail="Username already taken",
                     )
 
-            update_data["updated_at"] = datetime.utcnow()
+            update_data["updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
 
             await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
 
@@ -547,12 +676,118 @@ class AuthService:
             )
 
 
+    # ──────────────────────────────────────────────────────────────────
+    # Per-device session management (refresh-token rotation)
+    # ──────────────────────────────────────────────────────────────────
+
+    async def refresh_session(
+        self, refresh_token: str, ip: Optional[str] = None
+    ) -> tuple:
+        """Validate + rotate a refresh token; returns (access_token, new_refresh_token).
+
+        Raises 401 when the token is missing, expired, revoked, or reused.
+        Presenting a previously-rotated token is treated as possible theft
+        and revokes the entire session.
+        """
+        if not refresh_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No refresh token provided",
+            )
+
+        refresh_hash = hash_refresh_token(refresh_token)
+        session = await session_store.find_by_any_hash(refresh_hash)
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid session",
+            )
+
+        # Reuse of a rotated (old) token → possible theft → kill the session
+        if session.get("prev_refresh_token_hash") == refresh_hash:
+            logger.warning(
+                f"Refresh-token reuse detected for session {session.get('jti', '')[:8]} — revoking"
+            )
+            await session_store.revoke(session["jti"])
+            revoked_jti_store.revoke(session["jti"])
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session revoked",
+            )
+
+        if session.get("revoked_at"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session revoked",
+            )
+
+        if session.get("expires_at") and session["expires_at"] < datetime.now(
+            timezone.utc
+        ).replace(tzinfo=None):
+            await session_store.revoke(session["jti"])
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired",
+            )
+
+        # ── Rotation: mint a new refresh token, keep the old as prev ──
+        new_refresh_token = generate_refresh_token()
+        await session_store.rotate(
+            session["_id"],
+            current_hash=session["refresh_token_hash"],
+            new_refresh_token=new_refresh_token,
+        )
+
+        user_id = session.get("user_id")
+        user = await self.get_user_by_id(user_id)
+        access_token = self.create_access_token(
+            data={
+                "sub": user_id,
+                "email": (user or {}).get("email") or session.get("email"),
+                "workspace_id": session.get("workspace_id"),
+            },
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+            jti=session["jti"],
+        )
+        return access_token, new_refresh_token
+
+    async def get_session_by_jti(self, jti: str) -> Optional[dict]:
+        """Fetch a session document by jti (no refresh-token material)."""
+        session = await session_store.get_by_jti(jti)
+        if session:
+            session.pop("refresh_token_hash", None)
+            session.pop("prev_refresh_token_hash", None)
+        return session
+
+    async def revoke_session_by_jti(self, jti: str, user_id: str) -> bool:
+        """Revoke one session (ownership-checked). Returns True if revoked."""
+        if not jti:
+            return False
+        session = await session_store.get_by_jti(jti)
+        if not session or session.get("user_id") != user_id:
+            return False
+        await session_store.revoke(jti)
+        revoked_jti_store.revoke(jti)
+        return True
+
+    async def revoke_all_other_sessions(self, user_id: str, keep_jti: str) -> int:
+        """Revoke every active session except the current one; returns count."""
+        revoked = await session_store.revoke_all_except(user_id, keep_jti)
+        for jti in revoked:
+            revoked_jti_store.revoke(jti)
+        return len(revoked)
+
+    async def list_sessions(self, user_id: str) -> list:
+        """Active sessions for the user (no refresh-token material)."""
+        return await session_store.list_active(user_id)
+
+
 # Create auth service instance
 auth_service = AuthService()
 
 
 # Dependency to get current user
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    token: str = Depends(get_token_from_request),
 ) -> dict:
-    return await auth_service.get_current_user(credentials)
+    return await auth_service.get_current_user(token)

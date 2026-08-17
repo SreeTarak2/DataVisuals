@@ -21,7 +21,7 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -373,7 +373,7 @@ def build_fix_plan(analysis: Dict[str, Any], out_dir: Path) -> str:
     hits = analysis["pattern_hits"]
     avgs = analysis["averages"]
     total = analysis["total"]
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M UTC")
 
     # Build ordered catalogue keyed by id
     cat_by_id = {p["id"]: p for p in PATTERN_CATALOGUE}

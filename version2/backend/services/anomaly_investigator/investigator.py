@@ -41,6 +41,7 @@ class AnomalyReport:
     investigation_id: str = ""
     dataset_id: str = ""
     confidence: float = 0.5
+    diagnostic_mode: str = "metric_change"
 
 
 # ── Prompt templates ─────────────────────────────────────────────────────────
@@ -162,7 +163,7 @@ class AnomalyInvestigatorAgent:
     @property
     def llm_router(self):
         if self._llm_router is None:
-            from services.llm_router import llm_router
+            from llm.router import llm_router
             self._llm_router = llm_router
         return self._llm_router
 
@@ -189,6 +190,8 @@ class AnomalyInvestigatorAgent:
         sample_rows: list[dict] | None = None,
         row_count: int = 0,
         investigation_id: str = "",
+        mode: str | None = None,
+        has_time_column: bool = False,
     ) -> AnomalyReport:
         """
         Run a full anomaly investigation: root cause → impact → recommendations.
@@ -221,11 +224,35 @@ class AnomalyInvestigatorAgent:
         schema_context, sample_context = self._build_context(columns, row_count, sample_rows)
         anomalies_text = self._format_anomalies(anomalies)
 
-        # ── Step 2: Run parallel analysis ───────────────────────────────────
-        root_causes_task = self._analyze_root_causes(
-            anomalies_text, schema_context, sample_context
+        # ── Detect investigation mode ─────────────────────────────────────────
+        from .modes import detect_mode, get_mode_prompts, MODE_CONTEXT_BUILDERS
+
+        resolved_mode = detect_mode(
+            anomalies=anomalies,
+            has_time_column=has_time_column,
+            row_count=row_count,
+            explicit_mode=mode,
         )
-        impact_task = self._assess_impact(anomalies_text)
+        logger.info(
+            "[AnomalyInvestigator] Mode: %s for dataset %s",
+            resolved_mode,
+            dataset_id[:8],
+        )
+
+        # ── Build mode-specific context ───────────────────────────────────────
+        context_builder = MODE_CONTEXT_BUILDERS.get(resolved_mode)
+        if context_builder:
+            anomalies_text, schema_context, sample_context = context_builder(
+                anomalies, schema_context, sample_context
+            )
+
+        # ── Step 2: Run parallel analysis with mode-specific prompts ─────────
+        root_cause_prompt, impact_prompt, rec_prompt, narrative_prompt = get_mode_prompts(resolved_mode)
+
+        root_causes_task = self._analyze_root_causes(
+            anomalies_text, schema_context, sample_context, prompt_override=root_cause_prompt
+        )
+        impact_task = self._assess_impact(anomalies_text, prompt_override=impact_prompt)
 
         root_causes, impact = await asyncio.gather(root_causes_task, impact_task)
 
@@ -234,13 +261,15 @@ class AnomalyInvestigatorAgent:
         impact_text = str(impact)
 
         recommendations = await self._generate_recommendations(
-            anomalies_text, root_causes_text, impact_text
+            anomalies_text, root_causes_text, impact_text,
+            prompt_override=rec_prompt,
         )
 
         # ── Step 4: Synthesize narrative ────────────────────────────────────
         recommendations_text = self._format_list(recommendations, "action")
         narrative = await self._synthesize_narrative(
-            anomalies_text, root_causes_text, impact_text, recommendations_text
+            anomalies_text, root_causes_text, impact_text, recommendations_text,
+            prompt_override=narrative_prompt,
         )
 
         # Confidence based on anomaly severity (not quantity)
@@ -271,6 +300,7 @@ class AnomalyInvestigatorAgent:
             investigation_id=investigation_id,
             dataset_id=dataset_id,
             confidence=round(confidence, 2),
+            diagnostic_mode=resolved_mode,
         )
 
     # ── Anomaly Detection ────────────────────────────────────────────────────
@@ -327,9 +357,14 @@ class AnomalyInvestigatorAgent:
     # ── Root Cause Analysis ──────────────────────────────────────────────────
 
     async def _analyze_root_causes(
-        self, anomalies_text: str, schema_context: str, sample_context: str
+        self,
+        anomalies_text: str,
+        schema_context: str,
+        sample_context: str,
+        prompt_override: str | None = None,
     ) -> list[dict]:
-        prompt = ROOT_CAUSE_PROMPT.format(
+        prompt_template = prompt_override or ROOT_CAUSE_PROMPT
+        prompt = prompt_template.format(
             anomalies_text=anomalies_text,
             schema_context=schema_context,
             sample_context=sample_context,
@@ -353,8 +388,13 @@ class AnomalyInvestigatorAgent:
 
     # ── Impact Assessment ────────────────────────────────────────────────────
 
-    async def _assess_impact(self, anomalies_text: str) -> dict:
-        prompt = IMPACT_ASSESSMENT_PROMPT.format(anomalies_text=anomalies_text)
+    async def _assess_impact(
+        self,
+        anomalies_text: str,
+        prompt_override: str | None = None,
+    ) -> dict:
+        prompt_template = prompt_override or IMPACT_ASSESSMENT_PROMPT
+        prompt = prompt_template.format(anomalies_text=anomalies_text)
         try:
             result = await self.llm_router.call(
                 prompt=prompt,
@@ -373,9 +413,14 @@ class AnomalyInvestigatorAgent:
     # ── Recommendation Generation ────────────────────────────────────────────
 
     async def _generate_recommendations(
-        self, anomalies_text: str, root_causes_text: str, impact_text: str
+        self,
+        anomalies_text: str,
+        root_causes_text: str,
+        impact_text: str,
+        prompt_override: str | None = None,
     ) -> list[dict]:
-        prompt = RECOMMENDATION_PROMPT.format(
+        prompt_template = prompt_override or RECOMMENDATION_PROMPT
+        prompt = prompt_template.format(
             anomalies_text=anomalies_text,
             root_causes_text=root_causes_text,
             impact_text=impact_text,
@@ -405,8 +450,10 @@ class AnomalyInvestigatorAgent:
         root_causes_text: str,
         impact_text: str,
         recommendations_text: str,
+        prompt_override: str | None = None,
     ) -> str:
-        prompt = NARRATIVE_PROMPT.format(
+        prompt_template = prompt_override or NARRATIVE_PROMPT
+        prompt = prompt_template.format(
             anomalies_text=anomalies_text,
             root_causes_text=root_causes_text,
             impact_text=impact_text,

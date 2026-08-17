@@ -15,7 +15,9 @@ Zero interpretation. Zero LLM calls. Pure Polars.
 from __future__ import annotations
 
 import logging
+import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
 import polars as pl
@@ -243,15 +245,72 @@ class ColumnProfiler:
 
     # ── Full DataFrame Profile ────────────────────────────────────────────
 
-    def profile_dataframe(self, df: pl.DataFrame) -> list[RawColumnProfile]:
-        """Profile all columns in a DataFrame."""
+    def profile_dataframe(
+        self,
+        df: pl.DataFrame,
+        max_workers: int | None = None,
+    ) -> list[RawColumnProfile]:
+        """Profile all columns in a DataFrame, parallelised with threads.
+
+        Each column is profiled independently (no shared mutable state), so
+        ``ThreadPoolExecutor`` gives near-linear speedup.  Polars operations
+        release the GIL at the Rust level, making threads effective even for
+        CPU-bound profiling work.
+
+        Args:
+            df: Polars DataFrame to profile.
+            max_workers:
+                Number of worker threads.  Defaults to ``min(os.cpu_count(), 8)``
+                clamped to ``[1, len(columns)]``.  Pass ``1`` to force sequential.
+        """
+        columns = df.columns
+        n_cols = len(columns)
+
+        if max_workers is None:
+            cpu_count = os.cpu_count() or 4
+            max_workers = min(cpu_count, 8, n_cols)
+        else:
+            max_workers = max(1, min(max_workers, n_cols))
+
+        if max_workers <= 1:
+            # Sequential path — no thread overhead for tiny DataFrames
+            profiles: list[RawColumnProfile] = []
+            for col_name in columns:
+                p = self.profile_column(df, col_name)
+                if p is not None:
+                    profiles.append(p)
+            logger.info(
+                "[Profiler] Profiled %d/%d columns (sequential)",
+                len(profiles),
+                n_cols,
+            )
+            return profiles
+
         profiles: list[RawColumnProfile] = []
-        for col_name in df.columns:
-            p = self.profile_column(df, col_name)
-            if p is not None:
-                profiles.append(p)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all column profiling tasks
+            fut_map = {
+                executor.submit(self.profile_column, df, col_name): col_name
+                for col_name in columns
+            }
+            for future in as_completed(fut_map):
+                col_name = fut_map[future]
+                try:
+                    p = future.result()
+                    if p is not None:
+                        profiles.append(p)
+                except Exception as e:
+                    logger.debug(
+                        "[Profiler] Column profiling failed for '%s': %s",
+                        col_name,
+                        e,
+                    )
+
         logger.info(
-            f"[Profiler] Profiled {len(profiles)}/{len(df.columns)} columns"
+            "[Profiler] Profiled %d/%d columns (%d workers)",
+            len(profiles),
+            n_cols,
+            max_workers,
         )
         return profiles
 

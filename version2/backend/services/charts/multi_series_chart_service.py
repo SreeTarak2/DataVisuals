@@ -17,7 +17,7 @@ Entry point for API layer and internal analyst workflows.
 from typing import Dict, Any, Optional, List, Tuple
 import logging
 import polars as pl
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ class MultiSeriesChartService:
             f"Generate chart: {title}, {len(metric_columns)} series, intent={analysis_intent}"
         )
 
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
         try:
             # Step 1: Validate input
@@ -132,7 +132,7 @@ class MultiSeriesChartService:
                 "quality_score": quality_score,
                 "narrative": narrative,
                 "strategy_used": strategy,
-                "render_time_ms": (datetime.utcnow() - start_time).total_seconds() * 1000,
+                "render_time_ms": (datetime.now(timezone.utc).replace(tzinfo=None) - start_time).total_seconds() * 1000,
                 "timestamp": start_time.isoformat(),
             }
 

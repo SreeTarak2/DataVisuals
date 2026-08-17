@@ -7,7 +7,7 @@ so users can bookmark workspaces and revert to previous layouts.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from bson import ObjectId
@@ -57,7 +57,7 @@ async def create_snapshot(
         "name": name,
         "layout": layout,
         "is_auto": is_auto,
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
         "version": "1.0",
     }
 
@@ -97,7 +97,7 @@ async def list_snapshots(
         result.append({
             "id": str(s["_id"]),
             "name": s.get("name", "Untitled"),
-            "created_at": s.get("created_at", datetime.utcnow()).isoformat(),
+            "created_at": s.get("created_at", datetime.now(timezone.utc).replace(tzinfo=None)).isoformat(),
             "is_auto": s.get("is_auto", False),
         })
 

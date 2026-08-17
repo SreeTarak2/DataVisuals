@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { datasetAPI } from '../services/api';
 import { toast } from 'react-hot-toast';
+import { getCurrentUserId } from './authStorage';
 
 const DATASET_STORAGE_KEY = 'dataset-storage';
 let datasetsFetchPromise = null;
@@ -45,32 +46,9 @@ const hasSameDatasetSnapshot = (a, b) => {
   );
 };
 
-const parsePersistedAuth = (storage) => {
-  try {
-    const raw = storage.getItem('signal-auth');
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed?.state || null;
-  } catch (error) {
-    console.warn('Failed to parse persisted auth state:', error);
-    return null;
-  }
-};
-
-const getCurrentAuthUserId = () => {
-  if (typeof window === 'undefined') return null;
-
-  const sessionState = parsePersistedAuth(window.sessionStorage);
-  const localState = parsePersistedAuth(window.localStorage);
-
-  const activeAuthState = sessionState?.token
-    ? sessionState
-    : localState?.token
-      ? localState
-      : sessionState || localState;
-
-  return activeAuthState?.user?.id || null;
-};
+// Note: getCurrentUserId is imported from ./authStorage — a centralized,
+// dependency-free module that reads persisted auth state from storage
+// directly, avoiding a circular dependency between authStore ↔ datasetStore.
 
 const useDatasetStore = create(
   persist(
@@ -84,12 +62,12 @@ const useDatasetStore = create(
         const selectedFromList = datasets.find((dataset) => getDatasetId(dataset) === selectedId) || null;
         const nextSelected = selectedFromList
           ? (hasSameDatasetSnapshot(currentSelected, selectedFromList) ? currentSelected : selectedFromList)
-          : datasets[0] || null;
+          : currentSelected;
         set({
           datasets,
           selectedDataset: nextSelected,
           selectedDatasetId: getDatasetId(nextSelected),
-          ownerUserId: getCurrentAuthUserId(),
+          ownerUserId: getCurrentUserId(),
         });
       },
       setSelectedDataset: (dataset) => {
@@ -127,7 +105,7 @@ const useDatasetStore = create(
 
       // Enhanced fetch: Auto-call on init if empty
       fetchDatasets: async (force = false, manual = false) => {
-        const currentUserId = getCurrentAuthUserId();
+        const currentUserId = getCurrentUserId();
         const now = Date.now();
         const { lastFetchedAt, datasets, ownerUserId } = get();
 
@@ -188,7 +166,7 @@ const useDatasetStore = create(
             ) || null;
             const nextSelectedDataset = selectedFromFetched
               ? (hasSameDatasetSnapshot(currentSelected, selectedFromFetched) ? currentSelected : selectedFromFetched)
-              : fetched[0] || null;
+              : currentSelected;
 
             set({
               datasets: fetched,
@@ -290,7 +268,7 @@ const useDatasetStore = create(
             datasets: [newDataset, ...state.datasets],
             selectedDataset: newDataset,
             selectedDatasetId: getDatasetId(newDataset),
-            ownerUserId: getCurrentAuthUserId(),
+            ownerUserId: getCurrentUserId(),
             isUploading: false,
             uploadProgress: 100,
             activeUpload: { ...state.activeUpload, progress: 100, isComplete: true }
@@ -300,7 +278,25 @@ const useDatasetStore = create(
           return { success: true, dataset: newDataset };
 
         } catch (error) {
-          const errMsg = error.response?.data?.detail || 'Upload failed';
+          const data = error.response?.data;
+          if (data?.is_duplicate) {
+            toast.dismiss(uploadToast);
+            toast.error('Dataset already exists! This file has been uploaded before.', {
+              duration: 5000,
+              style: {
+                background: '#fef2f2',
+                color: '#dc2626',
+                border: '1px solid #fecaca'
+              }
+            });
+            set({ isUploading: false, uploadProgress: 0 });
+            return {
+              success: false,
+              isDuplicate: true,
+              existingDataset: data.existing_dataset
+            };
+          }
+          const errMsg = data?.detail || data?.message || 'Upload failed';
           set({
             error: errMsg,
             isUploading: false,
@@ -312,16 +308,16 @@ const useDatasetStore = create(
         }
       },
 
-      deleteDataset: async (datasetId) => {
+      deleteDataset: async (datasetId, silentToast = false) => {
         // Validate dataset ID
         if (!datasetId) {
           const errMsg = 'Dataset ID is required for deletion';
           set({ error: errMsg });
-          toast.error(errMsg);
+          if (!silentToast) toast.error(errMsg);
           return { success: false, error: errMsg };
         }
 
-        const deleteToast = toast.loading('Deleting...');
+        const deleteToast = silentToast ? null : toast.loading('Deleting...');
         try {
           console.log('Store: Deleting dataset with ID:', datasetId);
           await datasetAPI.deleteDataset(datasetId);
@@ -329,13 +325,13 @@ const useDatasetStore = create(
             datasets: state.datasets.filter(d => d.id !== datasetId && d._id !== datasetId),
             selectedDataset: (state.selectedDataset?.id === datasetId || state.selectedDataset?._id === datasetId) ? null : state.selectedDataset,
           }));
-          toast.success('Dataset deleted', { id: deleteToast });
+          if (!silentToast) toast.success('Dataset deleted', { id: deleteToast });
           return { success: true };
         } catch (error) {
           console.error('Store delete error:', error);
           const errMsg = error.response?.data?.detail || 'Delete failed';
           set({ error: errMsg });
-          toast.error(errMsg, { id: deleteToast });
+          if (!silentToast) toast.error(errMsg, { id: deleteToast });
           return { success: false, error: errMsg };
         }
       },
@@ -348,7 +344,7 @@ const useDatasetStore = create(
           set({
             selectedDataset: dataset,
             selectedDatasetId: getDatasetId(dataset),
-            ownerUserId: getCurrentAuthUserId(),
+            ownerUserId: getCurrentUserId(),
             loading: false,
           });
           toast.success('Dataset loaded');
@@ -366,7 +362,7 @@ const useDatasetStore = create(
           datasets: [dataset, ...state.datasets],
           selectedDataset: dataset,
           selectedDatasetId: getDatasetId(dataset),
-          ownerUserId: getCurrentAuthUserId(),
+          ownerUserId: getCurrentUserId(),
         }));
         toast.success('Dataset added');
       },
@@ -399,6 +395,34 @@ const useDatasetStore = create(
           return { success: false, error: errMsg };
         }
       },
+      // Live pipeline progress from WebSocket pushes — patches the dataset in
+      // the list (and the selected dataset) so the processing indicator and
+      // dashboard update instantly without polling.
+      applyProcessingUpdate: (datasetId, update = {}) => {
+        if (!datasetId) return;
+        const { status, progress, stageLabel } = update;
+        if (!status && progress === undefined) return;
+        const isTerminal = ['completed', 'success'].includes(String(status).toLowerCase());
+        set((state) => {
+          const patch = {
+            processing_status: status || undefined,
+            processing_progress: progress ?? undefined,
+            current_stage_label: stageLabel || undefined,
+            is_processed: isTerminal ? true : undefined,
+          };
+          // Remove undefined keys so we never overwrite with undefined
+          Object.keys(patch).forEach((k) => patch[k] === undefined && delete patch[k]);
+
+          const datasets = state.datasets.map((d) =>
+            getDatasetId(d) === datasetId ? { ...d, ...patch } : d
+          );
+          const selectedDataset =
+            getDatasetId(state.selectedDataset) === datasetId
+              ? { ...state.selectedDataset, ...patch }
+              : state.selectedDataset;
+          return { datasets, selectedDataset };
+        });
+      },
       setActiveUpload: (fileName, progress = 0) => set({
         activeUpload: { fileName, progress, isComplete: false, error: null }
       }),
@@ -430,7 +454,7 @@ const useDatasetStore = create(
       onRehydrateStorage: () => (state) => {
         if (!state) return;
 
-        const currentUserId = getCurrentAuthUserId();
+        const currentUserId = getCurrentUserId();
         const hasDifferentOwner =
           !!state.ownerUserId && !!currentUserId && state.ownerUserId !== currentUserId;
 
@@ -452,9 +476,10 @@ const useDatasetStore = create(
               const matched = datasets.find(d => getDatasetId(d) === targetId);
               if (matched) {
                 state.setSelectedDataset(matched);
-              } else if (datasets.length > 0) {
-                state.setSelectedDataset(datasets[0]);
               }
+              // If NOT matched: the persisted dataset was deleted —
+              // leave selection as-is (null) instead of auto-selecting
+              // the first available dataset.
             } else if (datasets.length > 0) {
               state.setSelectedDataset(datasets[0]);
             }

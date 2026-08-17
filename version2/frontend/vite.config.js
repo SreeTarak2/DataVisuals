@@ -43,6 +43,13 @@ function saveLogoPlugin() {
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: [],
+    include: ['src/**/*.test.{js,jsx}'],
+    css: false,
+  },
   plugins: [react(), tailwindcss(), saveLogoPlugin()],
   resolve: {
     alias: {

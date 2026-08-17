@@ -100,3 +100,6 @@ version2/backend/benchmark/relationships/results.json
 # -------------------
 skills/
 
+
+# Runtime data (local, not source)
+version2/backend/chroma_db/

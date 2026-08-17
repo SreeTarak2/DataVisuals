@@ -1,0 +1,5 @@
+/*
+ * SideChatPanel.css — reuses the shared chat panel styles.
+ * All CSS classes are defined in ChatPanel.css.
+ */
+@import url('./ChatPanel.css');

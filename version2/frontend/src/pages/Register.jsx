@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Eye, EyeOff, ArrowLeft, Database, MessageSquare, BarChart3 } from "lucide-react";
+import { Eye, EyeOff, ArrowLeft, Database, MessageSquare, BarChart3, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/store/authStore";
 import toast from "react-hot-toast";
@@ -318,13 +318,38 @@ export default function RegisterPage() {
               </p>
             </div>
 
-            <button
+            <motion.button
               type="submit"
               disabled={isLoading}
-              className="mt-6 h-14 w-full rounded-xl bg-[#f06f1c] text-white font-semibold transition-all hover:bg-[#b04409] active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100"
+              whileTap={{ scale: isLoading ? 1 : 0.98 }}
+              animate={isLoading ? { scale: [1, 1.02, 1] } : {}}
+              transition={isLoading ? { repeat: Infinity, duration: 1.5, ease: "easeInOut" } : {}}
+              className={`mt-6 h-14 w-full rounded-xl font-semibold transition-all flex items-center justify-center gap-3 ${
+                isLoading
+                  ? "bg-[#f06f1c]/80 text-white/90 cursor-wait shadow-[0_0_20px_-5px_rgba(240,111,28,0.6)]"
+                  : "bg-[#f06f1c] text-white hover:bg-[#b04409] active:scale-[0.98] shadow-lg shadow-orange-500/20"
+              }`}
             >
-              {isLoading ? "Creating Account..." : "Create Account"}
-            </button>
+              {isLoading ? (
+                <>
+                  <motion.span
+                    animate={{ rotate: 360 }}
+                    transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+                  >
+                    <Loader2 className="w-5 h-5" />
+                  </motion.span>
+                  <motion.span
+                    initial={{ opacity: 0, x: -5 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    Creating Account...
+                  </motion.span>
+                </>
+              ) : (
+                "Create Account"
+              )}
+            </motion.button>
           </form>
 
           <p className="text-center text-sm text-white/50">

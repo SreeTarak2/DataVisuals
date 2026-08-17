@@ -109,7 +109,7 @@ export default function ChatHistoryModal({ isOpen, onClose, currentConversationI
       onSelectConversation(chatId);
     } else {
       setCurrentConversation(chatId);
-      navigate(`/app/chat?chatId=${chatId}`);
+      navigate('/app/dashboard');
       onClose();
     }
   };
@@ -220,7 +220,7 @@ export default function ChatHistoryModal({ isOpen, onClose, currentConversationI
         </ScrollArea>
 
         <div className="border-t border-zinc-800 p-4 bg-zinc-950/50">
-          <Button variant="ghost" className="w-full justify-start gap-2 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => navigate('/app/chat')}>
+          <Button variant="ghost" className="w-full justify-start gap-2 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => navigate('/app/dashboard')}>
             <MessageSquare className="size-4" />
             <span className="text-xs font-medium">New Chat</span>
           </Button>

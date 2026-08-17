@@ -5,12 +5,7 @@ import {
   FileText,
   X,
   ArrowRight,
-  Database,
-  TrendingUp,
-  AlertTriangle,
-  Users,
-  Sliders,
-  Compass
+  Database
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
@@ -18,14 +13,6 @@ import useDatasetStore from '../../../store/datasetStore';
 import { useTheme } from '../../../store/themeStore';
 import { toast } from 'react-hot-toast';
 import ConnectDatabaseModal from '../databases/ConnectDatabaseModal';
-
-const INTENT_OPTIONS = [
-  { value: 'performance', label: 'Key metrics', icon: <TrendingUp size={14} />, description: 'Track KPIs, trends, and comparisons' },
-  { value: 'anomalies', label: 'Outliers', icon: <AlertTriangle size={14} />, description: 'Detect anomalies and unexpected deviations' },
-  { value: 'segments', label: 'User segments', icon: <Users size={14} />, description: 'Compare cohorts and breakdowns' },
-  { value: 'drivers', label: 'Correlations', icon: <Sliders size={14} />, description: 'Identify correlations and root causes' },
-  { value: 'explore', label: 'General analysis', icon: <Compass size={14} />, description: 'Surface interesting findings automatically' },
-];
 
 const formatFileSize = (bytes) => {
   if (bytes < 1024) return bytes + ' B';
@@ -38,7 +25,6 @@ const UploadModal = ({ isOpen, onClose, onProcessingStart, fileOnly = true }) =>
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isDbModalOpen, setIsDbModalOpen] = useState(false);
   const [stagedFile, setStagedFile] = useState(null);
-  const [analysisIntent, setAnalysisIntent] = useState('');
   const progressRef = useRef(null);
   const { uploadDataset, setProcessingDataset } = useDatasetStore();
   const { resolvedTheme } = useTheme();
@@ -48,7 +34,6 @@ const UploadModal = ({ isOpen, onClose, onProcessingStart, fileOnly = true }) =>
     const file = acceptedFiles[0];
     if (!file) return;
     setStagedFile(file);
-    setAnalysisIntent('');
   }, []);
 
   const handleAnalyze = useCallback(async () => {
@@ -63,7 +48,7 @@ const UploadModal = ({ isOpen, onClose, onProcessingStart, fileOnly = true }) =>
         setUploadProgress(prev => Math.min(prev + 10, 90));
       }, 120);
 
-      const result = await uploadDataset(currentFile, currentFile.name, '', analysisIntent);
+      const result = await uploadDataset(currentFile, currentFile.name);
 
       clearInterval(progressRef.current);
       progressRef.current = null;
@@ -81,13 +66,36 @@ const UploadModal = ({ isOpen, onClose, onProcessingStart, fileOnly = true }) =>
             onClose();
           }, 600);
         }
+      } else if (result.isDuplicate) {
+        const existingId = result.existingDataset?.id;
+        setUploadProgress(0);
+        setUploading(false);
+        if (existingId) {
+          setProcessingDataset(existingId);
+          if (onProcessingStart) onProcessingStart(existingId);
+          setTimeout(() => {
+            onClose();
+          }, 600);
+        } else {
+          onClose();
+        }
+      } else {
+        const errMsg = result?.error || 'Upload failed';
+        toast.error(errMsg);
+        setUploadProgress(0);
+        setUploading(false);
+        setStagedFile(currentFile);
       }
     } catch (error) {
+      if (progressRef.current) {
+        clearInterval(progressRef.current);
+        progressRef.current = null;
+      }
       toast.error('Upload failed. Please try again.');
       setUploading(false);
       setStagedFile(currentFile);
     }
-  }, [stagedFile, analysisIntent, uploadDataset, setProcessingDataset, onClose, onProcessingStart]);
+  }, [stagedFile, uploadDataset, setProcessingDataset, onClose, onProcessingStart]);
 
   // Close on Escape key
   useEffect(() => {
@@ -243,53 +251,7 @@ const UploadModal = ({ isOpen, onClose, onProcessingStart, fileOnly = true }) =>
                     </button>
                   </div>
 
-                  {/* Intent Options */}
-                  <div>
-                    <h4 className={`text-xs font-semibold uppercase tracking-wider mb-3 ${
-                      isDark ? 'text-zinc-500' : 'text-zinc-400'
-                    }`}>
-                      What should we focus on?
-                    </h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {INTENT_OPTIONS.map((option) => {
-                        const isSelected = analysisIntent === option.value;
-                        return (
-                          <button
-                            key={option.value}
-                            disabled={uploading}
-                            onClick={() => setAnalysisIntent(isSelected ? '' : option.value)}
-                            className={`flex items-start text-left p-3 border rounded-lg transition-all ${
-                              uploading ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
-                            } ${
-                              isSelected
-                                ? 'border-orange-500 bg-orange-500/[0.03] text-orange-500'
-                                : isDark
-                                  ? 'border-zinc-800 bg-zinc-900/10 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
-                                  : 'border-zinc-200 bg-zinc-50/20 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900'
-                            }`}
-                          >
-                            <div className={`mt-0.5 p-1 rounded ${
-                              isSelected 
-                                ? 'text-orange-500' 
-                                : isDark ? 'text-zinc-500' : 'text-zinc-400'
-                            }`}>
-                              {option.icon}
-                            </div>
-                            <div className="ml-2.5 min-w-0">
-                              <p className="text-xs font-semibold uppercase tracking-wider">
-                                {option.label}
-                              </p>
-                              <p className={`text-[11px] mt-0.5 leading-snug ${
-                                isSelected ? 'text-orange-500/80' : isDark ? 'text-zinc-500' : 'text-zinc-400'
-                              }`}>
-                                {option.description}
-                              </p>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+
 
                   {/* Action Button */}
                   <div className="pt-2">

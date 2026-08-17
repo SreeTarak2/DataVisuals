@@ -13,7 +13,7 @@ Every dashboard-related service MUST use these models.
 from typing import List, Dict, Any, Optional, Union, Sequence, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import re
 
@@ -36,9 +36,11 @@ class ChartType(str, Enum):
     BAR = "bar"
     LINE = "line"
     PIE = "pie"
+    DONUT = "donut"
     HISTOGRAM = "histogram"
     BOX_PLOT = "box_plot"
     SCATTER = "scatter"
+    EFFECT_SCATTER = "effect_scatter"
     HEATMAP = "heatmap"
     TREEMAP = "treemap"
     GROUPED_BAR = "grouped_bar"
@@ -62,6 +64,14 @@ class ChartType(str, Enum):
     GAUGE = "gauge"
     BULLET = "bullet"
     CHOROPLETH = "choropleth"
+    MAP = "map"
+    PICTORIAL_BAR = "pictorial_bar"
+    GRAPH = "graph"
+    SANKEY = "sankey"
+    PARALLEL = "parallel"
+    LINES = "lines"
+    TREE = "tree"
+    THEME_RIVER = "theme_river"
     CORRELATION_MATRIX = "correlation_matrix"
 
 
@@ -207,8 +217,22 @@ class ChartConfig(BaseComponentConfig):
             "stacked_area_chart": "stacked_area",
             "area_chart": "area",
             "area": "area",
-            "donut": "pie",
-            "donut_chart": "pie",
+            "donut": "donut",
+            "donut_chart": "donut",
+            "map": "map",
+            "choropleth": "choropleth",
+            "pictorial_bar": "pictorial_bar",
+            "pictorial": "pictorial_bar",
+            "effect_scatter": "effect_scatter",
+            "graph": "graph",
+            "network": "graph",
+            "sankey": "sankey",
+            "parallel": "parallel",
+            "parallel_coordinates": "parallel",
+            "lines": "lines",
+            "migration": "lines",
+            "tree": "tree",
+            "theme_river": "theme_river",
             "sunburst": "sunburst",
             "radar": "radar",
             "radar_chart": "radar",
@@ -302,9 +326,9 @@ class ChartConfig(BaseComponentConfig):
         t_value = t.value if hasattr(t, "value") else str(t)
         cols = self.columns
 
-        # Pie supports 1 column (categorical distribution) or 2 columns (label + value)
-        if t_value == ChartType.PIE.value and len(cols) < 1:
-            raise ValueError("Pie requires at least one column.")
+        # Pie/Donut supports 1 column (categorical distribution) or 2 columns (label + value)
+        if t_value in (ChartType.PIE.value, ChartType.DONUT.value) and len(cols) < 1:
+            raise ValueError(f"{t_value} requires at least one column.")
 
         if (
             t_value
@@ -316,6 +340,7 @@ class ChartConfig(BaseComponentConfig):
                 ChartType.MULTI_LINE.value,
                 ChartType.STACKED_AREA.value,
                 ChartType.SCATTER.value,
+                ChartType.EFFECT_SCATTER.value,
                 ChartType.AREA.value,
             ]
             and len(cols) < 2
@@ -374,7 +399,7 @@ class DashboardBlueprint(BaseModel):
     layout_grid: LayoutGrid = LayoutGrid.FOUR_COL
     components: List[ComponentConfig] = Field(..., min_length=1, max_length=50)
     version: str = "1.0"
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     class Config:
         extra = "forbid"
@@ -514,8 +539,22 @@ class SchemaRepairer:
             "stacked_area_chart": "stacked_area",
             "area_chart": "area",
             "area": "area",
-            "donut": "pie",
-            "donut_chart": "pie",
+            "donut": "donut",
+            "donut_chart": "donut",
+            "map": "map",
+            "choropleth": "choropleth",
+            "pictorial_bar": "pictorial_bar",
+            "pictorial": "pictorial_bar",
+            "effect_scatter": "effect_scatter",
+            "graph": "graph",
+            "network": "graph",
+            "sankey": "sankey",
+            "parallel": "parallel",
+            "parallel_coordinates": "parallel",
+            "lines": "lines",
+            "migration": "lines",
+            "tree": "tree",
+            "theme_river": "theme_river",
             "sunburst": "sunburst",
             "radar": "radar",
             "radar_chart": "radar",
@@ -572,15 +611,30 @@ class SchemaRepairer:
         lc = candidate.lower()
         if lc in all_cols_lower:
             return all_cols_lower[lc]
+
+        logger.warning(
+            "Prompt anchoring failed. Fuzzy match (normalized) triggered for hallucinated candidate: '%s'",
+            candidate,
+        )
         # normalized compare (strip non-alnum)
         norm = re.sub(r"[^a-z0-9]", "", lc)
         for col in all_cols:
             if re.sub(r"[^a-z0-9]", "", col.lower()) == norm:
                 return col
+
+        logger.warning(
+            "Prompt anchoring failed. Fuzzy match (substring) triggered for hallucinated candidate: '%s'",
+            candidate,
+        )
         # substring match
         for col in all_cols:
             if lc in col.lower() or col.lower() in lc:
                 return col
+
+        logger.error(
+            "Prompt anchoring completely failed. Could not resolve hallucinated column: '%s'",
+            candidate,
+        )
         return None
 
     @staticmethod
@@ -604,6 +658,14 @@ class SchemaRepairer:
             or "__all__"
         )
         col_fixed = SchemaRepairer._fuzzy_col(col, all_cols, all_cols_lower) or "__all__"
+
+        if col_fixed == "__all__" and col != "__all__":
+            logger.warning(
+                "KPI hallucination repair: Failed to resolve column '%s' for KPI titled '%s'.",
+                col,
+                title,
+            )
+
         agg = (cfg.get("aggregation") or "count").lower()
         agg = (
             agg
@@ -648,6 +710,12 @@ class SchemaRepairer:
             match = SchemaRepairer._fuzzy_col(c, all_cols, all_cols_lower)
             if match:
                 fixed_cols.append(match)
+            else:
+                logger.warning(
+                    "Chart hallucination repair: Failed to resolve column '%s' for chart titled '%s'.",
+                    c,
+                    title,
+                )
         if not fixed_cols:
             if all_cols:
                 fixed_cols = [all_cols[0]]

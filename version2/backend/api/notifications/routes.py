@@ -10,10 +10,10 @@ scheduled tasks) as a fire-and-forget notification channel.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from core.rate_limiter import limiter, RateLimits
@@ -92,6 +92,83 @@ async def trigger_notification(
     }
 
 
+@router.get("/notifications")
+@limiter.limit(RateLimits.DATASET_GET)
+async def get_notifications(
+    request: Request,
+    limit: int = Query(30, ge=1, le=100),
+    include_read: bool = Query(True),
+    current_user: dict = Depends(get_current_user),
+):
+    """List the current user's notification inbox, newest first."""
+    from services.notifications.service import list_notifications, unread_count
+
+    user_id = current_user["id"]
+    workspace_id = current_user.get("workspace_id", user_id)
+
+    items = await list_notifications(
+        user_id,
+        workspace_id,
+        limit=limit,
+        include_read=include_read,
+    )
+    unread = await unread_count(user_id, workspace_id)
+    return {
+        "notifications": items,
+        "count": len(items),
+        "unread_count": unread,
+        "user_id": user_id,
+    }
+
+
+@router.get("/notifications/unread-count")
+@limiter.limit(RateLimits.DATASET_GET)
+async def get_unread_count(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return the number of unread notifications (bell badge)."""
+    from services.notifications.service import unread_count
+
+    user_id = current_user["id"]
+    workspace_id = current_user.get("workspace_id", user_id)
+    count = await unread_count(user_id, workspace_id)
+    return {"unread_count": count, "user_id": user_id}
+
+
+@router.post("/notifications/{notification_id}/read")
+@limiter.limit(RateLimits.DATASET_GET)
+async def mark_notification_read(
+    request: Request,
+    notification_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Mark a single notification as read (owner-scoped)."""
+    from services.notifications.service import mark_read
+
+    user_id = current_user["id"]
+    workspace_id = current_user.get("workspace_id", user_id)
+    updated = await mark_read(user_id, workspace_id, notification_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"success": True, "notification_id": notification_id}
+
+
+@router.post("/notifications/read-all")
+@limiter.limit(RateLimits.DATASET_GET)
+async def mark_all_notifications_read(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Mark all of the current user's notifications as read."""
+    from services.notifications.service import mark_all_read
+
+    user_id = current_user["id"]
+    workspace_id = current_user.get("workspace_id", user_id)
+    modified = await mark_all_read(user_id, workspace_id)
+    return {"success": True, "marked_read": modified, "user_id": user_id}
+
+
 @router.get("/notifications/status")
 @limiter.limit(RateLimits.DATASET_GET)
 async def get_notification_status(
@@ -119,7 +196,7 @@ async def get_notification_status(
     }
 
     status = {}
-    now_ts = datetime.utcnow().timestamp()
+    now_ts = datetime.now(timezone.utc).replace(tzinfo=None).timestamp()
 
     for trigger_type, max_per_hour in limits.items():
         key = f"{user_id}__{trigger_type}"

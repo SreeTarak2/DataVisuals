@@ -14,6 +14,7 @@ import pandas as pd
 from typing import List, Dict, Any, Tuple
 import logging
 import time
+import math
 
 from db.schemas_dashboard import (
     ChartConfig,
@@ -121,6 +122,123 @@ def _should_auto_bin(df: pl.DataFrame, col: str, threshold: int = 15) -> bool:
         return False
     n_unique = df[col].n_unique()
     return n_unique > threshold
+
+
+def _lttb_downsample(x: List[Any], y: List[Any], threshold: int) -> Tuple[List[Any], List[Any]]:
+    """
+    Largest-Triangle-Three-Buckets downsampling.
+
+    Picks, per bucket, the point that forms the largest triangle with the
+    previously selected point and the average of the next bucket — preserving
+    the visual shape (peaks/troughs) of a series far better than naive
+    every-nth-point sampling.
+
+    Dates, datetimes, and string labels cannot be float()-ed, so those are
+    mapped to their index position as the triangle-math coordinate (order
+    is preserved, geometry stays valid). Original x values are returned
+    unchanged.
+
+    Returns (sampled_x, sampled_y) with at most `threshold` points.
+    """
+    n = len(x)
+    if threshold >= n or threshold < 3 or n < 3:
+        return x, y
+
+    # Numeric coordinate per point for triangle geometry (fallback: index).
+    x_num: List[float] = []
+    for k, xv in enumerate(x):
+        try:
+            x_num.append(float(xv))
+        except (TypeError, ValueError):
+            x_num.append(float(k))
+
+    sampled_x: List[Any] = [x[0]]
+    sampled_y: List[Any] = [y[0]]
+
+    every = (n - 2) / (threshold - 2)
+    a = 0  # index of the last chosen point
+
+    for i in range(threshold - 2):
+        # ── Average point of the NEXT bucket (defines triangle height) ──
+        next_start = int((i + 1) * every) + 1
+        next_end = min(int((i + 2) * every) + 1, n)
+        avg_x = 0.0
+        avg_y = 0.0
+        if next_start < next_end:
+            for k in range(next_start, next_end):
+                avg_x += x_num[k]
+                avg_y += float(y[k])
+            count = next_end - next_start
+            avg_x /= count
+            avg_y /= count
+        else:
+            avg_x = x_num[a]
+            avg_y = float(y[a])
+
+        # ── Points in the CURRENT bucket ──
+        range_start = int(i * every) + 1
+        range_end = min(int((i + 1) * every) + 1, n)
+
+        point_a_x = x_num[a]
+        point_a_y = float(y[a])
+
+        max_area = -1.0
+        chosen = a
+        for k in range(range_start, range_end):
+            # Triangle area between (a), (k), and the next-bucket average
+            area = abs(
+                (point_a_x - avg_x) * (float(y[k]) - point_a_y)
+                - (point_a_x - x_num[k]) * (avg_y - point_a_y)
+            )
+            if area > max_area:
+                max_area = area
+                chosen = k
+
+        sampled_x.append(x[chosen])
+        sampled_y.append(y[chosen])
+        a = chosen
+
+    sampled_x.append(x[n - 1])
+    sampled_y.append(y[n - 1])
+    return sampled_x, sampled_y
+
+
+def _lttb_downsample_df(
+    agg_df: pl.DataFrame, max_points: int
+) -> Tuple[pl.DataFrame, int]:
+    """
+    Downsample a 2-column (x, y) aggregated polars DataFrame via LTTB.
+
+    Returns (downsampled_df, original_count). No-op when already within limit.
+    """
+    n = len(agg_df)
+    if n <= max_points:
+        return agg_df, n
+    sx, sy = _lttb_downsample(agg_df["x"].to_list(), agg_df["y"].to_list(), max_points)
+    return pl.DataFrame({"x": sx, "y": sy}), n
+
+
+def aggregate_sampling_metadata(traces: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    """
+    Collapse per-trace `_sampled` hints into one chart-level summary.
+
+    Returns None when no trace was downsampled (callers can skip the badge).
+    Structure: {"shown": int, "original_count": int, "method": str}
+    """
+    shown = 0
+    original = 0
+    method = None
+    for t in traces:
+        s = t.get("_sampled") if isinstance(t, dict) else None
+        if not isinstance(s, dict):
+            continue
+        shown += int(s.get("shown", 0) or 0)
+        original = max(original, int(s.get("original_count", 0) or 0))
+        if s.get("method"):
+            method = s["method"]
+    if shown <= 0 or original <= 0 or original <= shown:
+        return None
+    return {"shown": shown, "original_count": original, "method": method or "sampled"}
 
 
 def validate_config(df: pl.DataFrame, config: ChartConfig) -> None:
@@ -599,6 +717,17 @@ def _get_handler(chart_type: str):
         "gauge": _hydrate_gauge,
         "bullet": _hydrate_bullet,
         "choropleth": _hydrate_choropleth,
+        # ECharts-native types with Plotly fallback hydration
+        "donut": _hydrate_donut,
+        "map": _hydrate_map,
+        "pictorial_bar": _hydrate_pictorial_bar,
+        "effect_scatter": _hydrate_effect_scatter,
+        "graph": _hydrate_graph,
+        "sankey": _hydrate_sankey,
+        "parallel": _hydrate_parallel,
+        "lines": _hydrate_lines,
+        "tree": _hydrate_tree,
+        "theme_river": _hydrate_theme_river,
     }
     if chart_type not in handlers:
         logger.warning(f"Unknown chart type: {chart_type}, using fallback")
@@ -716,9 +845,14 @@ def _build_multi_line_traces(df, x_col, y_col, group_col, config, max_points=100
         if agg_df.is_empty():
             continue
         total_pts = len(agg_df)
+        sampled_meta = None
         if total_pts > max_points:
-            step = max(1, total_pts // max_points)
-            agg_df = agg_df.gather_every(step)
+            agg_df, _ = _lttb_downsample_df(agg_df, max_points)
+            sampled_meta = {
+                "original_count": total_pts,
+                "shown": len(agg_df),
+                "method": "lttb",
+            }
         x_data = agg_df["x"].to_list()
         if x_is_year:
             x_data = [f"{int(v)}-01-01" for v in x_data]
@@ -743,6 +877,8 @@ def _build_multi_line_traces(df, x_col, y_col, group_col, config, max_points=100
                 "_group_by": group_col,
             }
         )
+        if sampled_meta:
+            traces[-1]["_sampled"] = sampled_meta
     logger.info(
         f"multi_line: {len(traces)} series for group_col='{group_col}' year_mode={x_is_year}"
     )
@@ -864,12 +1000,12 @@ def _hydrate_line(df, config):
             .drop("_bin_order")
         )
 
-    # Downsample line charts: take evenly spaced points to preserve shape
+    # Downsample line charts via LTTB — preserves the shape (peaks/troughs)
+    # far better than every-nth-point sampling.
     total_points = len(agg_df)
     if total_points > MAX_LINE_POINTS:
-        step = max(1, total_points // MAX_LINE_POINTS)
-        agg_df = agg_df.gather_every(step)
-        logger.info(f"Line chart downsampled: {total_points} → {len(agg_df)} points")
+        agg_df, _ = _lttb_downsample_df(agg_df, MAX_LINE_POINTS)
+        logger.info(f"Line chart downsampled via LTTB: {total_points} → {len(agg_df)} points")
 
     # Detect numeric years (e.g., 2012) to prevent Plotly from misinterpreting them as Unix epoch seconds (1970)
     x_is_year = False
@@ -903,7 +1039,11 @@ def _hydrate_line(df, config):
     }
 
     if total_points > MAX_LINE_POINTS:
-        trace["_sampled"] = {"original_count": total_points, "shown": len(agg_df)}
+        trace["_sampled"] = {
+            "original_count": total_points,
+            "shown": len(agg_df),
+            "method": "lttb",
+        }
     return [trace]
 
 
@@ -1473,9 +1613,14 @@ def _hydrate_multi_line(df, config):
             continue
 
         total_points = len(agg_df)
+        sampled_meta = None
         if total_points > MAX_LINE_POINTS:
-            step = max(1, total_points // MAX_LINE_POINTS)
-            agg_df = agg_df.gather_every(step)
+            agg_df, _ = _lttb_downsample_df(agg_df, MAX_LINE_POINTS)
+            sampled_meta = {
+                "original_count": total_points,
+                "shown": len(agg_df),
+                "method": "lttb",
+            }
 
         x_data = agg_df["x"].to_list()
         if x_is_year:
@@ -1499,6 +1644,8 @@ def _hydrate_multi_line(df, config):
                 "y": {"format": _get_col_format(y_col)},
             },
         }
+        if sampled_meta:
+            trace["_sampled"] = sampled_meta
         traces.append(trace)
 
     logger.info(f"multi_line: {len(traces)} series")
@@ -1537,9 +1684,14 @@ def _hydrate_stacked_area(df, config):
             continue
 
         total_points = len(agg_df)
+        sampled_meta = None
         if total_points > MAX_LINE_POINTS:
-            step = max(1, total_points // MAX_LINE_POINTS)
-            agg_df = agg_df.gather_every(step)
+            agg_df, _ = _lttb_downsample_df(agg_df, MAX_LINE_POINTS)
+            sampled_meta = {
+                "original_count": total_points,
+                "shown": len(agg_df),
+                "method": "lttb",
+            }
 
         y_data = agg_df["y"].to_list()
 
@@ -1581,6 +1733,8 @@ def _hydrate_stacked_area(df, config):
             },
             "_stacked": True,
         }
+        if sampled_meta:
+            trace["_sampled"] = sampled_meta
         traces.append(trace)
 
     logger.info(f"stacked_area: {len(traces)} series")
@@ -1588,7 +1742,7 @@ def _hydrate_stacked_area(df, config):
 
 
 # =====================================================
-# NEW CHART TYPE HANDLERS
+# NEW CHART TYPE HANDLERS (Phase 1)
 # =====================================================
 
 
@@ -1848,6 +2002,413 @@ def _hydrate_sunburst(df, config):
             "branchvalues": "total",
         }
     ]
+
+
+# =====================================================
+# NEW CHART TYPE HANDLERS (Phase 2) — ECharts-native Plotly fallbacks
+# =====================================================
+
+
+def _hydrate_donut(df, config):
+    """
+    Donut chart — same semantics as pie, with a center hole.
+    The render.py `_patch_traces` sets `hole: 0.65` for the donut visual.
+    """
+    return _hydrate_pie(df, config)
+
+
+def _hydrate_map(df, config):
+    """
+    Map chart — geographic data visualization.
+    Supports:
+    1) Lat/Lon columns → scattergeo points
+    2) Location name + value → scattergeo location-mode
+    3) Fallback → choropleth or bar
+    """
+    if not config.columns:
+        return []
+
+    cols = config.columns
+    col_lower = [c.lower() for c in cols]
+
+    # Detect lat/lon pairs by name heuristic
+    lat_idx = next((i for i, c in enumerate(col_lower) if c in ("lat", "latitude", "lat_")), None)
+    lon_idx = next((i for i, c in enumerate(col_lower) if c in ("lon", "long", "longitude", "lng", "lon_")), None)
+
+    if lat_idx is not None and lon_idx is not None:
+        lat_col, lon_col = cols[lat_idx], cols[lon_idx]
+        if lat_col in df.columns and lon_col in df.columns:
+            valid = df.select([lat_col, lon_col]).drop_nulls()
+            if not valid.is_empty():
+                trace = {
+                    "type": "scattergeo",
+                    "mode": "markers",
+                    "lat": valid[lat_col].to_list(),
+                    "lon": valid[lon_col].to_list(),
+                    "marker": {"color": "#0ED2D2", "size": 8},
+                    "name": config.title or "Map",
+                }
+                # Add color dimension if a 3rd numeric column exists
+                if len(cols) > 2:
+                    val_col = cols[2]
+                    if val_col in df.columns and df[val_col].dtype in NUMERIC_DTYPES:
+                        # Select all three cols together to keep row alignment
+                        valid_with_val = df.select([lat_col, lon_col, val_col]).drop_nulls()
+                        trace["marker"]["color"] = valid_with_val[val_col].to_list()
+                        trace["marker"]["colorscale"] = "Viridis"
+                        trace["marker"]["showscale"] = True
+                        trace["lat"] = valid_with_val[lat_col].to_list()
+                        trace["lon"] = valid_with_val[lon_col].to_list()
+                        trace["text"] = [f"{val_col}: {v}" for v in valid_with_val[val_col].to_list()]
+                return [trace]
+
+    # Location name + value → scattergeo location-mode
+    if len(cols) >= 2:
+        loc_col, val_col = cols[0], cols[1]
+        if loc_col in df.columns and val_col in df.columns:
+            agg_df = _safe_aggregate(df, loc_col, val_col, config.aggregation)
+            if not agg_df.is_empty():
+                first_loc = str(agg_df["x"][0])
+                location_mode = "ISO-3" if len(first_loc) == 3 else "country names"
+                return [{
+                    "type": "scattergeo",
+                    "mode": "markers",
+                    "locations": agg_df["x"].to_list(),
+                    "locationmode": location_mode,
+                    "text": agg_df["x"].to_list(),
+                    "marker": {
+                        "color": agg_df["y"].to_list(),
+                        "colorscale": "Viridis",
+                        "showscale": True,
+                        "size": 12,
+                        "colorbar": {"title": val_col},
+                    },
+                    "name": config.title or loc_col,
+                }]
+
+    return _hydrate_bar(df, config)
+
+
+def _hydrate_pictorial_bar(df, config):
+    """
+    Pictorial bar — ECharts native (uses SVG images for bars).
+    Plotly fallback: standard bar chart tagged for frontend awareness.
+    """
+    traces = _hydrate_bar(df, config)
+    for tr in traces:
+        tr["_is_pictorial"] = True
+        # Use distinctive marker to hint at pictorial intent
+        if "marker" not in tr:
+            tr["marker"] = {}
+        tr["marker"]["opacity"] = 0.85
+        tr["marker"]["line"] = {"width": 1, "color": "rgba(0,0,0,0.2)"}
+    return traces
+
+
+def _hydrate_effect_scatter(df, config):
+    """
+    Effect scatter — ECharts native (animated ripple scatter).
+    Plotly fallback: standard scatter with larger markers and tagging.
+    """
+    traces = _hydrate_scatter(df, config)
+    for tr in traces:
+        tr["_is_effect_scatter"] = True
+        if "marker" not in tr:
+            tr["marker"] = {}
+        # Slightly larger markers with glow-like border
+        tr["marker"].setdefault("size", 10)
+        tr["marker"]["line"] = {"width": 2, "color": "rgba(14,210,210,0.6)"}
+        tr["marker"]["opacity"] = 0.8
+    return traces
+
+
+def _hydrate_graph(df, config):
+    """
+    Network/graph visualization — force-directed node-link diagram.
+    Plotly fallback: scatter for nodes + line segments for edges.
+
+    Config:
+      columns[0] = source node column
+      columns[1] = target node column
+      columns[2] (optional) = edge weight/value column
+    """
+    if len(config.columns) < 2:
+        return _hydrate_scatter(df, config)
+
+    src_col, tgt_col = config.columns[0], config.columns[1]
+    val_col = config.columns[2] if len(config.columns) > 2 else None
+
+    if src_col not in df.columns or tgt_col not in df.columns:
+        return _hydrate_scatter(df, config)
+
+    # Collect edges
+    edge_rows = df.select([c for c in [src_col, tgt_col, val_col] if c in df.columns]).drop_nulls()
+    if edge_rows.is_empty():
+        return []
+
+    # Build node set
+    sources = edge_rows[src_col].to_list()
+    targets = edge_rows[tgt_col].to_list()
+    all_nodes = list(dict.fromkeys([str(s) for s in sources] + [str(t) for t in targets]))
+    node_indices = {name: i for i, name in enumerate(all_nodes)}
+
+    # Circular layout for nodes (spread evenly around a circle)
+    n = len(all_nodes)
+    radius = max(n * 0.5, 3)
+    angle_step = 2 * math.pi / max(n, 1)
+    node_positions = {}
+    for i, name in enumerate(all_nodes):
+        angle = i * angle_step - math.pi / 2  # start at top
+        node_positions[name] = (
+            math.cos(angle) * radius,
+            math.sin(angle) * radius,
+        )
+
+    # Edge traces as lines
+    edge_x, edge_y = [], []
+    for i in range(len(sources)):
+        sx, sy = node_positions[str(sources[i])]
+        tx, ty = node_positions[str(targets[i])]
+        edge_x.extend([sx, tx, None])
+        edge_y.extend([sy, ty, None])
+
+    traces = []
+
+    # Edge trace
+    edge_trace = {
+        "type": "scatter",
+        "mode": "lines",
+        "x": edge_x,
+        "y": edge_y,
+        "line": {"color": "rgba(100,100,100,0.3)", "width": 1},
+        "hoverinfo": "none",
+        "showlegend": False,
+        "name": "edges",
+    }
+    traces.append(edge_trace)
+
+    # Node trace
+    node_x = [node_positions[name][0] for name in all_nodes]
+    node_y = [node_positions[name][1] for name in all_nodes]
+    node_labels = list(all_nodes)
+
+    # Compute node sizes based on degree (count of connections)
+    degree = {n: 0 for n in all_nodes}
+    for s, t in zip(sources, targets):
+        degree[str(s)] += 1
+        degree[str(t)] += 1
+    node_sizes = [10 + min(degree[n] * 3, 30) for n in all_nodes]
+
+    node_trace = {
+        "type": "scatter",
+        "mode": "markers+text",
+        "x": node_x,
+        "y": node_y,
+        "text": node_labels,
+        "textposition": "top center",
+        "hovertext": [f"{n} (degree: {degree[n]})" for n in all_nodes],
+        "hoverinfo": "text",
+        "marker": {
+            "size": node_sizes,
+            "color": "#0ED2D2",
+            "line": {"width": 1, "color": "#ffffff"},
+        },
+        "showlegend": False,
+        "name": "nodes",
+    }
+    traces.append(node_trace)
+
+    for tr in traces:
+        tr["_is_graph"] = True
+
+    return traces
+
+
+def _hydrate_sankey(df, config):
+    """
+    Sankey diagram — flow visualization between categories.
+    Uses native Plotly `sankey` trace type.
+
+    Config:
+      columns[0] = source category column
+      columns[1] = target category column
+      columns[2] (optional) = flow value column
+    """
+    if len(config.columns) < 2:
+        return _hydrate_bar(df, config)
+
+    src_col, tgt_col = config.columns[0], config.columns[1]
+    val_col = config.columns[2] if len(config.columns) > 2 else None
+
+    if src_col not in df.columns or tgt_col not in df.columns:
+        return _hydrate_bar(df, config)
+
+    # Aggregate flows
+    group_cols = [src_col, tgt_col]
+    if val_col and val_col in df.columns and df[val_col].dtype in NUMERIC_DTYPES:
+        if config.aggregation == AggregationType.COUNT:
+            agg_expr = pl.count().alias("flow_value")
+        elif config.aggregation == AggregationType.MEAN:
+            agg_expr = pl.mean(val_col).alias("flow_value")
+        else:
+            agg_expr = pl.sum(val_col).alias("flow_value")
+    else:
+        agg_expr = pl.count().alias("flow_value")
+
+    flow_df = (
+        df.group_by(group_cols)
+        .agg(agg_expr)
+        .sort("flow_value", descending=True)
+        .head(100)  # Keep sankey readable
+    )
+
+    if flow_df.is_empty():
+        return []
+
+    # Build node list (deduplicated, in order of appearance)
+    all_nodes = []
+    seen = set()
+    for row in flow_df.iter_rows(named=True):
+        for col in [src_col, tgt_col]:
+            name = str(row[col])
+            if name not in seen:
+                seen.add(name)
+                all_nodes.append(name)
+
+    node_map = {name: i for i, name in enumerate(all_nodes)}
+
+    # Build links
+    source_indices, target_indices, values = [], [], []
+    for row in flow_df.iter_rows(named=True):
+        source_indices.append(node_map[str(row[src_col])])
+        target_indices.append(node_map[str(row[tgt_col])])
+        values.append(float(row["flow_value"]))
+
+    return [{
+        "type": "sankey",
+        "orientation": "h",
+        "node": {
+            "pad": 15,
+            "thickness": 20,
+            "line": {"color": "rgba(0,0,0,0.2)", "width": 0.5},
+            "label": all_nodes,
+            "color": "rgba(14,210,210,0.8)",
+        },
+        "link": {
+            "source": source_indices,
+            "target": target_indices,
+            "value": values,
+        },
+    }]
+
+
+def _hydrate_parallel(df, config):
+    """
+    Parallel coordinates chart — multi-dimensional data analysis.
+    Uses native Plotly `parcoords` trace type.
+
+    All columns become parallel axes with dimensions.
+    """
+    if len(config.columns) < 2:
+        return _hydrate_bar(df, config)
+
+    valid_cols = [c for c in config.columns if c in df.columns]
+    if len(valid_cols) < 2:
+        return _hydrate_bar(df, config)
+
+    # Parcoords requires numeric dimensions — filter and encode categoricals
+    dimensions = []
+    color_col = None
+    color_values = None
+    for col in valid_cols:
+        if df[col].dtype in NUMERIC_DTYPES:
+            dim = {
+                "label": col,
+                "values": df[col].to_list(),
+                "range": [float(df[col].min()), float(df[col].max())],
+            }
+            dimensions.append(dim)
+            # Use first numeric column encountered as color
+            if color_col is None:
+                color_col = col
+                color_values = df[col].to_list()
+        elif df[col].dtype in (pl.Utf8, pl.Categorical):
+            # Encode categoricals as integer codes with tickvals/ticktext
+            unique_vals = df[col].unique().to_list()
+            code_map = {v: i for i, v in enumerate(unique_vals)}
+            codes = [code_map.get(v, -1) for v in df[col].to_list()]
+            dim = {
+                "label": col,
+                "values": codes,
+                "tickvals": list(range(len(unique_vals))),
+                "ticktext": [str(v) for v in unique_vals],
+            }
+            dimensions.append(dim)
+
+    if len(dimensions) < 2:
+        # Not enough numeric or categorical dimensions for parallel coords
+        return _hydrate_bar(df, config)
+
+    trace = {
+        "type": "parcoords",
+        "dimensions": dimensions,
+        "name": config.title or "Parallel Coordinates",
+    }
+    if color_values is not None:
+        trace["line"] = {
+            "color": color_values,
+            "colorscale": "Viridis",
+            "showscale": True,
+        }
+
+    return [trace]
+
+
+def _hydrate_lines(df, config):
+    """
+    Lines chart — polyline trail visualization (ECharts native).
+    Plotly fallback: multi_line chart with enhanced markers.
+    """
+    # lines behaves like multi_line with markers
+    traces = _hydrate_multi_line(df, config)
+    for tr in traces:
+        tr["_is_lines"] = True
+        if tr.get("mode") == "lines":
+            tr["mode"] = "lines+markers"
+        if "marker" not in tr:
+            tr["marker"] = {}
+        tr["marker"].setdefault("size", 5)
+        tr["marker"]["opacity"] = 0.9
+        tr["marker"]["line"] = {"width": 1, "color": "rgba(255,255,255,0.5)"}
+    return traces
+
+
+def _hydrate_tree(df, config):
+    """
+    Tree chart — hierarchical tree visualization (ECharts native).
+    Plotly fallback: treemap with the same hierarchical structure.
+    """
+    return _hydrate_treemap(df, config)
+
+
+def _hydrate_theme_river(df, config):
+    """
+    Theme river — stacked area chart over temporal axis (ECharts native).
+    Plotly fallback: stacked area chart with auto-group detection when < 3 cols.
+    """
+    if len(config.columns) >= 3:
+        return _hydrate_stacked_area(df, config)
+
+    # With only 2 columns (time + value), auto-detect a group column
+    # so we still produce a multi-stream stacked area
+    if len(config.columns) == 2:
+        x_col, y_col = config.columns[0], config.columns[1]
+        group_col = _auto_detect_group_column(df, x_col, y_col)
+        if group_col:
+            # Build a stack by grouping detected column
+            return _build_multi_line_traces(df, x_col, y_col, group_col, config)
+
+    return _hydrate_area(df, config)
 
 
 def _hydrate_gauge(df, config):

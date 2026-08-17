@@ -273,7 +273,7 @@ def validate_cached_explanation(
     # if generated_at:
     #     try:
     #         ts = datetime.fromisoformat(generated_at)
-    #         if datetime.utcnow() - ts > timedelta(hours=24):
+    #         if datetime.now(timezone.utc).replace(tzinfo=None) - ts > timedelta(hours=24):
     #             logger.info("Cache expired (>24h old)")
     #             return False
     #     except Exception as e:

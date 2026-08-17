@@ -20,7 +20,7 @@ import logging
 import asyncio
 import re
 from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import polars as pl
 import json
 
@@ -295,7 +295,7 @@ class ChartInsightsService:
                 "recommendations": recommendations,
                 "enhanced_insight": enhanced_insight,
                 "chart_type": chart_type,
-                "generated_at": datetime.utcnow().isoformat(),
+                "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                 "confidence": self._calculate_confidence(patterns),
                 "cache_version": self.CACHE_VERSION,
                 "_quality_source": enhanced_insight.get("_quality_source", "unknown")
@@ -636,13 +636,13 @@ class ChartInsightsService:
     ) -> Optional[Dict]:
         """Generate enhanced insight using LLM."""
         try:
-            from services.llm_router import llm_router
+            from llm.router import llm_router
 
             chart_summary = self._build_chart_summary(chart_type, traces, chart_config)
             data_stats = self._build_data_stats(traces, df, chart_config)
             dataset_context = self._build_dataset_context(df, chart_config)
 
-            from core.prompt_templates import get_chart_explanation_prompt
+            from prompts.chart import get_chart_explanation_prompt
 
             prompt = get_chart_explanation_prompt(
                 chart_summary=chart_summary,
@@ -875,7 +875,7 @@ class ChartInsightsService:
             "recommendations": ["Review data quality and completeness"],
             "enhanced_insight": None,
             "chart_type": chart_type,
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             "confidence": 0.5,
         }
 

@@ -6,7 +6,7 @@ Includes comprehensive security features
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import time
 import re
@@ -181,7 +181,7 @@ class AuditLogger:
     ):
         """Log a database operation for audit purposes"""
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             "operation": operation,
             "success": success,
             "duration_ms": duration_ms,

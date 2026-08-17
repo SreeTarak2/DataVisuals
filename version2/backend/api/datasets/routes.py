@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Optional
 from fastapi import (
     APIRouter,
     Depends,
@@ -12,7 +13,7 @@ from fastapi import (
     status,
 )
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 
 from db.schemas import DrillDownRequest
@@ -20,14 +21,11 @@ from db.database import get_database
 from services.auth_service import get_current_user
 from services.datasets.enhanced_dataset_service import enhanced_dataset_service
 from services.datasets.file_storage_service import file_storage_service
+from services.chat import chat_pipeline
+from db.schemas import ChatRequest
 from core.rate_limiter import limiter, RateLimits
 from core.config import settings
 
-from services.knowledge_graph.entity_discovery import entity_discovery
-from services.knowledge_graph.primary_object_discovery import primary_object_discovery
-from services.knowledge_graph.participation_discovery import participation_discovery
-from services.knowledge_graph.reference_signal_detector import reference_signal_detector
-from services.knowledge_graph.models import ColumnProfile
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -56,7 +54,11 @@ import os as _os
 from pathlib import Path as _Path
 
 
-async def _download_google_sheet(url: str) -> tuple[str, str, bytes]:
+async def _download_google_sheet(
+    url: str,
+    max_size: int | None = None,
+    tier: str = "free",
+) -> tuple[str, str, bytes]:
     """
     Download a Google Sheet as CSV and return ``(sheet_id, export_url, content)``.
 
@@ -66,7 +68,8 @@ async def _download_google_sheet(url: str) -> tuple[str, str, bytes]:
     - Sheet not found (404)
     - Sheet requires authentication (302 redirect → non-CSV content)
     - Network errors
-    - Content exceeds ``MAX_FILE_SIZE``
+    - Content exceeds the effective upload limit (tier limit capped by the
+      pipeline memory ceiling; ``MAX_FILE_SIZE`` when no limit is passed)
     """
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
@@ -108,13 +111,21 @@ async def _download_google_sheet(url: str) -> tuple[str, str, bytes]:
                     detail=f"Google Sheet '{sheet_id[:8]}...' is empty. Add at least one row of data.",
                 )
 
-            # Validate file size against MAX_FILE_SIZE
-            max_size = settings.MAX_FILE_SIZE
-            if len(content) > max_size:
+            # Validate file size against the effective upload limit
+            # (tier limit capped by the pipeline memory ceiling). The caller
+            # passes the user's per-tier limit; falls back to MAX_FILE_SIZE.
+            effective_max = max_size or settings.MAX_FILE_SIZE
+            if len(content) > effective_max:
+                from services.datasets.size_limits import size_limit_error_message
+
                 raise HTTPException(
                     status_code=413,
-                    detail=f"Google Sheet exceeds maximum file size of {max_size // (1024 * 1024)}MB. "
-                    f"Try importing a subset of the data.",
+                    detail=size_limit_error_message(
+                        len(content) / (1024 * 1024),
+                        effective_max // (1024 * 1024),
+                        tier,
+                    )
+                    + " Try importing a subset of the data.",
                 )
 
             return sheet_id, export_url, content
@@ -187,13 +198,16 @@ async def _create_gsheet_dataset_doc(
     file_metadata: dict,
     content_hash: str,
     custom_name: str | None = None,
+    workspace_id: str | None = None,
 ) -> str:
     """Create a MongoDB dataset document for a Google Sheet import and fire processing."""
     db = get_database()
+    wid = workspace_id or user_id
 
     dataset_doc = {
         "_id": dataset_id,
         "user_id": user_id,
+        "workspace_id": wid,
         "name": custom_name or f"Google Sheet ({sheet_id[:8]}...)",
         "description": f"Imported from Google Sheets: {sheet_url}",
         "source_type": "google_sheets",
@@ -205,7 +219,7 @@ async def _create_gsheet_dataset_doc(
         "file_extension": "csv",
         "content_hash": content_hash,
         "original_filename": f"google-sheet-{sheet_id}.csv",
-        "upload_date": datetime.utcnow(),
+        "upload_date": datetime.now(timezone.utc).replace(tzinfo=None),
         "is_processed": False,
         "is_active": True,
         "processing_status": "pending",
@@ -221,7 +235,12 @@ async def _create_gsheet_dataset_doc(
     from services.pipeline.process import process_dataset
 
     asyncio.create_task(
-        process_dataset(dataset_id, file_metadata["file_path"], user_id)
+        process_dataset(
+            dataset_id,
+            file_metadata["file_path"],
+            user_id,
+            workspace_id=wid,
+        )
     )
 
     return dataset_id
@@ -244,22 +263,37 @@ async def import_google_sheet(
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
 
-    # 1. Download and validate
-    sheet_id, export_url, content = await _download_google_sheet(url)
+    # 1. Download and validate (tier-aware size limit)
+    from services.datasets.size_limits import (
+        effective_size_limit_bytes,
+        resolve_user_tier,
+    )
+
+    gsheet_tier = resolve_user_tier(current_user)
+    gsheet_max = effective_size_limit_bytes(tier=gsheet_tier)
+    sheet_id, export_url, content = await _download_google_sheet(
+        url,
+        max_size=gsheet_max,
+        tier=gsheet_tier,
+    )
 
     # 2. Save to permanent storage + compute content hash
     file_metadata, content_hash = await _save_google_sheet_content(
         content, sheet_id, current_user["id"]
     )
 
-    # 3. Duplicate detection
+    # 3. Duplicate detection (workspace-scoped read)
     db = get_database()
+    from db.tenant_guard import tenant_scope_query
+
+    wid = current_user.get("workspace_id", current_user["id"])
     existing = await db.uploads.find_one(
-        {
-            "user_id": current_user["id"],
-            "content_hash": content_hash,
-            "is_active": True,
-        }
+        tenant_scope_query(
+            "uploads",
+            {"content_hash": content_hash, "is_active": True},
+            wid,
+            current_user["id"],
+        )
     )
     if existing:
         logger.info(
@@ -285,6 +319,7 @@ async def import_google_sheet(
         file_metadata=file_metadata,
         content_hash=content_hash,
         custom_name=body.get("name"),
+        workspace_id=current_user.get("workspace_id", current_user["id"]),
     )
 
     logger.info(f"Google Sheet {sheet_id} imported as dataset {dataset_id}")
@@ -311,9 +346,12 @@ async def reimport_google_sheet(
     the CSV, replaces the stored file, and re-runs the processing pipeline.
     Uses the same validation pipeline as ``import_google_sheet``.
     """
-    db = get_database()
-
-    doc = await db.uploads.find_one({"_id": dataset_id, "user_id": current_user["id"]})
+    # Strictly workspace-scoped read (handles str/ObjectId _id + tenant pin).
+    doc = await enhanced_dataset_service.get_dataset_doc(
+        dataset_id,
+        current_user["id"],
+        workspace_id=current_user.get("workspace_id", current_user["id"]),
+    )
     if not doc:
         raise HTTPException(status_code=404, detail="Dataset not found")
     if doc.get("source_type") != "google_sheets":
@@ -345,18 +383,32 @@ async def reimport_google_sheet(
     if not sheet_url:
         sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
 
-    # 1. Download and validate (reuses shared helper)
-    _, _, content = await _download_google_sheet(sheet_url)
+    # 1. Download and validate (reuses shared helper, tier-aware size limit)
+    from services.datasets.size_limits import (
+        effective_size_limit_bytes,
+        resolve_user_tier,
+    )
+
+    gsheet_tier = resolve_user_tier(current_user)
+    gsheet_max = effective_size_limit_bytes(tier=gsheet_tier)
+    _, _, content = await _download_google_sheet(
+        sheet_url,
+        max_size=gsheet_max,
+        tier=gsheet_tier,
+    )
 
     # 2. Save to permanent storage (replaces old file)
     file_metadata, content_hash = await _save_google_sheet_content(
         content, sheet_id, current_user["id"]
     )
 
-    # 3. Update existing dataset record
-    updated_at = datetime.utcnow()
+    # 3. Update existing dataset record (workspace-pinned write)
+    updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    from db.tenant_guard import tenant_scope_query
+
+    wid = current_user.get("workspace_id", current_user["id"])
     await db.uploads.update_one(
-        {"_id": dataset_id},
+        tenant_scope_query("uploads", {"_id": dataset_id}, wid, current_user["id"]),
         {
             "$set": {
                 "file_id": file_metadata["file_id"],
@@ -377,11 +429,37 @@ async def reimport_google_sheet(
         },
     )
 
-    # 4. Fire background processing
+    # 4. Invalidate caches — data has changed, stale results must go
+    from services.cache.dashboard_cache_service import dashboard_cache_service
+    from services.query import query_cache as qcache
+
+    try:
+        await dashboard_cache_service.invalidate_cache(
+            dataset_id, current_user["id"], cache_keys=["kpis"]
+        )
+        logger.info(f"[Reimport] Invalidated KPI cache for dataset {dataset_id}")
+    except Exception as cache_err:
+        logger.warning(f"[Reimport] KPI cache invalidation failed: {cache_err}")
+
+    try:
+        evicted = qcache.invalidate_dataset(dataset_id)
+        if evicted:
+            logger.info(
+                "[Reimport] Invalidated %d query cache entries for %s", evicted, dataset_id[:8]
+            )
+    except Exception as cache_err:
+        logger.warning(f"[Reimport] Query cache invalidation failed: {cache_err}")
+
+    # 5. Fire background processing
     from services.pipeline.process import process_dataset
 
     asyncio.create_task(
-        process_dataset(dataset_id, file_metadata["file_path"], current_user["id"])
+        process_dataset(
+            dataset_id,
+            file_metadata["file_path"],
+            current_user["id"],
+            workspace_id=current_user.get("workspace_id", current_user["id"]),
+        )
     )
 
     logger.info(f"Google Sheet {sheet_id} re-imported for dataset {dataset_id}")
@@ -410,6 +488,8 @@ async def upload_dataset(
         description=description,
         analysis_intent=analysis_intent,
         user_id=current_user["id"],
+        workspace_id=current_user.get("workspace_id", current_user["id"]),
+        user_doc=current_user,
     )
 
 
@@ -427,6 +507,7 @@ async def list_datasets(
         user_id=current_user["id"],
         skip=skip,
         limit=limit,
+        workspace_id=current_user.get("workspace_id", current_user["id"]),
     )
     return {"datasets": datasets}
 
@@ -575,8 +656,9 @@ async def reprocess_dataset(
     try:
         dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
 
-        # ── Invalidate KPI cache before reprocessing ───────────────────────
+        # ── Invalidate KPI and query caches before reprocessing ────────────
         from services.cache.dashboard_cache_service import dashboard_cache_service
+        from services.query import query_cache as qcache
 
         try:
             await dashboard_cache_service.invalidate_cache(
@@ -584,15 +666,31 @@ async def reprocess_dataset(
             )
             logger.info(f"[Reprocess] Invalidated KPI cache for dataset {dataset_id}")
         except Exception as cache_err:
-            logger.warning(f"[Reprocess] Cache invalidation failed: {cache_err}")
+            logger.warning(f"[Reprocess] KPI cache invalidation failed: {cache_err}")
+
+        try:
+            evicted = qcache.invalidate_dataset(dataset_id)
+            logger.info(
+                "[Reprocess] Invalidated %d query cache entries for %s", evicted, dataset_id[:8]
+            )
+        except Exception as cache_err:
+            logger.warning(f"[Reprocess] Query cache invalidation failed: {cache_err}")
 
         db = get_database()
         if db is not None:
             try:
+                from db.tenant_guard import tenant_scope_query
+
+                wid = current_user.get("workspace_id", current_user["id"])
                 try:
-                    query = {"_id": ObjectId(dataset_id), "user_id": current_user["id"]}
+                    dataset_oid = ObjectId(dataset_id)
+                    query = tenant_scope_query(
+                        "uploads", {"_id": dataset_oid}, wid, current_user["id"]
+                    )
                 except Exception:
-                    query = {"_id": dataset_id, "user_id": current_user["id"]}
+                    query = tenant_scope_query(
+                        "uploads", {"_id": dataset_id}, wid, current_user["id"]
+                    )
                 await db.uploads.update_one(
                     query,
                     {
@@ -613,7 +711,14 @@ async def reprocess_dataset(
         import asyncio as _asyncio
         from services.pipeline.process import process_dataset
 
-        _asyncio.create_task(process_dataset(dataset_id, dataset["file_path"], current_user["id"]))
+        _asyncio.create_task(
+            process_dataset(
+                dataset_id,
+                dataset["file_path"],
+                current_user["id"],
+                workspace_id=current_user.get("workspace_id", current_user["id"]),
+            )
+        )
 
         return {
             "message": "Dataset reprocessing has been initiated.",
@@ -659,8 +764,13 @@ async def get_dataset_stages(
     if db is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
+    from db.tenant_guard import tenant_scope_query
+
+    wid = current_user.get("workspace_id", current_user["id"])
     stages = (
-        await db.pipeline_stages.find({"dataset_id": dataset_id})
+        await db.pipeline_stages.find(
+            tenant_scope_query("pipeline_stages", {"dataset_id": dataset_id}, wid, current_user["id"])
+        )
         .sort("start_time", 1)
         .to_list(length=100)
     )
@@ -689,6 +799,9 @@ async def get_dataset_kpis(
     request: Request,
     dataset_id: str,
     refresh: bool = Query(False, description="Force regeneration even if cached"),
+    persona: Optional[str] = Query(
+        None, description="Audience persona: explorer | ceo | analyst | marketing | ops"
+    ),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -718,8 +831,12 @@ async def get_dataset_kpis(
         "vs_previous_pct",
     }
 
+    # A persona other than the default always regenerates (the cached KPIs are
+    # for the neutral explorer view).
+    force_regenerate = refresh or bool(persona)
+
     # ── 1. Cache check ────────────────────────────────────────────────────────
-    if not refresh:
+    if not force_regenerate:
         try:
             cached = await dashboard_cache_service.get_cached_kpis(dataset_id, user_id)
             if cached:
@@ -748,7 +865,7 @@ async def get_dataset_kpis(
     if not dataset.get("is_processed"):
         raise HTTPException(status_code=202, detail="Dataset still processing — try again shortly")
 
-    meta = dataset.get("metadata", {})
+    meta = dict(dataset.get("metadata", {}) or {})
 
     # ── 3. Generate KPIs (with per-dataset concurrency guard) ──────────────────
     #    File I/O and KPI computation happen under the same lock to prevent
@@ -756,27 +873,11 @@ async def get_dataset_kpis(
     lock = await _get_kpi_lock(dataset_id)
     async with lock:
         try:
-            import polars as pl
-
-            file_path = dataset.get("file_path", "")
-            if not file_path:
-                raise HTTPException(status_code=422, detail="Dataset file path not found")
-
-            ext = file_path.rsplit(".", 1)[-1].lower()
-            if ext == "csv":
-                df = pl.read_csv(file_path, infer_schema_length=5000, ignore_errors=True)
-            elif ext in ("xlsx", "xls"):
-                df = pl.read_excel(file_path)
-            elif ext == "parquet":
-                df = pl.read_parquet(file_path)
-            elif ext == "json":
-                df = pl.read_json(file_path)
-            else:
-                raise HTTPException(status_code=422, detail=f"Unsupported file format: {ext}")
-
-            if df.is_empty():
+            df = await enhanced_dataset_service.load_dataset_data(
+                dataset_id, current_user["id"], max_rows=None, max_cols=None
+            )
+            if df is None or df.is_empty():
                 raise HTTPException(status_code=422, detail="Dataset is empty")
-
         except HTTPException:
             raise
         except Exception as e:
@@ -791,6 +892,9 @@ async def get_dataset_kpis(
             domain = meta.get("domain_intelligence", {}).get("domain") or dataset.get(
                 "domain", "general"
             )
+
+            if persona:
+                meta["persona"] = persona
 
             kpis = await intelligent_kpi_generator.generate_intelligent_kpis(
                 df=df,
@@ -908,6 +1012,9 @@ async def save_user_layout(
     """Save user's custom layout for a dataset."""
     db = get_database()
 
+    user_id = current_user["id"]
+    workspace_id = current_user.get("workspace_id", user_id)
+
     user_layout = {
         "kpis": body.get("kpis", []),
         "charts": body.get("charts", []),
@@ -915,9 +1022,26 @@ async def save_user_layout(
     }
 
     await db.dashboards.update_one(
-        {"dataset_id": dataset_id, "user_id": current_user["id"], "is_default": True},
+        {"dataset_id": dataset_id, "user_id": user_id, "is_default": True},
         {"$set": {"user_layout": user_layout}},
         upsert=False,
+    )
+
+    # ── Signal: record layout save components (fire-and-forget) ────────────
+    from services.learning.signal_collector import signal_collector
+    import asyncio as _asyncio
+
+    all_components = (
+        body.get("kpis", []) + body.get("charts", []) + body.get("added_components", [])
+    )
+    _asyncio.ensure_future(
+        signal_collector.record_layout_save(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            dataset_id=dataset_id,
+            components=all_components,
+            source="dashboard",
+        )
     )
 
     return {"success": True, "message": "Layout saved"}
@@ -943,6 +1067,8 @@ async def update_component_priority(
     """
     db = get_database()
 
+    user_id = current_user["id"]
+    workspace_id = current_user.get("workspace_id", user_id)
     component_id = body.get("component_id")
     priority = body.get("priority")
     reason = body.get("reason", "")
@@ -954,7 +1080,7 @@ async def update_component_priority(
         raise HTTPException(status_code=400, detail="priority must be P1, P2, P3, or P4")
 
     dashboard = await db.dashboards.find_one(
-        {"dataset_id": dataset_id, "user_id": current_user["id"], "is_default": True}
+        {"dataset_id": dataset_id, "user_id": user_id, "is_default": True}
     )
     if not dashboard:
         raise HTTPException(status_code=404, detail="Dashboard not found")
@@ -962,6 +1088,7 @@ async def update_component_priority(
     user_layout = dashboard.get("user_layout", {})
 
     # Update priority in both kpis and charts arrays
+    target_meta = {}  # Track for signal
     for section in ["kpis", "charts"]:
         items = user_layout.get(section, [])
         for item in items:
@@ -969,10 +1096,27 @@ async def update_component_priority(
                 item["priority"] = priority
                 if reason:
                     item["priority_reason"] = reason
+                target_meta = dict(item)
 
     await db.dashboards.update_one(
-        {"dataset_id": dataset_id, "user_id": current_user["id"], "is_default": True},
+        {"dataset_id": dataset_id, "user_id": user_id, "is_default": True},
         {"$set": {"user_layout": user_layout}},
+    )
+
+    # ── Signal: record priority change (fire-and-forget) ─────────────────
+    from services.learning.signal_collector import signal_collector
+    import asyncio as _asyncio
+
+    _asyncio.ensure_future(
+        signal_collector.record_kpi_priority(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            dataset_id=dataset_id,
+            kpi_id=component_id,
+            priority=priority,
+            kpi_metadata=target_meta,
+            source="dashboard",
+        )
     )
 
     return {"success": True, "message": f"Component {component_id} priority updated to {priority}"}
@@ -994,278 +1138,6 @@ async def reset_user_layout(
     )
 
     return {"success": True, "message": "Layout reset to AI default"}
-
-
-@router.get("/{dataset_id}/profile")
-@limiter.limit(RateLimits.DATASET_GET)
-async def get_dataset_profile(
-    request: Request,
-    dataset_id: str,
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Return the unified deterministic profile for a dataset.
-
-    This endpoint exposes the output of the new profiling/intelligence engines:
-      - Column profiles with stats, cardinality, patterns, quality
-      - Semantic classifications (role, behavioral role, business category)
-      - Aggregation suitability (sum_allowed, avg_allowed, etc.)
-      - Entities with counts
-      - Geographic columns (lat/lng, country, state, city)
-      - Hierarchies
-      - Domain candidates with scores
-      - Columns needing review (low confidence)
-
-    All data is computed deterministically — no LLM calls.
-    """
-    dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-
-    meta = dataset.get("metadata", {})
-    unified_profile = meta.get("unified_profile")
-    unified_intelligence = meta.get("unified_intelligence")
-
-    if not unified_profile:
-        # Profile hasn't been computed yet (e.g., legacy dataset or still processing)
-        status = dataset.get("processing_status", "unknown")
-        if status in ("pending", "processing"):
-            raise HTTPException(
-                status_code=202,
-                detail="Dataset still processing — profile will be available after completion",
-            )
-        # Legacy dataset — profile doesn't exist
-        return {
-            "profile": None,
-            "intelligence": None,
-            "legacy": True,
-            "message": "This dataset was processed before the unified profiling engine was added. Re-process to generate the profile.",
-        }
-
-    return {
-        "profile": unified_profile,
-        "intelligence": unified_intelligence,
-        "legacy": False,
-    }
-
-
-@router.get("/{dataset_id}/understanding")
-@limiter.limit(RateLimits.DATASET_GET)
-async def get_dataset_understanding(
-    request: Request,
-    dataset_id: str,
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Return the Dataset Understanding Report — Signal's complete understanding
-    of what a dataset is about, with evidence traceability.
-
-    The report includes:
-      - Primary object (what the dataset is "about")
-      - Evidence strength and per-column contribution breakdown
-      - Alternatives and ambiguity analysis
-      - Participants (entities that participate in the primary object's domain)
-      - Reference signals (FK-style relationships with cardinality)
-      - Column coverage and quality summary
-
-    This is the end result of the pipeline:
-      Column Intelligence → Entity Discovery → Primary Object Discovery
-      → Participation Discovery → Reference Signal Detection
-
-    All computed deterministically — no LLM calls.
-    """
-    dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-
-    meta = dataset.get("metadata", {})
-    unified_profile = meta.get("unified_profile")
-
-    if not unified_profile:
-        status = dataset.get("processing_status", "unknown")
-        if status in ("pending", "processing"):
-            raise HTTPException(
-                status_code=202,
-                detail="Dataset still processing — understanding will be available after completion",
-            )
-        return {
-            "understanding": None,
-            "legacy": True,
-            "message": "This dataset was processed before the profiling engine was added. Re-process to generate the understanding report.",
-        }
-
-    # ── 1. Build ColumnProfiles from unified profile ────────────────────────
-    columns = unified_profile.get("columns", [])
-    file_name = dataset.get("name") or dataset.get("file_name", "unknown")
-    total_rows = dataset.get("row_count") or 0
-
-    column_profiles: list[ColumnProfile] = []
-    for col in columns:
-        col_name = col.get("name", "unknown")
-        col_dtype = col.get("dtype", "string")
-
-        # Extract sample values from the profile if available
-        sample_values: list[str] = []
-        stats = col.get("stats") or {}
-        cardinality = col.get("cardinality") or {}
-
-        # Build sample values from stats where possible
-        if "col_min" in stats and stats["col_min"] is not None:
-            sample_values.append(str(stats["col_min"]))
-        if "col_max" in stats and stats["col_max"] is not None:
-            sample_values.append(str(stats["col_max"]))
-
-        # Try to get sample values from intelligence if available
-        intelligence = col.get("intelligence") or {}
-        if not sample_values:
-            intel_samples = intelligence.get("sample_values", [])
-            if intel_samples:
-                sample_values = [str(v) for v in intel_samples[:5]]
-
-        distinct_count = cardinality.get("unique_count", 0)
-        null_count = cardinality.get("null_count", 0)
-        # cardinality_ratio is 0-1. Fall back to unique_pct for backward compat.
-        distinct_ratio = (
-            cardinality.get("cardinality_ratio")
-            or (cardinality.get("unique_pct", 0) / 100.0)
-            or 0.0
-        )
-
-        col_profile = ColumnProfile(
-            name=col_name,
-            data_type=col_dtype,
-            distinct_count=distinct_count,
-            distinct_ratio=distinct_ratio,
-            sample_values=sample_values[:10],
-            null_ratio=null_count / total_rows if total_rows > 0 else 0.0,
-        )
-        column_profiles.append(col_profile)
-
-    total_cols = len(column_profiles)
-
-    # ── 2. Entity Discovery ─────────────────────────────────────────────────
-    report = entity_discovery.discover(column_profiles, file_name)
-    entities = report.entities
-
-    # ── 3. Primary Object Discovery ─────────────────────────────────────────
-    primary = primary_object_discovery.discover(entities, file_name, total_cols)
-
-    # ── 4. Participation Discovery ──────────────────────────────────────────
-    participants = participation_discovery.discover(entities, primary)
-
-    # ── 5. Reference Signal Detection ───────────────────────────────────────
-    reference_signals = reference_signal_detector.detect(
-        primary, participants, entities, column_profiles
-    )
-    relationship_report = reference_signal_detector.build_report(primary, reference_signals)
-
-    # ── 6. Build response ───────────────────────────────────────────────────
-    def _entity_to_dict(e):
-        return {
-            "label": e.label,
-            "columns": e.columns,
-            "identifier_column": e.identifier_column,
-            "role_counts": e.role_counts,
-            "entity_confidence": e.entity_confidence,
-            "is_valid": e.is_valid,
-        }
-
-    def _alternative_to_dict(a):
-        return {
-            "label": a.label,
-            "confidence": a.confidence,
-            "table_name_score": a.table_name_score,
-            "column_dominance_score": a.column_dominance_score,
-            "entity_confidence_score": a.entity_confidence_score,
-            "evidence_columns": a.evidence_columns,
-        }
-
-    def _trace_to_dict(t):
-        return {
-            "column_name": t.column_name,
-            "role": t.role,
-            "contribution": t.contribution,
-        }
-
-    def _participant_to_dict(p):
-        return {
-            "label": p.label,
-            "identifier_column": p.identifier_column,
-            "participation_score": p.participation_score,
-            "entity_confidence": p.entity_confidence,
-            "naming_evidence": p.naming_evidence,
-            "is_valid": p.is_valid,
-        }
-
-    def _signal_to_dict(s):
-        return {
-            "source_entity": s.source_entity,
-            "target_entity": s.target_entity,
-            "reference_column": s.reference_column,
-            "cardinality": s.cardinality,
-            "confidence": s.confidence,
-            "naming_evidence": s.naming_evidence,
-            "entity_confidence": s.entity_confidence,
-            "value_overlap": s.value_overlap,
-            "is_valid": s.is_valid,
-        }
-
-    # Data quality summary from unified profile
-    quality_summary = {}
-    quality = unified_profile.get("quality", {})
-    if quality:
-        quality_summary = {
-            "missing_values": quality.get("missing_cells", 0),
-            "missing_percentage": quality.get("missing_percentage", 0),
-            "duplicate_rows": quality.get("duplicate_rows", 0),
-            "duplicate_percentage": quality.get("duplicate_percentage", 0),
-        }
-
-    understanding = {
-        "dataset_name": file_name,
-        "table_name": file_name.rsplit(".", 1)[0] if "." in file_name else file_name,
-        "row_count": total_rows,
-        "column_count": total_cols,
-        "primary_object": {
-            "label": primary.label,
-            "evidence_strength": primary.evidence_strength,
-            "table_name_score": primary.table_name_score,
-            "column_dominance_score": primary.column_dominance_score,
-            "entity_confidence_score": primary.entity_confidence_score,
-            "is_valid": primary.is_valid,
-            "evidence_trace": [_trace_to_dict(t) for t in primary.evidence_trace],
-            "alternatives": [_alternative_to_dict(a) for a in primary.alternatives],
-            "ambiguity": {
-                "score": primary.ambiguity.score if primary.ambiguity else 0.0,
-                "level": primary.ambiguity.level if primary.ambiguity else "low",
-                "top_gap": primary.ambiguity.top_gap if primary.ambiguity else 1.0,
-                "alternative_count": primary.ambiguity.alternative_count
-                if primary.ambiguity
-                else 0,
-                "has_alternatives": primary.ambiguity.has_alternatives
-                if primary.ambiguity
-                else False,
-            }
-            if primary.ambiguity
-            else None,
-        },
-        "entities": [_entity_to_dict(e) for e in entities if e.is_valid],
-        "participants": [_participant_to_dict(p) for p in participants],
-        "reference_signals": {
-            "signals": [_signal_to_dict(s) for s in reference_signals],
-            "precision": relationship_report.precision,
-            "reference_count": relationship_report.reference_count,
-        },
-        "quality_summary": quality_summary,
-        "trust_score": report.trust_score,
-        "data_quality_score": report.data_quality_score,
-        "generated_at": report.generated_at.isoformat(),
-    }
-
-    return {
-        "understanding": understanding,
-        "legacy": False,
-    }
 
 
 # ─── KPI Override Persistence ────────────────────────────────────────────────
@@ -1298,8 +1170,11 @@ async def update_kpi_override(
     """
     db = get_database()
 
+    user_id = current_user["id"]
+    workspace_id = current_user.get("workspace_id", user_id)
+
     # Verify dataset ownership
-    dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+    dataset = await enhanced_dataset_service.get_dataset(dataset_id, user_id)
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
@@ -1314,9 +1189,24 @@ async def update_kpi_override(
 
     # Store in user_layout.kpi_overrides as a map keyed by kpi_id
     await db.dashboards.update_one(
-        {"dataset_id": dataset_id, "user_id": current_user["id"], "is_default": True},
+        {"dataset_id": dataset_id, "user_id": user_id, "is_default": True},
         {"$set": {f"user_layout.kpi_overrides.{kpi_id}": override}},
         upsert=True,
+    )
+
+    # ── Signal: record KPI edit (fire-and-forget) ────────────────────────
+    from services.learning.signal_collector import signal_collector
+    import asyncio as _asyncio
+
+    _asyncio.ensure_future(
+        signal_collector.record_kpi_edit(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            dataset_id=dataset_id,
+            kpi_id=kpi_id,
+            kpi_metadata=override,
+            source="dashboard",
+        )
     )
 
     logger.info(f"[KPI] Persisted override for {kpi_id} in dataset {dataset_id}: {override}")
@@ -1379,6 +1269,25 @@ async def add_component(
     column = body.get("column")
     aggregation = body.get("aggregation", "sum")
     custom_title = body.get("title")
+    comparison = body.get("comparison")
+
+    # Optional: resolve the comparison the user's question asks for
+    # ("vs last year" → prior_year, "month over month" → prior_period).
+    comparison_resolution = None
+    question = body.get("question")
+    if not comparison and question:
+        from services.ai.comparison_resolver import resolve_comparison_period
+
+        resolution = resolve_comparison_period(question)
+        if resolution.source == "explicit":
+            comparison = resolution.comparison
+        comparison_resolution = {
+            "comparison": resolution.comparison,
+            "source": resolution.source,
+            "needs_clarification": resolution.needs_clarification,
+            "label": resolution.label,
+            "matched_phrase": resolution.matched_phrase,
+        }
 
     if not column:
         raise HTTPException(status_code=400, detail="Column name is required")
@@ -1393,16 +1302,11 @@ async def add_component(
     lock = await _get_kpi_lock(dataset_id)
     async with lock:
         try:
-            import polars as pl
-
-            file_path = dataset.get("file_path", "")
-            ext = file_path.rsplit(".", 1)[-1].lower()
-            if ext == "parquet":
-                df = pl.read_parquet(file_path)
-            elif ext == "csv":
-                df = pl.read_csv(file_path, infer_schema_length=5000, ignore_errors=True)
-            else:
-                raise HTTPException(status_code=422, detail=f"Unsupported format: {ext}")
+            df = await enhanced_dataset_service.load_dataset_data(
+                dataset_id, current_user["id"], max_rows=None, max_cols=None
+            )
+            if df is None:
+                raise HTTPException(status_code=422, detail="Failed to load dataset")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to load dataset: {e}")
 
@@ -1414,6 +1318,7 @@ async def add_component(
             aggregation=aggregation,
             custom_title=custom_title,
             dataset_metadata=dataset.get("metadata", {}),
+            comparison=comparison,
         )
         if not kpi:
             raise HTTPException(status_code=500, detail="Failed to generate KPI")
@@ -1426,48 +1331,346 @@ async def add_component(
                     "user_layout.added_components": {
                         "type": "kpi",
                         "data": kpi,
-                        "added_at": __import__("datetime").datetime.utcnow().isoformat(),
+                        "added_at": __import__("datetime")
+                        .datetime.now(timezone.utc)
+                        .replace(tzinfo=None)
+                        .isoformat(),
                     }
                 }
             },
         )
 
-        return {"success": True, "component": kpi, "type": "kpi"}
+        response = {"success": True, "component": kpi, "type": "kpi"}
+        if comparison_resolution:
+            response["comparison_resolution"] = comparison_resolution
+        return response
 
-    elif component_type == "chart":
-        chart_type = body.get("chart_type", "bar")
-        group_by = body.get("group_by")
-
-        chart_config = {
-            "type": "chart",
-            "id": f"chart_{column}_{chart_type}",
-            "title": custom_title or f"{chart_type.title()} of {column}",
-            "config": {
-                "chart_type": chart_type,
-                "columns": [column],
-                "aggregation": aggregation,
-            },
-            "span": 6,
-        }
-
-        if group_by:
-            chart_config["config"]["group_by"] = [group_by]
-
-        # Add to user_layout added_components
-        await db.dashboards.update_one(
-            {"dataset_id": dataset_id, "user_id": current_user["id"], "is_default": True},
-            {
-                "$push": {
-                    "user_layout.added_components": {
-                        "type": "chart",
-                        "data": chart_config,
-                        "added_at": __import__("datetime").datetime.utcnow().isoformat(),
-                    }
-                }
-            },
-        )
-
-        return {"success": True, "component": chart_config, "type": "chart"}
+    # ── CHART GENERATION DISABLED ──────────────────────────────────────────────
+    # The chart branch is disabled as part of the KPI-first dashboard refactor.
+    # Original code retained below.
+    #
+    # elif component_type == "chart":
+    #     ...
+    #     return {"success": True, "component": chart_config, "type": "chart"}
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown component type: {component_type}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Column Cleaning Manifest — Stage 1.5 Normalization Review
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/{dataset_id}/cleaning-manifest")
+@limiter.limit(RateLimits.DATASET_GET)
+async def get_cleaning_manifest(
+    request: Request,
+    dataset_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Return the column name cleaning manifest for a dataset.
+
+    The manifest lists every column rename applied during Stage 1.5
+    normalization, with the rule that triggered it and any collision
+    groups.  Returns an empty actions list if no normalization occurred.
+
+    Schema:
+    {
+        "dataset_id": str,
+        "ruleset_version": "1.0",
+        "actions": [
+            {
+                "original_name": str,
+                "normalized_name": str,
+                "applied_steps": [str],
+                "tier": "auto",
+                "collision_group": [str] | null,
+                "approved": bool | null,
+            }
+        ],
+        "pending_count": int,
+    }
+    """
+    from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+
+    dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    manifest = dataset.get("cleaning_manifest", [])
+    if not manifest:
+        # Check in metadata for legacy datasets
+        meta = dataset.get("metadata", {})
+        manifest = meta.get("cleaning_manifest", [])
+
+    if not manifest:
+        return {
+            "dataset_id": dataset_id,
+            "ruleset_version": "1.0",
+            "actions": [],
+            "pending_count": 0,
+        }
+
+    # Count un-reviewed actions
+    pending = sum(1 for a in manifest if a.get("approved") is None)
+
+    return {
+        "dataset_id": dataset_id,
+        "ruleset_version": "1.0",
+        "actions": manifest,
+        "pending_count": pending,
+    }
+
+
+@router.post("/{dataset_id}/cleaning-action")
+@limiter.limit(RateLimits.DATASET_UPDATE)
+async def apply_cleaning_action(
+    request: Request,
+    dataset_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Approve, reject, reset, or override a single cleaning manifest action.
+
+    Body:
+    {
+        "action_index": int,          # Index into cleaning_manifest array
+        "approved": bool | null,      # true=approve, false=reject, null=reset to pending
+        "override_to": str | null     # If set, overrides the normalized name
+    }
+
+    This is now a true execution engine (services/cleaning/mutation_engine.py):
+
+    - Approving an AI proposal (merge/remove) executes the Polars operation
+      against the active parquet and refreshes all downstream artifacts.
+    - Rejecting a deterministic rename inverts it (renames the column back).
+    - Rejecting an AI proposal is a no-op — it was never applied.
+    - Approving a deterministic rename is a no-op — it is already applied.
+    - ``override_to`` renames the column to the supplied name (validated
+      through mechanical rules).
+
+    Data-changing mutations run as a background job; the endpoint returns
+    immediately with ``mutation_status: "running"``.
+    """
+    from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+    from services.cleaning.mutation_engine import run_single_mutation
+
+    dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    action_index = body.get("action_index")
+    if action_index is None or not isinstance(action_index, int):
+        raise HTTPException(status_code=400, detail="action_index (int) is required")
+
+    approved = body.get("approved")
+    override_to = body.get("override_to")
+
+    try:
+        manifest, changed, warnings, mutation_status = await run_single_mutation(
+            dataset_id=dataset_id,
+            user_id=current_user["id"],
+            workspace_id=current_user.get("workspace_id", current_user["id"]),
+            action_index=action_index,
+            approved=approved,
+            override_to=override_to,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # ── Semantic Memory hook: record rejection / approval signals ─────
+    from services.learning.signal_collector import signal_collector
+
+    user_id = current_user["id"]
+    workspace_id = current_user.get("workspace_id", user_id)
+    action = manifest[action_index]
+    action_type = action.get("action_type", "rename")
+    target_columns = action.get("target_columns", [])
+
+    if approved is False:
+        asyncio.ensure_future(
+            signal_collector.record_cleaning_rejection(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                dataset_id=dataset_id,
+                action_type=action_type,
+                target_columns=target_columns,
+                action_index=action_index,
+                action_metadata=action,
+                source="cleaning_review",
+            )
+        )
+    elif approved is True:
+        asyncio.ensure_future(
+            signal_collector.record_cleaning_approval(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                dataset_id=dataset_id,
+                action_type=action_type,
+                target_columns=target_columns,
+                action_index=action_index,
+                action_metadata=action,
+                source="cleaning_review",
+            )
+        )
+
+    pending = sum(1 for a in manifest if a.get("approved") is None)
+
+    logger.info(
+        "[Cleaning] Action %d for dataset %s: approved=%s override_to=%s changed=%s",
+        action_index,
+        dataset_id[:8],
+        approved,
+        override_to or "-",
+        changed,
+    )
+
+    return {
+        "success": True,
+        "actions": manifest,
+        "pending_count": pending,
+        "changed": changed,
+        "warnings": warnings,
+        "mutation_status": mutation_status,
+    }
+
+
+@router.post("/{dataset_id}/apply-cleaning")
+@limiter.limit(RateLimits.DATASET_UPDATE)
+async def apply_all_cleaning(
+    request: Request,
+    dataset_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Bulk-approve or bulk-reject pending cleaning actions (execution engine).
+
+    Body:
+    {
+        "approved": bool | null,  # true=approve all, false=reject all, null=reset all
+        "action_indices": [int] | null  # Optional: specific indices to apply
+    }
+
+    Delegates to ``services.cleaning.mutation_engine.run_bulk_mutation``:
+    one mutation lock and one downstream refresh for the whole batch.
+    """
+    from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+    from services.cleaning.mutation_engine import run_bulk_mutation
+
+    dataset = await enhanced_dataset_service.get_dataset(dataset_id, current_user["id"])
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    approved = body.get("approved")
+    action_indices = body.get("action_indices")
+
+    user_id = current_user["id"]
+    workspace_id = current_user.get("workspace_id", user_id)
+
+    try:
+        manifest, changed, warnings, processed, mutation_status = await run_bulk_mutation(
+            dataset_id=dataset_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            indices=action_indices,
+            approved=approved,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # ── Semantic Memory hook: record rejection / approval signals ──────
+    from services.learning.signal_collector import signal_collector
+
+    for idx in processed:
+        action = manifest[idx]
+        action_status = action.get("approved")
+
+        action_type = action.get("action_type", "rename")
+        target_columns = action.get("target_columns", [])
+
+        if action_status is False:
+            asyncio.ensure_future(
+                signal_collector.record_cleaning_rejection(
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    dataset_id=dataset_id,
+                    action_type=action_type,
+                    target_columns=target_columns,
+                    action_index=idx,
+                    action_metadata=action,
+                    source="cleaning_review",
+                )
+            )
+        elif action_status is True:
+            asyncio.ensure_future(
+                signal_collector.record_cleaning_approval(
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    dataset_id=dataset_id,
+                    action_type=action_type,
+                    target_columns=target_columns,
+                    action_index=idx,
+                    action_metadata=action,
+                    source="cleaning_review",
+                )
+            )
+
+    pending = sum(1 for a in manifest if a.get("approved") is None)
+
+    return {
+        "success": True,
+        "actions": manifest,
+        "pending_count": pending,
+        "changed": changed,
+        "warnings": warnings,
+        "mutation_status": mutation_status,
+    }
+
+
+# ─── Chat Message Processing (REST fallback for when WebSocket is unavailable) ───
+
+
+@router.post("/{dataset_id}/chat")
+@limiter.limit(RateLimits.CHAT_MESSAGE)
+async def process_dataset_chat(
+    request: Request,
+    dataset_id: str,
+    body: ChatRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Process a chat message for a dataset via REST.
+
+    Uses the unified ChatPipeline for all modes — routing, context loading,
+    agent execution, synthesis, and persistence are handled internally.
+
+    This is a fallback endpoint for when WebSocket is unavailable.
+    The primary chat path uses WebSocket at /api/chat/ws.
+    """
+    try:
+        result = await chat_pipeline.process(
+            query=body.message.strip(),
+            dataset_id=dataset_id,
+            user_id=current_user["id"],
+            conversation_id=body.conversation_id,
+            mode=body.mode or "analyst",
+        )
+
+        return {
+            "conversation_id": result.conversation_id or body.conversation_id,
+            "response": result.response_text,
+            "chart_config": result.chart_config,
+            "result_table": result.result_table,
+            "technical_details": None,
+            "insights": [],
+            "data_summary": "",
+            "follow_up_suggestions": result.follow_up_suggestions or [],
+            "show_follow_up_suggestions": bool(result.follow_up_suggestions),
+        }
+    except Exception as e:
+        logger.error(f"Chat processing failed for dataset {dataset_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

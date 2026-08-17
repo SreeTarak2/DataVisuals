@@ -5,11 +5,11 @@ import logging
 import re
 import time
 from typing import Any, Dict, Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 
 from core.config import settings
-from core.prompt_templates import CONVERSATIONAL_SYSTEM_PROMPT, COMPLEXITY_HINTS
+from prompts.output_format import CONVERSATIONAL_SYSTEM_PROMPT, COMPLEXITY_HINTS
 from core.token_budget import count_tokens, MODEL_CONTEXT_WINDOWS, COMPLETION_RESERVES
 from prompts.token_budget import (
     safe_inject_context,
@@ -17,6 +17,18 @@ from prompts.token_budget import (
     PromptBudget,
 )
 from llm.cost_tracker import cost_tracker
+
+# ── BYOK support (lazy import — only when enabled) ────────────────────────
+def _get_byok_service():
+    """Lazy import of BYOK service to avoid circular imports at module level."""
+    from services.api_keys.service import api_key_service
+    return api_key_service
+
+
+def _get_byok_provider_router():
+    """Lazy import of provider router."""
+    from llm.providers import provider_router
+    return provider_router
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +69,15 @@ def _strip_json_wrapper(text: str) -> str:
             parsed = json.loads(cleaned)
             if isinstance(parsed, dict):
                 # Try fields in priority order (most common first)
-                for key in ("response_text", "answer", "response", "text", "content", "message", "output"):
+                for key in (
+                    "response_text",
+                    "answer",
+                    "response",
+                    "text",
+                    "content",
+                    "message",
+                    "output",
+                ):
                     val = parsed.get(key)
                     if val and isinstance(val, str) and len(val.strip()) > 5:
                         return val.strip()
@@ -80,7 +100,7 @@ def _strip_json_wrapper(text: str) -> str:
             cleaned,
         )
         if match:
-            extracted = match.group(1).replace("\\n", "\n").replace("\\\"", "\"")
+            extracted = match.group(1).replace("\\n", "\n").replace('\\"', '"')
             if len(extracted) > 5:
                 return extracted.strip()
 
@@ -205,6 +225,7 @@ class LLMRouter:
         is_interactive: Optional[bool] = None,
         user_id: Optional[str] = None,
         instructions_override: Optional[str] = None,
+        correlation_id: str = "",
     ) -> Any:
         """
         Main entry point for LLM calls with intelligent model routing.
@@ -220,6 +241,7 @@ class LLMRouter:
             query_complexity: 'simple' | 'moderate' | 'complex' - affects response format
             archetype: 'explorer' | 'analyst' | 'expert' - user sophistication level
             user_id: Optional user ID for cost tracking
+            correlation_id: Correlation ID for log tracing
 
         Returns:
             Parsed JSON dict if expect_json=True, otherwise string
@@ -227,6 +249,60 @@ class LLMRouter:
 
         self._ensure_initialized()
 
+        # ════════════════════════════════════════════════════════════════
+        # BYOK PATH — check if user has a valid API key for this role
+        # ════════════════════════════════════════════════════════════════
+        if user_id and settings.BYOK_ENABLED:
+            byok_result = await self._try_byok_call(
+                user_id=user_id,
+                model_role=model_role,
+                prompt=prompt,
+                expect_json=expect_json,
+                json_schema=json_schema,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                is_conversational=is_conversational,
+                query_complexity=query_complexity,
+                context=context,
+                correlation_id=correlation_id,
+            )
+            if byok_result is not None:
+                return byok_result
+            # BYOK not available for this user/role — fall through to OpenRouter
+
+        # ════════════════════════════════════════════════════════════════
+        # COLAB MODEL PATH — free GPU inference via ngrok tunnel
+        # ════════════════════════════════════════════════════════════════
+        # When COLAB_OLLAMA_URL is set, route SQL generation through a
+        # Colab-hosted Ollama instance (e.g. Arctic-Text2SQL on a T4 GPU).
+        # Falls back to OpenRouter if the tunnel is unreachable.
+        if settings.COLAB_OLLAMA_URL and model_role in ("sql_generator", "sql_repair"):
+            try:
+                result = await self._call_ollama_openai(
+                    prompt=prompt,
+                    model_name=settings.COLAB_SQL_MODEL,
+                    base_url=settings.COLAB_OLLAMA_URL,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    expect_json=expect_json,
+                )
+                logger.info(
+                    "[Colab] SQL generated via %s on %s",
+                    settings.COLAB_SQL_MODEL,
+                    settings.COLAB_OLLAMA_URL[:40],
+                )
+                return result
+            except Exception as e:
+                logger.warning(
+                    "[Colab] Model unavailable (%s), falling back to OpenRouter: %s",
+                    settings.COLAB_SQL_MODEL,
+                    e,
+                )
+                # Fall through to OpenRouter below
+
+        # ════════════════════════════════════════════════════════════════
+        # OPENROUTER PATH — existing behavior
+        # ════════════════════════════════════════════════════════════════
         # Use OpenRouter exclusively (Ollama fallback commented out per user request)
         if self.use_openrouter:
             # ── Cost budget check (before making the API call) ──
@@ -246,7 +322,8 @@ class LLMRouter:
             # Avoid repeated failing calls when OpenRouter auth is invalid.
             if (
                 self._auth_error_cooldown_until
-                and datetime.utcnow() < self._auth_error_cooldown_until
+                and datetime.now(timezone.utc).replace(tzinfo=None)
+                < self._auth_error_cooldown_until
             ):
                 raise HTTPException(
                     502,
@@ -272,6 +349,7 @@ class LLMRouter:
                     archetype=archetype,
                     is_interactive=is_interactive,
                     instructions_override=instructions_override,
+                    correlation_id=correlation_id,
                 )
 
                 # ── Record usage after successful call ──
@@ -294,7 +372,9 @@ class LLMRouter:
                     status_code in (401, 403) or "401" in error_str or "403" in error_str
                 )
                 if is_auth_error:
-                    self._auth_error_cooldown_until = datetime.utcnow() + timedelta(minutes=5)
+                    self._auth_error_cooldown_until = datetime.now(timezone.utc).replace(
+                        tzinfo=None
+                    ) + timedelta(minutes=5)
                     raise HTTPException(
                         502,
                         "OpenRouter authentication failed (401/403). "
@@ -334,7 +414,9 @@ class LLMRouter:
                             instructions_override=instructions_override,
                         )
                         # ── Record usage for the fallback model ──
-                        await self._record_llm_usage(user_id, fallback_model_key, prompt, max_tokens, model_role)
+                        await self._record_llm_usage(
+                            user_id, fallback_model_key, prompt, max_tokens, model_role
+                        )
                         return result
                     except Exception as fallback_error:
                         logger.error(
@@ -493,6 +575,293 @@ class LLMRouter:
     # -----------------------------------------------------------
     # OPENROUTER CALL
     # -----------------------------------------------------------
+    # -----------------------------------------------------------
+    # BYOK — TRY USER'S OWN API KEY
+    # -----------------------------------------------------------
+
+    @staticmethod
+    def _resolve_byok_task_category(model_role: str) -> str:
+        """Map an OpenRouter model role to a BYOK task category for auto-pick."""
+        role_lower = model_role.lower()
+        if role_lower in ("chat_engine", "chat_streaming", "conversational"):
+            return "chat"
+        elif role_lower in ("complex_analysis", "sql_generator", "kpi_suggestion",
+                            "insight_generation", "narrative_insights"):
+            return "analysis"
+        elif role_lower in ("narrative_story", "chart_explanation", "plain_english_explanation"):
+            return "narrative"
+        elif role_lower in ("chart_recommendation", "layout_designer", "dashboard_design",
+                            "validation", "draft_generation"):
+            return "structured"
+        else:
+            return "simple"
+
+    async def _try_byok_call(
+        self,
+        user_id: str,
+        model_role: str,
+        prompt: str,
+        expect_json: bool,
+        json_schema=None,
+        temperature: float = 0.7,
+        max_tokens: int = 8192,
+        is_conversational: bool = False,
+        query_complexity: str = "moderate",
+        context: Optional[str] = None,
+        correlation_id: str = "",
+    ) -> Any:
+        """
+        Attempt to route a call through the user's BYOK API key.
+
+        Returns the result if a suitable BYOK key + model is found,
+        or ``None`` if no BYOK key exists for this user/role (caller
+        should fall through to OpenRouter).
+
+        This implements auto-pick: the system selects the best model
+        from the user's selected set based on the task role.
+        """
+        try:
+            # Determine the task category for model selection
+            task_category = self._resolve_byok_task_category(model_role)
+
+            # Get the user's decrypted key — try providers in priority order
+            # based on which models are best for this task category
+            task_mapping = settings.BYOK_ROLE_MODEL_MAPPING.get(task_category, {})
+            preferred_models = task_mapping.get("priority", []) + task_mapping.get("fallback", [])
+
+            # We need to find a BYOK key whose selected_models overlap with preferred_models
+            byok_service = _get_byok_service()
+
+            # Check all providers the user might have keys for
+            for provider in ("openai", "anthropic", "deepseek", "google"):
+                key_info = await byok_service.get_decrypted_key(user_id, provider)
+                if not key_info:
+                    continue
+
+                user_models = key_info.get("selected_models", [])
+                if not user_models:
+                    # No models selected — skip, can't auto-pick
+                    continue
+
+                # Find the best model from user's selection that matches this task
+                selected_model = None
+                for preferred in preferred_models:
+                    if preferred in user_models:
+                        selected_model = preferred
+                        break
+
+                if not selected_model:
+                    # User has a key but none of their selected models match
+                    # Fall back to their first selected model
+                    selected_model = user_models[0]
+
+                # Build messages (including system prompt and context)
+                system_prompt = self._build_system_prompt(
+                    self.get_model_for_role(model_role),
+                    expect_json,
+                    is_conversational=is_conversational,
+                    query_complexity=query_complexity,
+                )
+
+                messages = [{"role": "system", "content": system_prompt}]
+                if context:
+                    messages.extend([
+                        {"role": "user", "content": f"DATASET CONTEXT:\n{context}"},
+                        {"role": "assistant", "content": "I have received the dataset context."},
+                    ])
+                messages.append({"role": "user", "content": prompt})
+
+                try:
+                    pr = _get_byok_provider_router()
+                    result = await pr.call(
+                        provider=provider,
+                        api_key=key_info["api_key"],
+                        model=selected_model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        expect_json=expect_json,
+                        base_url=key_info.get("base_url"),
+                    )
+
+                    logger.info(
+                        "BYOK call succeeded: user=%s provider=%s model=%s role=%s",
+                        user_id[:8],
+                        provider,
+                        selected_model,
+                        model_role,
+                    )
+
+                    # Record BYOK usage for analytics (no budget deduction)
+                    await self._record_byok_usage(
+                        user_id=user_id,
+                        provider=provider,
+                        model=selected_model,
+                        model_role=model_role,
+                        prompt=prompt,
+                        max_tokens=max_tokens,
+                    )
+
+                    return result
+
+                except Exception as exc:
+                    logger.warning(
+                        "BYOK call failed for user=%s provider=%s model=%s role=%s: %s",
+                        user_id[:8],
+                        provider,
+                        selected_model,
+                        model_role,
+                        exc,
+                    )
+                    # Try next provider if available, otherwise fall through
+                    continue
+
+        except Exception as exc:
+            logger.warning(
+                "BYOK lookup failed for user=%s role=%s: %s",
+                user_id[:8],
+                model_role,
+                exc,
+            )
+
+        # No BYOK key found or all attempts failed — caller falls through to OpenRouter
+        return None
+
+    async def _try_byok_streaming_call(
+        self,
+        user_id: str,
+        model_role: str,
+        prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 8192,
+        correlation_id: str = "",
+    ) -> Any:
+        """
+        Attempt to route a streaming call through the user's BYOK API key.
+
+        Returns an async generator if a BYOK key + model is found, or
+        ``None`` if the caller should fall through to OpenRouter streaming.
+        """
+        try:
+            task_category = self._resolve_byok_task_category(model_role)
+            task_mapping = settings.BYOK_ROLE_MODEL_MAPPING.get(task_category, {})
+            preferred_models = task_mapping.get("priority", []) + task_mapping.get("fallback", [])
+
+            byok_service = _get_byok_service()
+
+            for provider in ("openai", "anthropic", "deepseek", "google"):
+                key_info = await byok_service.get_decrypted_key(user_id, provider)
+                if not key_info:
+                    continue
+
+                user_models = key_info.get("selected_models", [])
+                if not user_models:
+                    continue
+
+                selected_model = None
+                for preferred in preferred_models:
+                    if preferred in user_models:
+                        selected_model = preferred
+                        break
+
+                if not selected_model:
+                    selected_model = user_models[0]
+
+                # Build system prompt + messages (same as non-streaming BYOK)
+                model_config = self.get_model_for_role(model_role)
+                system_prompt = self._build_system_prompt(
+                    model_config,
+                    expect_json=False,
+                    is_conversational=True,  # streaming is always conversational
+                    query_complexity="moderate",
+                )
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ]
+
+                try:
+                    pr = _get_byok_provider_router()
+
+                    async def _stream_with_byok():
+                        async for chunk in pr.call_streaming(
+                            provider=provider,
+                            api_key=key_info["api_key"],
+                            model=selected_model,
+                            messages=messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            base_url=key_info.get("base_url"),
+                        ):
+                            yield chunk
+
+                    logger.info(
+                        "BYOK streaming call: user=%s provider=%s model=%s role=%s",
+                        user_id[:8],
+                        provider,
+                        selected_model,
+                        model_role,
+                    )
+
+                    # Record usage for analytics
+                    await self._record_byok_usage(
+                        user_id=user_id,
+                        provider=provider,
+                        model=selected_model,
+                        model_role=model_role,
+                        prompt=prompt,
+                        max_tokens=max_tokens,
+                    )
+
+                    return _stream_with_byok()
+
+                except Exception as exc:
+                    logger.warning(
+                        "BYOK streaming failed for user=%s provider=%s model=%s: %s",
+                        user_id[:8],
+                        provider,
+                        selected_model,
+                        exc,
+                    )
+                    continue
+
+        except Exception as exc:
+            logger.warning(
+                "BYOK streaming lookup failed for user=%s role=%s: %s",
+                user_id[:8],
+                model_role,
+                exc,
+            )
+
+        return None
+
+    async def _record_byok_usage(
+        self,
+        user_id: str,
+        provider: str,
+        model: str,
+        model_role: str,
+        prompt: str,
+        max_tokens: int,
+    ) -> None:
+        """Record BYOK usage for analytics (no budget deduction)."""
+        if not user_id or not settings.LLM_COST_TRACKING_ENABLED:
+            return
+        try:
+            from core.token_budget import count_tokens
+            input_tokens = count_tokens(prompt)
+            output_tokens = max(1, max_tokens // 2)
+            await cost_tracker.record_usage(
+                user_id=user_id,
+                model_key=f"byok:{provider}:{model}",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                role=model_role,
+                source="byok",
+            )
+        except Exception as e:
+            logger.warning(f"[BYOK] Failed to record usage: {e}")
+
     async def _call_openrouter(
         self,
         prompt: str,
@@ -512,6 +881,7 @@ class LLMRouter:
         archetype: str = "analyst",
         is_interactive: Optional[bool] = None,
         instructions_override: Optional[str] = None,
+        correlation_id: str = "",
     ) -> Any:
         """
         Call OpenRouter API with intelligent model selection.
@@ -526,6 +896,7 @@ class LLMRouter:
             is_conversational: If True, use structured formatting for responses
             query_complexity: 'simple' | 'moderate' | 'complex' - affects response format
             archetype: 'explorer' | 'analyst' | 'expert' - user sophistication level
+            correlation_id: Correlation ID for log tracing
         """
         # Get the best model for this task
         model_config = self.get_model_for_role(model_role, specific_model)
@@ -545,9 +916,11 @@ class LLMRouter:
         headers = {
             "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://signal.ai",  # Optional: for ranking on OpenRouter
-            "X-Title": "Signal Dashboard",  # Optional: shows in OpenRouter logs
+            "HTTP-Referer": "https://signal.ai",
+            "X-Title": "Signal Dashboard",
         }
+        if correlation_id:
+            headers["X-Correlation-ID"] = correlation_id[:12]
 
         # Build message history with the "Conversation Sandwich" pattern for caching
         # Pattern: [System] -> [User: Context] -> [Assistant: Ready] -> [User: Task]
@@ -720,6 +1093,7 @@ class LLMRouter:
         is_interactive: Optional[bool] = None,
         user_id: Optional[str] = None,
         instructions_override: Optional[str] = None,
+        correlation_id: str = "",
     ):
         """
         Stream tokens from OpenRouter API as an async generator.
@@ -734,11 +1108,31 @@ class LLMRouter:
             query_complexity: 'simple' | 'moderate' | 'complex' - affects response format
             archetype: 'explorer' | 'analyst' | 'expert' - user sophistication level
             user_id: Optional user ID for cost tracking and budget checks
+            correlation_id: Correlation ID for log tracing
 
         Yields:
             Dict with type 'token' or 'done', and content/full_response
         """
         self._ensure_initialized()
+
+        # ════════════════════════════════════════════════════════════════
+        # BYOK STREAMING PATH — check if user has a valid API key
+        # ════════════════════════════════════════════════════════════════
+        if user_id and settings.BYOK_ENABLED:
+            byok_result = await self._try_byok_streaming_call(
+                user_id=user_id,
+                model_role=model_role,
+                prompt=prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                correlation_id=correlation_id,
+            )
+            if byok_result is not None:
+                async for event in byok_result:
+                    yield event
+                return
+            # BYOK not available — fall through to OpenRouter
+
         model_config = self.get_model_for_role(model_role, specific_model)
         selected_model = model_config["model"]
         model_name = model_config["name"]
@@ -774,6 +1168,8 @@ class LLMRouter:
             "HTTP-Referer": "https://signal.ai",
             "X-Title": "Signal Dashboard",
         }
+        if correlation_id:
+            headers["X-Correlation-ID"] = correlation_id[:12]
 
         payload = {
             "model": selected_model,
@@ -903,7 +1299,7 @@ class LLMRouter:
         Returns:
             Optimized system prompt string
         """
-        from core.prompt_templates import ARCHETYPE_INSTRUCTIONS
+        from prompts._identity import ARCHETYPE_INSTRUCTIONS
 
         # For conversational responses, always use the comprehensive formatting prompt
         # JSON output is handled by the system prompt itself (chart_config generation)
@@ -958,43 +1354,108 @@ class LLMRouter:
         return CONVERSATIONAL_SYSTEM_PROMPT
 
     # -----------------------------------------------------------
-    # OLLAMA CALL (COMMENTED OUT - USING OPENROUTER ONLY)
     # -----------------------------------------------------------
-    # async def _call_ollama(self, prompt: str, model_role: str, expect_json: bool) -> Any:
-    #     """
-    #     DISABLED: User is using OpenRouter exclusively.
-    #     Uncomment this method if you want to enable local Ollama fallback.
-    #     """
-    #     model_cfg = settings.MODELS.get(model_role)
-    #     if not model_cfg:
-    #         raise ValueError(f"Unknown model_role: {model_role}")
-    #
-    #     primary = model_cfg["primary"]
-    #     base_url = primary["base_url"].rstrip("/")
-    #     model_name = primary["model"]
-    #
-    #     payload = {"model": model_name, "prompt": prompt, "stream": False}
-    #     if expect_json:
-    #         payload["format"] = "json"
-    #
-    #     try:
-    #         resp = await self.http.post(f"{base_url}/api/generate", json=payload)
-    #         resp.raise_for_status()
-    #         result = resp.json()
-    #
-    #         if expect_json:
-    #             try:
-    #                 return json.loads(result.get("response", "{}"))
-    #             except json.JSONDecodeError:
-    #                 return {"error": "llm_json_parse_failed"}
-    #
-    #         return result.get("response", "").strip()
-    #
-    #     except Exception as e:
-    #         logger.error(f"Ollama call failed: {e}")
-    #         if expect_json:
-    #             return {"error": "model_unavailable", "details": str(e)}
-    #         return f"Model unavailable: {e}"
+    # COLAB OLLAMA CALL (OpenAI-compatible API via ngrok tunnel)
+    # -----------------------------------------------------------
+
+    async def _call_ollama_openai(
+        self,
+        prompt: str,
+        model_name: str,
+        base_url: str,
+        temperature: float = 0.1,
+        max_tokens: int = 1024,
+        expect_json: bool = False,
+    ) -> Any:
+        """
+        Call a remote Ollama instance via its OpenAI-compatible API.
+
+        Uses the same /v1/chat/completions format as OpenRouter but
+        points at a Colab-hosted tunnel (ngrok) instead.
+
+        Args:
+            prompt: The prompt to send
+            model_name: Model name on the Ollama server (e.g. 'a-kore/Arctic-Text2SQL-R1-7B')
+            base_url: Base URL of the Ollama server (e.g. 'https://xxx.ngrok-free.dev')
+            temperature: Sampling temperature — Arctic works best at 0.1
+            max_tokens: Max tokens
+            expect_json: If True, request JSON output format
+
+        Returns:
+            Response string, or parsed JSON dict if expect_json=True
+        """
+        base_url = base_url.rstrip("/")
+        url = f"{base_url}/v1/chat/completions"
+
+        # Arctic-Text2SQL is a specialized SQL model — strict prompt to
+        # suppress its training tendency to add explanations + reasoning.
+        system_prompt = (
+            "You are a DuckDB SQL generator.\n"
+            "\n"
+            "RULES:\n"
+            "1. The table name is always `data`.\n"
+            "2. Use only the exact column names provided in the user's message.\n"
+            "3. Output ONLY the raw SQL query on a single line.\n"
+            "4. NO markdown fences. NO ```sql ... ``` blocks.\n"
+            "5. NO explanations. NO reasoning. NO comments.\n"
+            "6. NO prefixes like 'SQL:' or 'Query:'.\n"
+            "\n"
+            "EXAMPLE:\n"
+            "User: Columns: region string, revenue float. Show total revenue by region.\n"
+            "Assistant: SELECT region, SUM(revenue) AS total_revenue FROM data GROUP BY region ORDER BY total_revenue DESC\n"
+        )
+
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.01,  # near-deterministic for SQL
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+
+        if expect_json:
+            payload["format"] = "json"
+
+        logger.info(
+            "[Colab] Calling %s on %s...",
+            model_name,
+            base_url[:50],
+        )
+
+        resp = await self.http.post(
+            url,
+            json=payload,
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+        if expect_json:
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                return {"error": "llm_json_parse_failed", "raw": content[:500]}
+
+        # Normalize whitespace: collapse newlines and multiple spaces into
+        # single spaces so multi-line SQL output doesn't cause display issues.
+        normalized = " ".join(content.strip().split())
+        return normalized
 
     # -----------------------------------------------------------
     # MODEL TESTING & UTILITIES

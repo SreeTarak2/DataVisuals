@@ -150,6 +150,53 @@ class ChartRecommender:
             "requires": ["1 categorical", "1 numeric"],
             "use_cases": ["financial flow", "profit breakdown", "cumulative effect"],
         },
+        "donut": {
+            "best_for": "part-to-whole with hole for emphasis",
+            "requires": ["1 categorical", "1 numeric"],
+            "max_categories": 7,
+            "use_cases": ["category share", "budget distribution", "segment breakdown"],
+        },
+        "map": {
+            "best_for": "geographic distribution",
+            "requires": ["1 location", "1 numeric"],
+            "use_cases": ["regional sales", "geographic density", "location-based metrics"],
+        },
+        "pictorial_bar": {
+            "best_for": "decorative category comparison",
+            "requires": ["1 categorical", "1 numeric"],
+            "max_categories": 12,
+            "use_cases": ["icon-enhanced metrics", "visual category ranking", "engaging bar charts"],
+        },
+        "effect_scatter": {
+            "best_for": "animated correlation with emphasis",
+            "requires": ["2+ numeric"],
+            "use_cases": ["dynamic correlation", "animated scatter plots", "emphasis on outliers"],
+        },
+        "graph": {
+            "best_for": "network and relationship visualization",
+            "requires": ["nodes", "edges/links"],
+            "use_cases": ["network analysis", "relationship mapping", "connection visualization"],
+        },
+        "sankey": {
+            "best_for": "flow and energy diagrams",
+            "requires": ["source", "target", "value"],
+            "use_cases": ["flow analysis", "conversion funnel", "energy/material flow"],
+        },
+        "parallel": {
+            "best_for": "multi-dimensional comparison",
+            "requires": ["3+ numeric"],
+            "use_cases": ["multi-variable analysis", "dimension reduction", "pattern discovery"],
+        },
+        "lines": {
+            "best_for": "migration and path visualization",
+            "requires": ["origin", "destination"],
+            "use_cases": ["migration flows", "route analysis", "movement patterns"],
+        },
+        "tree": {
+            "best_for": "hierarchical tree visualization",
+            "requires": ["hierarchical data"],
+            "use_cases": ["org charts", "decision trees", "hierarchy exploration"],
+        },
     }
 
     def recommend_charts(

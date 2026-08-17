@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { aiAPI, chatAPI } from '../services/api';
-
 /**
  * Extract text content from potentially JSON-formatted LLM responses.
  * Handles: { "response": "..." }, partial JSON, malformed streaming responses.
@@ -79,11 +78,16 @@ const useChatStore = create(
       currentConversationId: null,
       loading: false,
       error: null,
-
+      
       // Streaming state
       streamingMessageId: null,   // ID of message currently being streamed
       streamingContent: '',       // Accumulated streamed content
       isStreaming: false,         // Whether currently receiving stream
+
+      // Version tracking: { parentMessageId: [msg1, msg2, ...] }
+      versionMap: {},
+      // Current version index per parent: { parentMessageId: 0 }
+      versionIndex: {},
 
       // Actions
       setLoading: (loading) => set({ loading }),
@@ -102,7 +106,7 @@ const useChatStore = create(
         streamingContent: state.streamingContent + token
       })),
 
-      finishStreaming: (fullContent, chartConfig = null, sql = null, insights = [], dataSummary = '', resultTable = null, followUpSuggestions = [], showFollowUpSuggestions = false, renderIntent = null) => {
+      finishStreaming: (fullContent, chartConfig = null, sql = null, insights = [], dataSummary = '', resultTable = null, followUpSuggestions = [], showFollowUpSuggestions = false, renderIntent = null, thinkingSteps = []) => {
         const state = get();
         const { currentConversationId, streamingMessageId } = state;
 
@@ -125,6 +129,7 @@ const useChatStore = create(
           data_summary: dataSummary,
           // Agentic render intent: controls which blocks are shown in the UI
           render_intent: renderIntent || null,
+          thinking_steps: thinkingSteps,
           timestamp: new Date().toISOString(),
         };
 
@@ -178,6 +183,44 @@ const useChatStore = create(
         } else {
           set({ isStreaming: false, streamingMessageId: null, streamingContent: '', loading: false });
         }
+      },
+
+      // ── Version Management Actions ──
+
+      addVersion: (parentMessageId, versionMessage) => {
+        set(state => {
+          const existing = state.versionMap[parentMessageId] || [];
+          const newIndex = existing.length;
+          return {
+            versionMap: {
+              ...state.versionMap,
+              [parentMessageId]: [...existing, versionMessage]
+            },
+            versionIndex: {
+              ...state.versionIndex,
+              [parentMessageId]: newIndex
+            }
+          };
+        });
+      },
+
+      setVersionIndex: (parentMessageId, index) => {
+        set(state => ({
+          versionIndex: {
+            ...state.versionIndex,
+            [parentMessageId]: index
+          }
+        }));
+      },
+
+      getVersionsForParent: (parentMessageId) => {
+        return get().versionMap[parentMessageId] || [];
+      },
+
+      getCurrentVersion: (parentMessageId) => {
+        const versions = get().versionMap[parentMessageId] || [];
+        const index = get().versionIndex[parentMessageId] || 0;
+        return versions[index] || null;
       },
 
       // Message editing action
@@ -328,6 +371,7 @@ const useChatStore = create(
               id: conv._id,
               datasetId: conv.dataset_id,
               datasetName: conv.dataset_name,
+              title: conv.title || null,
               messages: messages,
               createdAt: conv.created_at,
               updatedAt: conv.updated_at || conv.created_at
@@ -459,7 +503,10 @@ const useChatStore = create(
               }
             },
             currentConversationId: finalConvId,
-            loading: false
+            loading: false,
+            isStreaming: false,
+            streamingMessageId: null,
+            streamingContent: ''
           }));
 
           return { success: true, conversationId: finalConvId };
@@ -525,7 +572,10 @@ const useChatStore = create(
           
           set({
             error: userFriendlyError,
-            loading: false
+            loading: false,
+            isStreaming: false,
+            streamingMessageId: null,
+            streamingContent: ''
           });
           
           return { 
@@ -620,8 +670,8 @@ const useChatStore = create(
     }),
     {
       name: 'signal-chat-store',
-      // Persist conversations but strip chart_config and data_summary from messages
-      // to prevent localStorage quota exhaustion (chart data can be 50-200KB per message)
+      // Persist copilot mode and conversations but strip heavy data
+      // (chart_config, result_table can be 50-200KB per message — strip from localStorage)
       partialize: (state) => {
         const slimConversations = {};
         for (const [id, conv] of Object.entries(state.conversations)) {

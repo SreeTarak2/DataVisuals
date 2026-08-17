@@ -29,7 +29,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -151,7 +151,7 @@ class DomainPromptAdjuster:
             overall_score=overall_score,
             failure_modes=failure_modes,
             dimensions=dimensions or {},
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         )
 
         # Store in MongoDB
@@ -204,7 +204,7 @@ class DomainPromptAdjuster:
                 temperature_change=0.0,
                 evaluation_count=len(evaluations),
                 trend="insufficient_data",
-                last_updated=datetime.utcnow().isoformat(),
+                last_updated=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             )
             self._cache[key] = adjustment
             return adjustment
@@ -259,7 +259,7 @@ class DomainPromptAdjuster:
                 evaluation_count=len(evaluations),
                 trend=trend,
                 common_failures=common_failures,
-                last_updated=datetime.utcnow().isoformat(),
+                last_updated=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             )
             self._cache[key] = adjustment
             return adjustment
@@ -304,7 +304,7 @@ class DomainPromptAdjuster:
             evaluation_count=len(evaluations),
             trend=trend,
             common_failures=common_failures,
-            last_updated=datetime.utcnow().isoformat(),
+            last_updated=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         )
 
         # Persist to MongoDB

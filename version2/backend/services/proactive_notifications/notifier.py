@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -122,14 +122,14 @@ class ProactiveNotificationAgent:
     @property
     def llm_router(self):
         if self._llm_router is None:
-            from services.llm_router import llm_router
+            from llm.router import llm_router
             self._llm_router = llm_router
         return self._llm_router
 
     @property
     def belief_store(self):
         try:
-            from services.agents.belief_store import get_belief_store
+            from agents.belief.belief_store import get_belief_store
             return get_belief_store()
         except Exception:
             return None
@@ -179,7 +179,7 @@ class ProactiveNotificationAgent:
 
     def _check_rate_limit(self, user_id: str, trigger_type: str) -> bool:
         """Rate limit: max N pushes per hour per trigger type per user."""
-        now = datetime.utcnow().timestamp()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).timestamp()
         key = f"{user_id}__{trigger_type}"
 
         if key not in self._recent_deliveries:

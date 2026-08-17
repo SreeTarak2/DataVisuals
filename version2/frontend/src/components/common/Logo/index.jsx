@@ -4,7 +4,7 @@ const Logo = ({ className = '', size = 32, showText = false }) => {
   return (
     <div className={`logo-container ${className}`} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
       <img 
-        src="/logo.png?v=2" 
+        src="/logo.png" 
         alt="Signal Logo" 
         style={{ 
           width: `${size}px`, 

@@ -23,7 +23,7 @@ Limitations:
 from typing import Dict, Any, List, Optional, Tuple
 import logging
 import polars as pl
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .base_renderer import BaseRenderer
 from db.schemas_charts import MultiSeriesViewSpec
@@ -97,7 +97,7 @@ class OverlayRenderer(BaseRenderer):
             Exception: Any other rendering error
         """
         logger.info(f"Render overlay chart: {spec.title}")
-        render_start = datetime.utcnow()
+        render_start = datetime.now(timezone.utc).replace(tzinfo=None)
 
         try:
             # Step 1: Validate specification
@@ -216,7 +216,7 @@ class OverlayRenderer(BaseRenderer):
                 "series_count": len(traces),
                 "data_points_per_series": len(x_data),
                 "has_nulls": self._detect_nulls(df, y_roles),
-                "render_time_ms": (datetime.utcnow() - render_start).total_seconds() * 1000,
+                "render_time_ms": (datetime.now(timezone.utc).replace(tzinfo=None) - render_start).total_seconds() * 1000,
                 "mode": self.trace_mode
             }
 

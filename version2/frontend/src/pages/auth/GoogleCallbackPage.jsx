@@ -1,24 +1,25 @@
 import { useEffect } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/store/authStore';
 import { Loader2 } from 'lucide-react';
 
 export default function GoogleCallbackPage() {
-    const [searchParams] = useSearchParams();
     const navigate = useNavigate();
-    const { setGoogleToken } = useAuth();
+    const { verifyGoogleSession } = useAuth();
 
     useEffect(() => {
-        const token = searchParams.get('token');
-        const type = searchParams.get('type');
-
-        if (token) {
-            setGoogleToken(token, type);
-            navigate('/dashboard');
-        } else {
-            navigate('/login');
-        }
-    }, [searchParams, navigate, setGoogleToken]);
+        const init = async () => {
+            // The backend sets the HttpOnly cookie during the Google OAuth redirect.
+            // Just verify the session and navigate to dashboard.
+            const success = await verifyGoogleSession();
+            if (success) {
+                navigate('/dashboard');
+            } else {
+                navigate('/login');
+            }
+        };
+        init();
+    }, [navigate, verifyGoogleSession]);
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-[#09090b]">

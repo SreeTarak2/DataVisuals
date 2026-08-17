@@ -92,7 +92,7 @@ async def _logged_llm_call(
 
 def enable_verbose_logging() -> None:
     global _original_call
-    from services.llm_router import llm_router
+    from llm.router import llm_router
 
     _original_call = llm_router.call
     llm_router.call = _logged_llm_call

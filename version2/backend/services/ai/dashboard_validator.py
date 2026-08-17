@@ -16,7 +16,7 @@ Version: 1.0
 
 import logging
 from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import polars as pl
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ class DashboardValidator:
             "warnings": warnings,
             "auto_fixes": auto_fixes,
             "validated_blueprint": fixed_blueprint,
-            "validation_time": datetime.utcnow().isoformat(),
+            "validation_time": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         }
 
         logger.info(

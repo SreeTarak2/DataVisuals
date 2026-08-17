@@ -30,7 +30,19 @@ class ChartType(str, Enum):
     VIOLIN = "violin"
     AREA = "area"
     GROUPED_BAR = "grouped_bar"
+    STACKED_BAR = "stacked_bar"
     TREEMAP = "treemap"
+    SUNBURST = "sunburst"
+    DONUT = "donut"
+    MAP = "map"
+    PICTORIAL_BAR = "pictorial_bar"
+    EFFECT_SCATTER = "effect_scatter"
+    GRAPH = "graph"
+    SANKEY = "sankey"
+    PARALLEL = "parallel"
+    LINES = "lines"
+    TREE = "tree"
+    THEME_RIVER = "theme_river"
 
 
 class ConfidenceLevel(str, Enum):
@@ -220,7 +232,7 @@ class OutputValidator:
         for error in errors:
             if "chart type" in error.lower():
                 suggestions.append(
-                    f"Fix: Use exact chart type values (lowercase): bar, line, pie, scatter, histogram, heatmap"
+                    f"Fix: Use exact chart type values (lowercase): bar, line, pie, donut, scatter, histogram, heatmap, box_plot, grouped_bar, stacked_bar, area, treemap, sunburst, map, pictorial_bar, effect_scatter, graph, sankey, parallel, lines, tree, theme_river"
                 )
             elif "column" in error.lower() and "not found" in error.lower():
                 suggestions.append(
@@ -270,7 +282,7 @@ async def validate_with_retry(
                 response = await llm_call_func(initial_prompt)
             else:
                 # Progressive refinement: add error details to prompt
-                from core.prompt_templates import get_refinement_retry_prompt
+                from prompts.sql import get_refinement_retry_prompt
                 refinement_prompt = get_refinement_retry_prompt(
                     initial_prompt,
                     errors,

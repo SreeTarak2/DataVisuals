@@ -33,7 +33,7 @@ Select/generate the 3 best charts. Respond with ONLY valid JSON:
 {{
   "charts": [
     {{
-      "chart_type": "bar"|"line"|"scatter"|"histogram"|"box"|"heatmap"|"pie"|"treemap"|"sunburst"|"grouped_bar"|"stacked_bar"|"area",
+      "chart_type": "bar"|"line"|"scatter"|"histogram"|"box"|"heatmap"|"pie"|"treemap"|"sunburst"|"grouped_bar"|"stacked_bar"|"area"|"donut"|"map"|"pictorial_bar"|"effect_scatter"|"graph"|"sankey"|"parallel",
       "title": "descriptive chart title",
       "x": "column_name",
       "y": "column_name or null",

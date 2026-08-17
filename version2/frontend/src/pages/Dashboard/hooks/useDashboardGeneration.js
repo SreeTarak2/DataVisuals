@@ -6,13 +6,13 @@
  * Extracted from Dashboard.jsx to separate AI dashboard generation concerns.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'react-hot-toast';
+import { Zap, Sparkles } from 'lucide-react';
 import { normalizeDashboardConfig } from '../../../utils/dashboardUtils';
-import { getAuthToken } from '../../../services/api';
+
 import useDatasetStore from '../../../store/datasetStore';
 
-const MAX_REDESIGNS = 3;
 const NETWORK_ERROR_TOAST_ID = 'dashboard-generation-network-error';
 const GENERATION_ERROR_TOAST_ID = 'dashboard-generation-error';
 
@@ -74,9 +74,7 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
     const cachedConfig = selectedDatasetId ? dashboardConfigs[selectedDatasetId] : null;
     const [aiDashboardConfig, setAiDashboardConfig] = useState(cachedConfig);
     const [dashboardLoading, setDashboardLoading] = useState(false);
-    const [redesignLoading, setRedesignLoading] = useState(false);
     const [artifactPreparing, setArtifactPreparing] = useState(false);
-    const [redesignCount, setRedesignCount] = useState(0);
     const isProcessed = Boolean(selectedDataset?.is_processed);
     const dashboardArtifactStatus = selectedDataset?.artifact_status?.dashboard_design || null;
 
@@ -126,7 +124,6 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
             clearArtifactPoll();
             setArtifactPreparing(false);
             setDashboardLoading(false);
-            setRedesignLoading(false);
         }
     }, [isBackendOffline, clearArtifactPoll]);
 
@@ -134,8 +131,6 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
         // We no longer clear aiDashboardConfig here to prevent flicker
         // The sync useEffect handles updating it from the store
         setDashboardLoading(false);
-        setRedesignLoading(false);
-        setRedesignCount(0);
     }, []);
 
     const loadExistingDashboard = useCallback(async () => {
@@ -185,14 +180,10 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
 
         try {
             setDashboardLoading(true);
-            const token = getAuthToken();
             console.log('Loading cached AI dashboard for dataset:', selectedDatasetId);
             let response = await fetch(`/api/ai/${selectedDatasetId}/dashboard`, {
                 method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
+                credentials: 'include',
                 signal: controller.signal
             });
 
@@ -200,10 +191,7 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
                 console.log('AI dashboard route not found, trying dashboard config endpoint');
                 response = await fetch(`/api/dashboard/${selectedDatasetId}/config`, {
                     method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
+                    credentials: 'include',
                     signal: controller.signal
                 });
             }
@@ -213,34 +201,34 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
             }
 
             const dashboardConfig = await response.json();
-            console.log('Cached AI dashboard response:', dashboardConfig);
+            console.log('Cached AI dashboard response:', dashboardConfig);                    if (dashboardConfig.dashboard_blueprint && dashboardConfig.dashboard_blueprint.components) {
+                        const normalized = normalizeDashboardConfig({
+                            components: dashboardConfig.dashboard_blueprint.components || [],
+                            layout_grid: dashboardConfig.dashboard_blueprint.layout_grid || "repeat(4, 1fr)",
+                            design_pattern: dashboardConfig.design_pattern,
+                            pattern_name: dashboardConfig.pattern_name,
+                            reasoning: dashboardConfig.reasoning,
+                            dashboard_story: dashboardConfig.dashboard_blueprint.dashboard_story || '',
+                        });
+                        setAiDashboardConfig(normalized);
+                        setDashboardConfig(selectedDatasetId, normalized);
+                        return;
+                    }
 
-            if (dashboardConfig.dashboard_blueprint && dashboardConfig.dashboard_blueprint.components) {
-                const normalized = normalizeDashboardConfig({
-                    components: dashboardConfig.dashboard_blueprint.components || [],
-                    layout_grid: dashboardConfig.dashboard_blueprint.layout_grid || "repeat(4, 1fr)",
-                    design_pattern: dashboardConfig.design_pattern,
-                    pattern_name: dashboardConfig.pattern_name,
-                    reasoning: dashboardConfig.reasoning
-                });
-                setAiDashboardConfig(normalized);
-                setDashboardConfig(selectedDatasetId, normalized);
-                return;
-            }
-
-            if (Array.isArray(dashboardConfig.components) && dashboardConfig.components.length > 0) {
-                const normalized = normalizeDashboardConfig({
-                    components: dashboardConfig.components,
-                    layout_grid: dashboardConfig.layout_grid || "repeat(4, 1fr)",
-                    design_pattern: dashboardConfig.design_pattern,
-                    pattern_name: dashboardConfig.pattern_name,
-                    reasoning: dashboardConfig.reasoning,
-                    summary: dashboardConfig.summary,
-                });
-                setAiDashboardConfig(normalized);
-                setDashboardConfig(selectedDatasetId, normalized);
-                return;
-            }
+                    if (Array.isArray(dashboardConfig.components) && dashboardConfig.components.length > 0) {
+                        const normalized = normalizeDashboardConfig({
+                            components: dashboardConfig.components,
+                            layout_grid: dashboardConfig.layout_grid || "repeat(4, 1fr)",
+                            design_pattern: dashboardConfig.design_pattern,
+                            pattern_name: dashboardConfig.pattern_name,
+                            reasoning: dashboardConfig.reasoning,
+                            summary: dashboardConfig.summary,
+                            dashboard_story: dashboardConfig.dashboard_blueprint?.dashboard_story || '',
+                        });
+                        setAiDashboardConfig(normalized);
+                        setDashboardConfig(selectedDatasetId, normalized);
+                        return;
+                    }
 
             const componentsArray = dashboardConfig.dashboard?.components || dashboardConfig.components;
             if (componentsArray) {
@@ -332,18 +320,14 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
 
         try {
             setDashboardLoading(true);
-            setRedesignLoading(Boolean(forceRegenerate));
-            const token = getAuthToken();
             console.log('Starting AI dashboard generation for dataset:', selectedDatasetId);
 
             try {
                 console.log('Trying AI Designer service...');
                 const response = await fetch(`/api/ai/${selectedDatasetId}/design-dashboard`, {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify({
                         force_regenerate: !!forceRegenerate,
                         redesign_mode: forceRegenerate ? 'layout' : 'full',
@@ -362,7 +346,8 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
                             layout_grid: dashboardConfig.dashboard_blueprint.layout_grid || "repeat(4, 1fr)",
                             design_pattern: dashboardConfig.design_pattern,
                             pattern_name: dashboardConfig.pattern_name,
-                            reasoning: dashboardConfig.reasoning
+                            reasoning: dashboardConfig.reasoning,
+                            dashboard_story: dashboardConfig.dashboard_blueprint.dashboard_story || '',
                         });
                         setAiDashboardConfig(normalized);
                         setDashboardConfig(selectedDatasetId, normalized);
@@ -406,7 +391,7 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
                 `/api/ai/${selectedDatasetId}/generate-dashboard?force_regenerate=${forceRegenerate}`,
                 {
                     method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` },
+                    credentials: 'include',
                     signal: controller.signal
                 }
             );
@@ -460,21 +445,22 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
             if (abortControllerRef.current === controller) {
                 isGeneratingRef.current = false;
                 setDashboardLoading(false);
-                setRedesignLoading(false);
             }
 
             if (generatedSuccessfully) {
                 setTimeout(() => {
                     const wasLayoutRedesign = forceRegenerate && lastDashboardConfig?.cached;
                     if (wasLayoutRedesign) {
-                        toast.success('⚡ Dashboard rearranged instantly', {
+                        toast.success('Dashboard rearranged instantly', {
                             id: 'dashboard-generated',
                             duration: 2500,
+                            icon: React.createElement(Zap, { size: 16 }),
                         });
                     } else {
-                        toast.success('✨ AI Dashboard generated successfully!', {
+                        toast.success('AI Dashboard generated successfully!', {
                             id: 'dashboard-generated',
                             duration: 3000,
+                            icon: React.createElement(Sparkles, { size: 16 }),
                         });
                     }
                 }, 100);
@@ -483,14 +469,10 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
     }, [selectedDatasetId]);
 
     const handleRegenerate = useCallback(() => {
-        if (redesignCount >= MAX_REDESIGNS) {
-            toast.error(`Redesign limit reached (${MAX_REDESIGNS}/${MAX_REDESIGNS}). Please refresh the page to reset.`);
-            return false;
-        }
-        setRedesignCount(prev => prev + 1);
+        // Plain retry of full dashboard generation (used by the generation-failed empty state)
         generateAiDashboard(true);
         return true;
-    }, [generateAiDashboard, redesignCount]);
+    }, [generateAiDashboard]);
 
     useEffect(() => {
         resetGenerationState();
@@ -587,13 +569,10 @@ export const useDashboardGeneration = (selectedDataset, datasetData, helpers) =>
     return {
         aiDashboardConfig,
         dashboardLoading,
-        redesignLoading,
         artifactPreparing,
-        redesignCount,
         dashboardArtifactStatus,
         generateAiDashboard,
         handleRegenerate,
-        MAX_REDESIGNS
     };
 };
 

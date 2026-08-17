@@ -20,6 +20,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from agents.resilience.token_budget import get_run_budget, return_run_budget
+from agents.telemetry import tracer
+
 logger = logging.getLogger(__name__)
 
 
@@ -103,21 +106,41 @@ async def _run_agent(
     ctx: PipelineContext,
     timeout: float = 45.0,
 ) -> tuple[PipelineContext, str | None]:
-    """Run one agent with a timeout. Returns (updated_ctx, error_msg | None)."""
-    t0 = time.monotonic()
-    try:
-        result = await asyncio.wait_for(fn(ctx), timeout=timeout)
-        if isinstance(result, PipelineContext):
-            ctx = result
-        ctx.timings[name] = time.monotonic() - t0
-        return ctx, None
-    except TimeoutError:
-        logger.error(f"[{name}] timed out after {timeout:.0f}s")
-        ctx.errors.append(f"{name}: Timed out after {timeout:.0f}s")
-        ctx.partial_failure = True
-        return ctx, f"Timed out after {timeout:.0f}s"
-    except Exception as e:
-        logger.error(f"[{name}] failed: {e}", exc_info=True)
-        ctx.errors.append(f"{name}: {e}")
-        ctx.partial_failure = True
-        return ctx, str(e)
+    """Run one agent with resilience wrapping + timeout. Returns (updated_ctx, error_msg | None)."""
+    # ── Token budget ──────────────────────────────────────────────
+    agent_class = f"PipelineAgent:{name}"
+    budget = get_run_budget(agent_class)
+
+    span_attrs = {
+        "agent": name,
+        "dataset_id": ctx.dataset_id,
+        "user_id": ctx.user_id[:8] if ctx.user_id else None,
+    }
+
+    with tracer.start_as_current_span(f"pipeline.agent.{name}", attributes=span_attrs):
+        t0 = time.monotonic()
+        try:
+            if not budget.can_proceed(estimated_tokens=0):
+                logger.warning("[%s] Pipeline budget exhausted — skipping", name)
+                ctx.errors.append(f"{name}: budget exhausted")
+                ctx.partial_failure = True
+                return ctx, "Budget exhausted"
+
+            result = await asyncio.wait_for(fn(ctx), timeout=timeout)
+            if isinstance(result, PipelineContext):
+                ctx = result
+            ctx.timings[name] = time.monotonic() - t0
+            return_run_budget(agent_class)
+            return ctx, None
+        except TimeoutError:
+            logger.error(f"[{name}] timed out after {timeout:.0f}s")
+            ctx.errors.append(f"{name}: Timed out after {timeout:.0f}s")
+            ctx.partial_failure = True
+            return_run_budget(agent_class)
+            return ctx, f"Timed out after {timeout:.0f}s"
+        except Exception as e:
+            logger.error(f"[{name}] failed: {e}", exc_info=True)
+            ctx.errors.append(f"{name}: {e}")
+            ctx.partial_failure = True
+            return_run_budget(agent_class)
+            return ctx, str(e)

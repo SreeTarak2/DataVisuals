@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -46,7 +46,8 @@ class ChartRecommendation(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     context: Optional[Dict[str, Any]] = None
-    conversation_id: Optional[str] = None 
+    conversation_id: Optional[str] = None
+    mode: Optional[str] = None
 
 class ChatResponse(BaseModel):
     response: str
@@ -167,6 +168,10 @@ class LoginResponse(BaseModel):
     token_type: str
     expires_in: int
     user: User
+    # Refresh token is delivered via HttpOnly cookie only — never in the
+    # JSON body (would expose it to JS). ``exclude=True`` keeps it off the
+    # wire while letting the auth routes read it from the response object.
+    refresh_token: Optional[str] = Field(None, exclude=True)
 
 class TokenData(BaseModel):
     email: Optional[str] = None

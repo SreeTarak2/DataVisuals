@@ -1,280 +1,188 @@
-# DataSage AI — User Reality Check
-**Generated:** 2026-04-09  
-**Method:** Codebase audit + last30days research (Reddit/HN) + targeted WebSearch across 12 queries  
-**Scope:** AI-native analytics, BI tool switching, conversational data tools, AI hallucination in data contexts
+# DataSage AI — User Reality Check (v2, August 2026)
+
+**Generated:** 2026-08-06 (replaces the 2026-04-09 edition — 4 months = an eternity in this market)
+**Method:** Codebase audit (verified what's actually built, not what's planned) + fresh web research (July–Aug 2026: funding, benchmarks, analyst recognition, pricing) + Reddit/HN community sentiment (last 30 days) + Gartner/analyst signals
+**Confidence:** High on market facts (dated sources); Medium on product-UX claims (verified from code, not live user sessions)
 
 ---
 
-## Part 1: Research Map — What Searches Led to What
+## Part 0: What Changed Between April and August 2026
 
-| Query | Signal Found | Relevance |
-|-------|-------------|-----------|
-| "AI data analytics tool complaints features 2025" | Reddit 40% coverage (generic trending posts); no targeted signal | Low direct signal — needed WebSearch |
-| "Metabase Power BI alternative switching reasons" | Same Reddit noise; WebSearch surfaced switching triggers | High via WebSearch |
-| "Julius AI ChatGPT data analysis complaints abandonment" | Mostly general AI discourse; one strong HN thread on "AI sucked fun out of programming" | Medium |
-| "Metabase alternative AI why switching 2025 2026" | Multiple comparison articles confirming: SQL requirement, scaling, no AI integration | High |
-| "Power BI Tableau too complex too expensive small business" | Power BI 40% price hike April 2025; DAX learning curve cited by 1/3 of new users; Tableau $42-75/user/month | High |
-| "Julius AI review complaints chat with data problems" | Performance breaks on large files; NL still hallucinated complex stats | High |
-| "AI dashboard generator accuracy wrong charts startup 2025" | Two documented accuracy failures: 17% vs actual 6% QoQ growth (3x off); Premium churn calc off by exclusion error | Critical |
-| "ThoughtSpot NL analytics complaints limitations 2025" | NL search requires heavy upfront data modeling; 25 query/month cap; poor vis customization | High |
-| AI hallucination in data contexts | 1 in 3 AI answers are false (2025 study); AI uses confident language 34% more often when wrong | Critical |
+The market moved in four ways that directly affect DataSage's thesis:
 
-**Key research gap:** Last30days had no X/Twitter or Reddit comment access — qualitative nuance came from WebSearch. Confidence in findings: Medium-High (mostly vendor comparison content + published research, limited raw user voice).
+1. **The semantic layer became the industry's consensus answer to hallucination.** 2026 benchmarks (Spider 2.0: 10–21% for base frontier models vs 86–91% on clean Spider 1.0; MIT's BEAVER: 0–2% on private enterprise warehouses) killed "raw text-to-SQL." Every credible player now grounds AI queries in governed, pre-compiled metric definitions (dbt MetricFlow, Cube, Snowflake Semantic Views, Databricks Metric Views, Atlan context layers). Grounding lifts accuracy from **10–50% → 90–98%**. This is *exactly* the deterministic-KPI + metric-store + belief-store direction DataSage already built. **The market came to us — we need to say so loudly.**
+2. **"Unlimited" flat pricing died.** Julius AI moved to credit-based pricing (Plus $20/2,000 credits → Pro $45/5,000 → Ultra $500; Business $450; Growth $750). Hex tied seats to compute (Pro ~$36/editor, Team ~$75/editor). Usage-based pricing is now the norm — DataSage's token-budgeted routing fits this trend.
+3. **Enterprise consolidation accelerated.** Salesforce **closed the Waii acquisition** (embedding text-to-SQL into Data Cloud/Agentforce); **TextQL raised $17M from Blackstone** (Apr 2026, private-VPC enterprise data analyst); **ThoughtSpot was named Leader in the 2026 Gartner MQ for Analytics & BI** (Jul 1, 2026) and launched Spotter agents + an enterprise MCP server, with 35+ customers >$1M ARR. Standalone wrapper tools are being compressed from above.
+4. **Even the benchmarks are untrustworthy.** A University of Illinois study (Jin et al., 2026) found annotation error rates of **52.8% in BIRD Mini-Dev and 62.8% in Spider 2.0-Snow**; fixing them swung agent performance −7% to +31% and reshuffled leaderboards by up to 9 places (CHESS: 7th → 1st). Nobody should buy a text-to-SQL tool on a benchmark score.
 
----
+### Product reality check (verified in codebase, Aug 6 2026)
 
-## Part 2: The 5 Real Pain Points in This Space Right Now
+| April 2026 gap | Status now | Evidence |
+|---|---|---|
+| No live data connectors | ✅ **BUILT** | `api/databases` (Postgres, MySQL, MongoDB, Supabase), `api/dlt` connectors, Google Sheets live import (`api/datasets` re-import + refresh) |
+| No scheduled refresh | ✅ **BUILT** | Google Sheet re-import, DB re-extract (`?refresh=true`), scheduled reports (proactive notifications, `SCHEDULED_REPORT` trigger) |
+| No export | ✅ **BUILT** | CSV (results, tables, preview), PNG (Plotly), JSON, workspace snapshot, PDF (marketing) |
+| No share | 🟡 **PARTIAL** | Shared SQL queries + dashboard shared links exist; public no-login embed/links unverified |
+| No "show your work" | 🟡 **PARTIAL → STRONG** | `query_log` MongoDB collection (audit trail), `show_sql` render intent, full AI SQL Editor with history + save/shared queries, chat→SQL-Editor handoff |
+| No governed metrics | 🟡 **BUILT (backend)** | `services/semantic/metric_definition_store.py` exists; user-editable metrics UI unverified |
+| No feedback loop | ✅ **BUILT** | `CorrectionCapture` UI, belief store, memory injector, insight reflection ("qualify claims: suggests/indicates/CI") |
+| No proactive insights | ✅ **BUILT** | Proactive notifications engine, anomaly feed, predictive questions, scheduled reports |
+| No data quality | ✅ **BUILT** | `DataQualityIndicator`, data quality agent (upload + scheduled drift detection) |
+| No SQL editor | ✅ **BUILT** | Full `SqlEditorPage` with AI copilot panel, saved/shared queries, query history |
+| AutoML / forecasting | ❌ **NOT BUILT** | Predictive *questions* exist; no model training/forecasting |
+| Embed SDK / white-label | ❌ **NOT BUILT** | "Embedded" chat panel is an internal prop, not a productized SDK |
+| Real-time collaboration | ❌ **NOT BUILT** | No co-editing/commenting found |
 
-### Pain 1 — "I can't trust what it tells me" (AI Accuracy Crisis)
-The dominant fear across the AI analytics space right now. A 2025 study found **1 in 3 AI answers contain false information**. Worse: AI models use confident language 34% more often when generating *incorrect* information. In the data analytics context this is lethal — documented real-world case: an AI dashboard showed 17% QoQ revenue growth; audit revealed it was actually 6% because the AI labeled monthly data as quarters. A customer success team launched an upsell campaign based on AI-generated churn data that had systematically excluded cancelled Premium accounts.
-
-**User sentiment:** "I need to see the work, not just the answer."
-
-### Pain 2 — "It's too expensive for what it is" (Pricing Shock in Incumbent Tools)
-Power BI raised prices **40% in April 2025** ($10 → $14/user/month Pro, $20 → $24/user/month Premium Per User). A 10-person team now pays $2,880/year minimum. Tableau Creator licenses run $75/user/month — $9,000/year per analyst. ThoughtSpot caps NL queries at **25/user/month** on Pro, then charges per query.
-
-**User sentiment:** "I'm being priced out of tools I need every day."
-
-### Pain 3 — "I still need to know SQL" (Self-Service Broken Promise)
-Metabase's core complaint: "still needs SQL for anything non-trivial." ThoughtSpot's NL search requires the data team to do "a huge amount of up-front data modelling work and defining all business logic and semantics" before non-technical users can ask questions. Power BI's DAX/Power Query learning curve is cited by ~1/3 of new users as the reason they stall.
-
-**User sentiment:** "I was promised plain English. I'm still writing queries."
-
-### Pain 4 — "It dies on real-world data" (Scale & Integration Gaps)
-Julius AI "slows down or struggles when uploading massive raw files." Metabase lacks native connectors to Salesforce, HubSpot, and most cloud data warehouses. Users uploading CSVs are solving a toy problem; their actual data lives in Snowflake, BigQuery, or Postgres.
-
-**User sentiment:** "Works great on the demo CSV. Falls apart on my actual data."
-
-### Pain 5 — "Nobody can see it but me" (Sharing & Collaboration Wall)
-Most tools in this space (including early-stage AI analytics tools) require everyone who views a dashboard to have an account. No embed, no shareable link, no read-only view. Founders want to put KPI dashboards in investor updates. PMs want to share charts in Notion. Marketing wants to embed in weekly email reports.
-
-**User sentiment:** "I built this great chart and now I can't show it to anyone without buying them a seat."
+**Consequence:** the April persona walkthroughs below (which were built around the missing-connectors / no-share / no-audit gaps) are now **stale**. The personas and gaps are rewritten below to match the product you actually have.
 
 ---
 
-## Part 3: Competitive Alternatives Users Are Actively Considering
+## Part 1: The Pain Points That Still Matter in Aug 2026
 
-| Tool | Why They're Considering It | Its Weak Spot |
-|------|---------------------------|---------------|
-| **Metabase** | Free open-source tier, familiar SQL interface | Still needs SQL; no AI; poor embedded analytics |
-| **Power BI** | Microsoft ecosystem integration | 40% price hike; DAX learning curve; Windows-first |
-| **Tableau** | Best-in-class visualizations | $42-75/user/month; overkill for SMBs |
-| **ThoughtSpot** | True NL-to-chart promise | 25 query cap; requires upfront data modeling; $25+/user/month |
-| **Julius AI** | ChatGPT-style CSV analysis | Breaks on large files; hallucination on complex stats |
-| **ChatGPT Advanced Data Analysis** | Zero setup, familiar interface | No persistent storage; session-based only; not a BI product |
-| **Supaboard** | AI-native NL answers, fast setup | Early stage; limited chart types |
-| **Zoho Analytics** | Affordable for SMBs ($48/month flat) | Less polished AI; Zoho ecosystem lock-in |
+### Pain 1 — "I can't trust what it tells me" (now the #1 buyer requirement, not a nice-to-have)
+The accuracy crisis is now quantified and *public*:
+- Spider 2.0 (real enterprise schemas): base frontier models **10–21%** execution accuracy — an 8.5× collapse from clean benchmarks.
+- MIT BEAVER (private warehouse logs): **0–2%** without retrieval.
+- Silent failure modes documented in production: wrong joins silently inflating sums, guessing column semantics (`status='ACTIVE'` ≠ customer paid), fiscal-vs-calendar confusion, PII leakage.
+- Community framing (HN, July 2026): *"Text-to-SQL works just enough to be dangerous… the business user will treat that LLM response as canon to share in meetings. The LLM may have forgotten a filter, used the wrong definition of revenue, or misunderstood intent."*
 
-**DataSage's whitespace:** The intersection of *trustworthy AI-generated charts* + *non-technical onboarding* + *affordable pricing* is genuinely open. Nobody owns it cleanly yet.
+**User sentiment:** "I need to see the SQL, the row counts, and the metric definition — not just the answer." DataSage now has the *plumbing* for this (query log, show-SQL, metric store, correction capture). The gap is **productizing it into an obvious trust surface** (an answer that visibly cites: which metric definition, which rows, which SQL).
 
----
+### Pain 2 — "It's too expensive for what it is" (pricing compression both ways)
+- Incumbents still expensive: Power BI's 2025 40% hike stuck; Tableau Creator still ~$75/user/mo.
+- But the low end is now **credit-metered and annoying**: Julius free tier = 15 messages/mo; paid tiers gate on credits mid-exploration. Users churn at the paywall.
+- And **free frontier chat (ChatGPT/Claude/Gemini) does ad-hoc CSV analysis well** — for solo users, a paid lightweight wrapper is increasingly hard to justify.
 
-## Part 4: Persona Walkthroughs
+**The wedge that remains:** free chat is stateless ("each session was stateless, so I kept re-[uploading]…" — r/dataanalysis), ungoverned, and can't maintain definitions across sessions. *Persistent, governed, shareable* is the only story that beats free.
 
----
+### Pain 3 — "The AI can't hold a conversation" (statelessness & non-reproducibility)
+New, well-documented 2026 complaints:
+- **Julius AI non-reproducibility:** re-running the same question can switch methods (t-test → ANOVA) or produce different numbers because it regenerates code per query. Deal-breaker for finance/reporting.
+- **ChatGPT/Claude session loss:** users re-upload and re-explain constantly.
+- **LLM recovery failure:** *"once it starts failing, it rarely recovers from an error, even given the exact error code"* (HN).
+- **Sycophancy:** *"the answer a business user needs is rarely the answer to the question they initially ask… LLMs are still too eager to jump into the code"* (HN) — clarification and pushback are where real analyst value lives.
 
-### Persona 1 — Sarah, Solo Data Analyst at 50-person SaaS Startup
-**Background:** 3 years experience, knows Python + basic SQL. One-person data team. Currently on Power BI Pro (just got hit with the 40% price increase). Looking for something that lets her move faster without fighting DAX.
+**DataSage's answer already exists in code:** multi-turn memory, belief store, correction capture, SQL repair agent. The issue is proving it measurably (see Fix #2).
 
-**Search path:** "power bi alternative 2026" → "AI analytics tool CSV upload" → finds DataSage
+### Pain 4 — "My real data isn't a CSV" (integration reality)
+Partially closed for DataSage (connectors shipped), but the expectation bar has risen: users now expect **warehouse-native** (Snowflake/BigQuery/Databricks), **marketing connectors** (HubSpot/GA), and **API/embed** for their own products. This is the enterprise wall where free chat is insulated and where standalone tools either win (TextQL's VPC play) or die.
 
-**DataSage Journey:**
+### Pain 5 — "AI analysts still need a human" (the adoption reality)
+- ~66% of US enterprises see AI as core to data strategy, but **~57% of CDOs cite data reliability/messy architecture** — not model capability — as the top barrier to agentic analytics.
+- Wholesale analyst replacement has stalled/reversed; the model that works is **augmentation** — AI eats the bottom ~20% of tasks (copy-paste reporting, boilerplate SQL, basic dashboards) while humans own governance, metric curation, and judgment.
+- Community consensus (HN): **human-in-the-loop validation is the winning pattern** — *"the game is to force a supervisor to compare two queries… involving the human operator in this loop can take you the remainder [of the way]."*
 
-| Step | Status | Notes |
-|------|--------|-------|
-| Lands on product | 🟡 | Value prop "AI-powered analytics" is generic — every tool says this |
-| Uploads her first CSV | 🟢 | FastAPI + Polars pipeline handles it fine |
-| Uses Chat to ask "what drove revenue growth last quarter?" | 🟡 | Gets an answer — but no "show your work" (no query trace, no code output) |
-| Tries to verify the AI's numbers | 🔴 | No audit trail. No "here's the SQL that generated this." She can't trust it without proof |
-| Builds a chart in Charts Studio | 🟢 | 16 chart types, Plotly rendering — solid experience |
-| Wants to share dashboard with her manager | 🔴 | No shareable read-only link. Manager needs an account. Deal-breaker. |
-| Thinks about connecting to their Postgres DB | 🔴 | Only CSV/Parquet upload supported. She has to export manually every time. |
-
-**Verdict:** Sarah uses it for personal exploration but can't make it her team's tool. She misses Power BI less than she thought — but DataSage doesn't replace it yet.
-
-**Critical gaps:** 🔴 No audit trail on AI answers | 🔴 No share/export without account | 🔴 No direct DB connector
+**Implication for DataSage:** don't sell "replaces your analyst." Sell "your analyst does 5× with a governed copilot that never forgets your definitions." The buyer (the analyst or BI manager) is the person who decides.
 
 ---
 
-### Persona 2 — Marcus, Product Manager at Mid-Size E-Commerce Company
-**Background:** Non-technical. Has Metabase at work but needs the data team's help for any non-trivial query. Frustrated by the backlog. Heard about "chat with your data" tools.
+## Part 2: Competitive Alternatives — August 2026 Edition
 
-**Search path:** "talk to your data AI no SQL" → "metabase alternative non-technical" → finds DataSage
+| Tool | Price (Aug 2026) | Why considered | Weak spot |
+|---|---|---|---|
+| **Julius AI** | Plus $20/2k credits → Pro $45/5k → Ultra $500; Business $450 | Zero-setup file chat, 40+ chart types, notebooks/code-under-hood, SOC 2 | Non-reproducible outputs; hallucinated stats on small data; 15-msg free cap; single-file silos; credit paywalls |
+| **ChatGPT / Claude / Gemini** | Free–$20 | Best-in-class ad-hoc CSV analysis, no setup | Stateless sessions; no governed definitions; no team sharing; no connectors; not a BI product |
+| **Hex** | Pro ~$36/editor, Team ~$75/editor | Notebook + AI magic SQL for data teams | Technical; premium; not for non-technical business users |
+| **ThoughtSpot** | $25+/user/mo, sales-led enterprise | **2026 Gartner MQ Leader**; Spotter agents; MCP server; 35+ >$1M customers | Expensive; requires upfront semantic modeling; enterprise sales cycle |
+| **Databricks Genie / Snowflake Cortex** | Bundled + compute | Native, governed, ~90%+ with semantic models | Requires warehouse + semantic modeling; enterprise-only |
+| **Metabase / OSS stack** | Free–self-host | Cheap, familiar SQL | No governed AI; duckdb+MCP DIY = maintenance burden |
+| **TextQL** | Usage-based, enterprise | $17M Blackstone-backed autonomous analyst, VPC/on-prem | Enterprise-only; heavy ontology setup |
+| **Power BI / Tableau** | $14–24/user (BI) / ~$75/user (Tableau) | Ecosystem incumbents | Price hikes; DAX/SQL learning curves; Copilot requires Fabric capacity |
 
-**DataSage Journey:**
-
-| Step | Status | Notes |
-|------|--------|-------|
-| Onboarding | 🟡 | No guided "first win" flow — unclear what to do after signing up |
-| Uploads last month's order export CSV | 🟢 | Works |
-| Types "what's our average order value by product category?" | 🟢 | Dashboard AI generates reasonable output |
-| Tries a follow-up: "compare this to 3 months ago" | 🔴 | Can't reference previous context or compare across multiple uploads without re-uploading and re-asking |
-| Wants to pin the chart to his weekly dashboard | 🟡 | Dashboard feature exists but feels separate from the chat — no "save this answer" flow |
-| Tries to send the dashboard to his CEO | 🔴 | No public link. No embed. No PDF export. Can't share. |
-| Comes back next week with updated data | 🔴 | Has to re-upload the CSV manually. No "refresh" or scheduled update. |
-
-**Verdict:** Marcus gets one "wow" moment then hits a wall when he tries to use it as a regular workflow tool.
-
-**Critical gaps:** 🔴 No multi-session context / dataset comparison | 🔴 No sharing without account | 🔴 No scheduled refresh / persistent connections
+**DataSage's whitespace in Aug 2026:** the *only* credible position is **trustworthy, governed, zero-setup AI analytics for mid-market business users** — the intersection of (a) semantic grounding that Genie/Cortex/ThoughtSpot have but require engineers to configure, (b) persistence that free chat lacks, (c) price under $50/user that incumbents can't match. Julius is the closest competitor and is weakest exactly where DataSage is strongest (reproducibility, governed metrics, correction memory).
 
 ---
 
-### Persona 3 — Priya, Non-Technical Startup Founder (Series A)
-**Background:** CEO of a 30-person company. Zero SQL. Has tried ThoughtSpot (too expensive after the query cap), Looker (too complex to set up), and ChatGPT data analysis (lost session every time). Wants one dashboard she can look at every morning.
+## Part 3: Persona Walkthroughs (updated to the real product)
 
-**Search path:** "AI KPI dashboard startup simple" → "upload data get dashboard automatically" → finds DataSage
+> Legend: ✅ works now (verified) · 🟡 partial/needs polish · 🔴 still missing
 
-**DataSage Journey:**
+### Persona 1 — Sarah, Solo Data Analyst at 50-person SaaS
+| Step | Status | Note |
+|---|---|---|
+| Upload CSV | ✅ | DuckDB/Polars pipeline handles it |
+| "What drove revenue growth last quarter?" | ✅ | Chat + dashboard; SQL visible via show-SQL / SQL editor handoff |
+| Verify the AI's numbers | 🟡 | `query_log` exists + show-SQL, but no *always-on* "answer cites rows/SQL/metric" surface. Trust is possible, not automatic. |
+| Connect Postgres | ✅ | `api/databases` |
+| Schedule Monday report | ✅ | Scheduled reports + notifications |
+| Share with manager | 🟡 | Shared SQL/dashboards exist; anonymous public link unverified |
+| Export to deck | ✅ | CSV/PNG/JSON; PDF weaker |
 
-| Step | Status | Notes |
-|------|--------|-------|
-| Discovers Dashboard feature | 🟢 | Auto-generated KPI cards + charts from upload — exactly what she imagined |
-| Uploads revenue CSV | 🟢 | Works. Dashboard generates. |
-| Reads AI-generated Insights | 🟡 | Insights are surface-level ("revenue increased 12% vs last month") — no actionable recommendations |
-| Wants to know "why" behind a drop | 🟡 | Chat can answer but she doesn't know to switch to Chat mode — the UX doesn't connect Dashboard ↔ Chat as a workflow |
-| Wants to put the dashboard in her board deck | 🔴 | No embed, no iframe, no PDF export to PDF |
-| Wants her ops lead to also see it | 🔴 | Has to create another account for them |
-| Comes back in 2 weeks — data is stale | 🔴 | Manual re-upload. No scheduled refresh. |
-| Wonders if the numbers are right | 🔴 | AI-generated KPIs with no source citation. The trust gap is high for a CEO making decisions. |
+**Verdict:** Sarah can now make this her tool. Remaining friction: making trust *visible by default*.
 
-**Verdict:** Priya gets the fastest "wow" in the room, and the highest rate of walking away when she tries to do anything beyond that first moment.
+### Persona 2 — Marcus, PM at mid-size e-commerce
+| Step | Status | Note |
+|---|---|---|
+| Upload order export | ✅ | |
+| "Average order value by category?" | ✅ | |
+| Follow-up referencing prior context | ✅ | Multi-turn memory + belief store |
+| Save chart to weekly dashboard | 🟡 | Charts Studio ↔ Dashboard flow unverified end-to-end |
+| Send to CEO without seat | 🟡 | Sharing partial |
+| Refresh next week's data | ✅ | Re-import + refresh + scheduled |
 
-**Critical gaps:** 🔴 No embed/export | 🔴 Dashboard ↔ Chat UX not connected | 🔴 No scheduled refresh | 🔴 Insights too shallow for actual decision-making
+**Verdict:** Marcus's April wall (re-upload, can't compare, can't refresh) is gone. New wall: sharing/embedding outside the product.
 
----
+### Persona 3 — Priya, non-technical founder
+| Step | Status | Note |
+|---|---|---|
+| Auto KPI dashboard from upload | ✅ | Deterministic KPIs |
+| "Why did revenue drop?" | ✅ | Chat + anomaly feed + insights with confidence intervals |
+| Put dashboard in board deck | 🟡 | No PDF/embed productized |
+| Ops lead views it | 🟡 | Sharing partial |
+| **"Are the numbers right?"** | 🟡 | **The remaining CEO killer.** Confidence intervals and insight reflection exist — must be surfaced as a trust surface, not buried. |
 
-### Persona 4 — Dev, Senior Data Engineer at 300-Person Company
-**Background:** Expert in SQL, dbt, Python. His team is evaluating AI analytics tools to recommend to business stakeholders. He's deeply skeptical of AI-generated numbers — he's seen Julius AI hallucinate exponential smoothing outputs.
+### Persona 4 — Dev, senior data engineer (the evaluator)
+| Step | Status | Note |
+|---|---|---|
+| Architecture sophistication | ✅ | Multi-agent, knowledge graph, belief store |
+| "Show me the SQL" | ✅ | SQL editor + query log + chat→SQL handoff |
+| Connect Snowflake/BigQuery | 🔴 | Postgres/MySQL/MongoDB/Supabase/Sheets only. **Enterprise non-starter remains.** |
+| API for programmatic access | 🟡 | FastAPI exists; public developer API unverified |
+| Governance / PII | ✅ | PII redaction, privacy settings, audit logging |
 
-**Search path:** "AI analytics with verifiable outputs" → "LLM data analysis audit trail" → finds DataSage
-
-**DataSage Journey:**
-
-| Step | Status | Notes |
-|------|--------|-------|
-| Reads about multi-agent orchestration | 🟢 | Technically interesting — shows architectural sophistication |
-| Tries agentic pipeline on a complex dataset | 🟡 | Works for simple questions; output quality degrades on multi-step reasoning |
-| Asks "show me the code / SQL that generated this" | 🔴 | No visible code output in the chat interface. No "explain your reasoning" mode |
-| Tries to integrate with Snowflake | 🔴 | Not supported. Only file upload. Non-starter for his team's production data |
-| Looks for data transformation options | 🔴 | No ETL, no cleaning layer — has to pre-clean CSVs externally |
-| Checks if there's an API for programmatic access | 🟡 | FastAPI backend exists but no public developer API documented |
-| Evaluates PII handling | 🟡 | Privacy API exists but no clear data governance documentation |
-
-**Verdict:** Dev finds the architecture promising but can't recommend it because it lacks the production-grade features (connectors, audit trail, governance) his stakeholders need for trust.
-
-**Critical gaps:** 🔴 No SQL/code output visibility for verification | 🔴 No data warehouse connectors | 🔴 No transformation layer | 🟡 Developer API not surfaced
-
----
-
-### Persona 5 — Jordan, Marketing Analyst at 200-Person B2B SaaS
-**Background:** 2 years experience. Manages attribution dashboards. Was on Tableau (got cut in a cost-reduction — $75/user/month too rich). Now using Google Sheets + Looker Studio, hates it. Heard there are AI tools that can build charts from data descriptions.
-
-**Search path:** "tableau alternative affordable 2026" → "AI chart builder" → finds DataSage Charts Studio
-
-**DataSage Journey:**
-
-| Step | Status | Notes |
-|------|--------|-------|
-| Lands on Charts Studio | 🟢 | Impressed — picks X/Y axis, 16 chart types, renders with Plotly |
-| Builds a funnel chart for her pipeline | 🟢 | Works well for her use case |
-| Wants to customize chart colors to match brand | 🟡 | Limited styling options — Plotly defaults |
-| Tries to pull data from HubSpot | 🔴 | No HubSpot connector. Has to export CSV manually. |
-| Saves chart — wants to put it in a weekly Notion report | 🔴 | No embed, no static image export that auto-updates |
-| Wants to build 8 charts at once for a presentation | 🟡 | Has to build each one manually — no batch creation or template system |
-| Tries Insights page to auto-explain her data | 🟢 | AI narrative summaries work and are useful for communicating to non-data stakeholders |
-| Wonders about a dashboard view for her CMO | 🟡 | Dashboard exists but doesn't easily accept the charts she built in Charts Studio — they feel like separate products |
-
-**Verdict:** Jordan stays. Charts Studio + Insights fills her core need. But she wishes the pieces fit together, and she'll eventually leave when she needs HubSpot data to just work.
-
-**Critical gaps:** 🔴 No HubSpot/Salesforce/Google Analytics connectors | 🟡 Charts Studio and Dashboard feel disconnected | 🟡 No brand theming on charts | 🔴 No embeddable/shareable static outputs
+### Persona 5 — Jordan, marketing analyst
+| Step | Status | Note |
+|---|---|---|
+| Charts Studio | ✅ | 16+ chart types, ECharts/Plotly |
+| Brand theming | 🟡 | Limited |
+| HubSpot/GA connector | 🔴 | **Missing — the wedge for the entire marketing segment** |
+| Export for Notion report | ✅ | CSV/PNG |
 
 ---
 
-## Part 5: Prioritized Fix List
+## Part 4: Prioritized Fix List (August 2026)
 
-Ordered by: frequency of mention across personas × severity of drop-off moment × market signal strength
+### Tier 1 — P0 (2–4 weeks): make the trust story *visible and sellable*
+1. **Always-on answer provenance.** Every AI number should visibly cite: the metric definition used (link to metric store), the SQL executed (link to query log), and the row count/date range. The plumbing exists — this is a UX surface. This converts the #1 market fear (Pain 1) into your headline feature. Evidence: Spider 2.0 10–21%; "works just enough to be dangerous" (HN).
+2. **User-editable governed metrics UI.** Backend (`metric_definition_store`) exists; ship the "define Revenue once" UI (WrenAI MDL / TextQL ontology / ThoughtSpot semantics pattern). This is the semantic-layer convergence play and separates "AI that guesses" from "AI that's governed."
+3. **Public share links (no-login) + PDF export.** Every persona still hits a wall sharing outward. Simplest high-retention fix.
 
-### Tier 1 — Ship in the next 2 weeks (these are losing you users today)
+### Tier 2 — P1 (1–3 months): expansion and defensibility
+4. **Snowflake or BigQuery connector** (sales enablement; even read-only trial). Warehouse-native is where enterprise buyers live.
+5. **HubSpot / Google Analytics connectors** — unlocks the marketing-analyst segment fleeing Tableau pricing.
+6. **Benchmark-your-own-accuracy publishable test.** Run your system against a corrected subset of BIRD/Spider 2.0 (given the annotation scandal, run your own curated 50-question suite instead of trusting leaderboards) and **publish the number with show-your-work**. Nobody in this market publishes honest accuracy — it would be a genuinely differentiating asset.
+7. **Embed SDK / white-label** — the enterprise monetization tier (see Ruthless review).
 
-**1. Shareable read-only dashboard links**
-- Affects: ALL 5 personas
-- Evidence: Every single persona hit a wall at "I can't share this"
-- Fix: Public UUID-based shareable link, no login required to view. No need for full collaboration — read-only is enough to unblock.
-
-**2. AI answer transparency / "show your work" mode**
-- Affects: Personas 1, 3, 4 directly; underpins all trust
-- Evidence: 1 in 3 AI answers are false; AI sounds MORE confident when wrong; documented 3x revenue growth error in production. This is the #1 reason users abandon AI analytics tools after the first week.
-- Fix: Show the underlying aggregation logic, filters applied, and data row counts next to every AI-generated number. Even just "Based on 2,847 rows, filtered by date range: Mar 1–31" is enough to build trust.
-
-**3. Dashboard ↔ Chat unified workflow**
-- Affects: Personas 2, 3
-- Evidence: Users generate a KPI on Dashboard then have no path to "ask why" — they don't discover Chat, or discover it too late
-- Fix: "Ask AI about this chart" button inline on every dashboard card → opens Chat with the chart context pre-loaded
+### Tier 3 — P2 (3–6 months)
+8. Forecasting/AutoML basics (the Ruthless gap that's still open).
+9. Real-time collaboration (Figma-for-data) — still missing vs Tableau/Hex.
+10. Onboarding "first win" flow (sample dataset → dashboard → insight → share).
 
 ---
 
-### Tier 2 — 1-3 months (these are defining your ceiling)
+## Summary Scorecard (Aug 2026)
 
-**4. At least one live data connector (Postgres or Google Sheets)**
-- Affects: Personas 1, 2, 4, 5
-- Evidence: All four have their real data somewhere that isn't a CSV. Manual re-upload is a retention killer after the trial week.
-- Note: Start with Postgres (developer/analyst audience) or Google Sheets (non-technical audience) — not Snowflake first (that's a sales deal, not a self-serve problem)
+| Dimension | Status | Note |
+|---|---|---|
+| Market timing | 🟢 Strong | Semantic-layer convergence validates the architecture; trust is the #1 buying criterion |
+| Product-market fit risk | 🟡 Medium | Core loop works; trust surface + connectors + embedding not fully productized |
+| Competition | 🟡 Dangerous | Julius closest; ThoughtSpot/Genie/Cortex own enterprise; free chat owns solo |
+| Defensibility | 🟡 Medium | Metric store + belief store + query log = real moat material, needs UI + proof |
+| Biggest lever | 🔴 **Trust visibility** | All other gaps compound behind this one |
 
-**5. Scheduled dashboard refresh**
-- Affects: Personas 2, 3
-- Evidence: Both came back two weeks later to stale data and re-uploaded manually. The second re-upload is often the last action before churn.
-- Fix: Even a "re-upload the same file path" cron for local files is a forcing function. Full CDC is overkill at this stage.
-
-**6. Chart export (PNG/PDF) + basic embed (iframe)**
-- Affects: Personas 1, 3, 5
-- Evidence: "Put this in my board deck / Notion / email report" is mentioned by every persona. This doesn't require a full embedding SDK — a static PNG export with a watermark and an iframe snippet covers 80% of cases.
-
-**7. Deeper Insights narratives**
-- Affects: Persona 3 directly; all non-technical users
-- Evidence: "Revenue increased 12%" is what a spreadsheet formula does. AI should answer "why" and "so what." The gap between current Insights output and what a founder actually needs for decision-making is large.
-- Fix: Add causal language ("this appears to be driven by..."), anomaly flags ("this is 2.3x your 90-day average"), and next-step suggestions ("consider filtering by region to investigate further")
+**The One-Sentence Positioning (August 2026):**
+The market finally caught up to DataSage's thesis — every serious player now grounds AI analytics in governed semantic definitions, and the #1 buyer fear is silent AI errors. DataSage already has the deterministic KPIs, metric store, correction memory, and query log. **The product is no longer "another AI chat wrapper"; it's the zero-setup version of the semantic-layer architecture the whole industry converged on.** Now the job is to make that visible in every answer, prove it with published accuracy numbers, and close the connectors/embed gaps that gate enterprise and marketing segments.
 
 ---
 
-### Tier 3 — 3-6 months (these expand your addressable market)
-
-**8. HubSpot / Google Analytics connector**
-- Affects: Persona 5 and any marketing analyst segment
-- Evidence: Marketing analytics is a massive wedge. Marketing analysts are actively fleeing Tableau pricing. HubSpot + GA are the two connectors that unlock the whole segment.
-
-**9. Chart Studio → Dashboard promotion flow**
-- Affects: Personas 2, 5
-- Evidence: Both built charts in Charts Studio and wanted them in a Dashboard. The two features feel like separate products right now.
-- Fix: "Add to Dashboard" button on any Charts Studio chart. Simple routing, high retention impact.
-
-**10. Onboarding guided "first win" flow**
-- Affects: Personas 2, 3 (who struggle with cold-start)
-- Evidence: "What do I do after signing up?" is unresolved. The product has 5 major features and no opinionated path to the first insight.
-- Fix: Upload a sample dataset on signup + walk through one complete workflow (upload → dashboard → insight → share). Let users opt into their own data immediately after.
-
----
-
-## Summary Scorecard
-
-| Feature Gap | Personas Affected | Market Signal | Priority |
-|-------------|------------------|---------------|----------|
-| Shareable read-only links | 5/5 | High (every competitor comparison mentions this) | 🔴 P0 |
-| AI answer transparency | 4/5 | Critical (1 in 3 AI answers false; documented losses) | 🔴 P0 |
-| Dashboard ↔ Chat workflow bridge | 3/5 | Medium | 🔴 P0 |
-| Live data connector (Postgres/Sheets) | 4/5 | High (CSV-only kills retention after week 1) | 🟡 P1 |
-| Scheduled refresh | 2/5 | Medium | 🟡 P1 |
-| Chart export + embed | 3/5 | High | 🟡 P1 |
-| Deeper Insights narratives | 3/5 | High | 🟡 P1 |
-| HubSpot / GA connector | 2/5 | High (marketing analyst segment) | 🟢 P2 |
-| Charts Studio → Dashboard flow | 2/5 | Medium | 🟢 P2 |
-| Onboarding guided first win | 2/5 | Medium | 🟢 P2 |
-
----
-
-## The One-Sentence Positioning Problem
-
-DataSage currently competes on features (AI chat, charts, dashboards, insights) against tools that have years of head start on those same features. The real whitespace isn't "more AI" — it's **trustworthy AI**: the tool that shows its work, doesn't hallucinate, and lets you share the result in 10 seconds. Nobody owns that positioning in 2026. DataSage could.
-
----
-
-*Sources consulted: Supaboard, Draxlr, Fabi.ai, Julius AI, Explo, Toucantoco, Lumenore, Research.com, Excelmatic, RowSpeak, Anomaly AI, Zoho Analytics, DataCamp, MIT Sloan, Search Engine Journal, Euronews, Suprmind, Embeddable.com*
+*Sources (July–Aug 2026): ThoughtSpot Gartner MQ 2026 Leader (Jul 1, 2026) & Spotter/MCP announcements; TextQL $17M Blackstone (Apr 2026); Salesforce-Waii close; Julius AI pricing/notebooks/SOC2; Hex pricing; Spider 2.0 & BEAVER benchmark papers; Jin et al. 2026 benchmark-annotation study (UoI); CDO survey data (~57% data-reliability barrier); Reddit r/dataanalysis/r/BusinessIntelligence threads (Jul 2026); Hacker News text-to-SQL threads (Jul 2026); DataSage codebase audit (Aug 6, 2026).*

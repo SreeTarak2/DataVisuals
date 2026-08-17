@@ -22,12 +22,13 @@ Designed to be used standalone or integrated into the chat / pipeline orchestrat
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import polars as pl
 
 from agents.base_agent import AgentContext, BaseAgent, ToolResult
+from services.retries.async_utils import BreakerRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +101,28 @@ class AnalystAgent(BaseAgent):
         Override _act to allow internally-handled tools that don't need
         a registered tool (e.g. stats_engine, kpi_strategy use lazy imports).
         """
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now(UTC).isoformat()
 
+        breaker = None
         try:
+            # ── Circuit breaker gate ────────────────────────────
+            breaker = BreakerRegistry.get(f"tool:{tool_name}")
+            if breaker and not breaker.is_allowed():
+                logger.warning(
+                    "[ACT] %s/%s blocked by circuit breaker (%s)",
+                    self.__class__.__name__,
+                    tool_name,
+                    breaker.state_name,
+                )
+                return ToolResult(
+                    tool=tool_name,
+                    success=False,
+                    timestamp=timestamp,
+                    error=f"circuit breaker open for {tool_name}",
+                    result={},
+                    reasoning_summary=f"Tool '{tool_name}' unavailable (circuit breaker open)",
+                )
+
             # Check if this tool has a dedicated handler — if so, call it
             # even if the tool isn't in the registry
             handler_name = f"_handle_{tool_name}"
@@ -110,6 +130,8 @@ class AnalystAgent(BaseAgent):
             if handler is not None:
                 tool = self._tools.get(tool_name)  # May be None — handler accepts it
                 result, reasoning_summary = await handler(tool, observations, context)
+                if breaker:
+                    breaker.record_success()
                 return ToolResult(
                     tool=tool_name,
                     success=True,
@@ -122,6 +144,8 @@ class AnalystAgent(BaseAgent):
             return await super()._act(tool_name, observations, context)
 
         except Exception as e:
+            if breaker:
+                breaker.record_failure()
             logger.error(
                 f"[ACT] {self.__class__.__name__}/{tool_name} failed: {e}",
                 exc_info=True,
@@ -304,6 +328,16 @@ class AnalystAgent(BaseAgent):
         }
         cfg = intent_config.get(user_intent, intent_config["explore"])
 
+        # Resolve the comparison baseline the question asks for (deterministic)
+        # so the generated KPI cards compare against what the user meant
+        # ("vs last year" → YoY), not the data-range default.
+        from services.ai.comparison_resolver import resolve_comparison_for_df
+
+        resolution = resolve_comparison_for_df(context.query or "", df)
+        comparison_period = (
+            resolution.comparison if resolution.comparison != "none" else None
+        )
+
         # Enrich metadata with findings + intent
         dataset_metadata = {
             "domain_intelligence": {
@@ -313,6 +347,14 @@ class AnalystAgent(BaseAgent):
             "analysis_intent": user_intent,
             "statistical_findings": stats,
             "focus_instruction": cfg["focus"],
+            "comparison_period": comparison_period,
+            "comparison_resolution": {
+                "comparison": resolution.comparison,
+                "source": resolution.source,
+                "needs_clarification": resolution.needs_clarification,
+                "label": resolution.label,
+                "matched_phrase": resolution.matched_phrase,
+            },
         }
 
         try:
@@ -325,8 +367,7 @@ class AnalystAgent(BaseAgent):
 
             return (
                 {"recommendations": kpis},
-                f"Generated {len(kpis)} KPIs "
-                f"(intent={user_intent}, count={cfg['count']})",
+                f"Generated {len(kpis)} KPIs (intent={user_intent}, count={cfg['count']})",
             )
         except Exception as e:
             logger.error("[AnalystAgent] KPI generation failed: %s", e, exc_info=True)
@@ -397,8 +438,7 @@ class AnalystAgent(BaseAgent):
                     "finding": finding_text,
                     "similar_beliefs": similar[:3] if similar else [],
                 },
-                f"Novelty: surprisal={surprisal:.2f} "
-                f"({'novel' if is_novel else 'familiar'})",
+                f"Novelty: surprisal={surprisal:.2f} ({'novel' if is_novel else 'familiar'})",
             )
         except Exception as e:
             logger.error("[AnalystAgent] memory check failed: %s", e, exc_info=True)
@@ -439,7 +479,7 @@ class AnalystAgent(BaseAgent):
         )
 
         try:
-            from services.llm_router import llm_router
+            from llm.router import llm_router
 
             resp = await llm_router.call(
                 prompt=prompt,
@@ -481,7 +521,7 @@ class AnalystAgent(BaseAgent):
         )
 
         full = ""
-        from services.llm_router import llm_router
+        from llm.router import llm_router
         from services.retries.async_utils import retry_async
 
         async def call_stream():

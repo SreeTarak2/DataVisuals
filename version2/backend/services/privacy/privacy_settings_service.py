@@ -6,7 +6,7 @@ and per-dataset overrides.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -61,8 +61,8 @@ class UserPrivacySettings:
         default_factory=GlobalPrivacySettings
     )
     dataset_overrides: Dict[str, DatasetPrivacySettings] = field(default_factory=dict)
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for MongoDB storage."""
@@ -92,8 +92,8 @@ class UserPrivacySettings:
             user_id=data.get("user_id", ""),
             global_defaults=global_defaults,
             dataset_overrides=dataset_overrides,
-            created_at=data.get("created_at", datetime.utcnow().isoformat()),
-            updated_at=data.get("updated_at", datetime.utcnow().isoformat()),
+            created_at=data.get("created_at", datetime.now(timezone.utc).replace(tzinfo=None).isoformat()),
+            updated_at=data.get("updated_at", datetime.now(timezone.utc).replace(tzinfo=None).isoformat()),
         )
 
 
@@ -145,7 +145,7 @@ class PrivacySettingsService:
         Returns True on success.
         """
         try:
-            settings.updated_at = datetime.utcnow().isoformat()
+            settings.updated_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
             await self.db[self.COLLECTION_NAME].update_one(
                 {"user_id": settings.user_id}, {"$set": settings.to_dict()}, upsert=True
             )
@@ -375,7 +375,7 @@ class PrivacySettingsService:
         settings = await self.get_user_settings(user_id)
 
         return {
-            "export_date": datetime.utcnow().isoformat(),
+            "export_date": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             "privacy_settings": settings.to_dict(),
             "note": "This export includes your privacy preferences. "
             "For full GDPR data export, also request your datasets and audit logs.",

@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { getAuthToken } from '../../../services/api';
+
 
 const PREVIEW_LIMIT = 200;
 
@@ -21,16 +21,13 @@ export const useDataPreview = (selectedDataset) => {
 
         try {
             setPreviewLoading(true);
-            const token = getAuthToken();
 
             // Try paginated data endpoint first (returns total_count)
             const response = await fetch(
                 `/api/datasets/${selectedDatasetId}/data?page=1&page_size=${PREVIEW_LIMIT}`,
                 {
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    }
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                 }
             );
 
@@ -43,10 +40,8 @@ export const useDataPreview = (selectedDataset) => {
                 const fallback = await fetch(
                     `/api/datasets/${selectedDatasetId}/preview?limit=${PREVIEW_LIMIT}`,
                     {
-                        headers: {
-                            'Authorization': `Bearer ${token}`,
-                            'Content-Type': 'application/json'
-                        }
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
                     }
                 );
 

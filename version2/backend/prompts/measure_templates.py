@@ -53,14 +53,8 @@ def measure_all_templates() -> dict[str, dict]:
             ),
         ),
         (
-            "chart_explanation",
-            lambda: prompt_templates.get_narrative_insights_prompt(
-                fact_sheet="", dataset_name="", domain=""
-            ),
-        ),
-        (
             "insight_generator",
-            lambda: prompt_templates.get_insight_generation_prompt(
+            lambda: prompts.sql.get_insight_generation_prompt(
                 dataset_context="",
                 charts_text="",
                 kpis_text="",
@@ -70,12 +64,6 @@ def measure_all_templates() -> dict[str, dict]:
         (
             "memory_extraction",
             lambda: prompt_templates.get_memory_extraction_prompt(""),
-        ),
-        (
-            "narrative_engine",
-            lambda: prompt_templates.get_narrative_insights_prompt(
-                fact_sheet="", dataset_name="", domain=""
-            ),
         ),
     ]
 

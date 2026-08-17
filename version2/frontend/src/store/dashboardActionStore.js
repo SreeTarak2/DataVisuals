@@ -1,357 +1,156 @@
 import { create } from 'zustand';
 
-const useDashboardActionStore = create((set, get) => ({
-  // Dashboard redesign state
-  isRedesigning: false,
-  redesignAttempts: 0,
-  onRegenerate: null,
-  MAX_REDESIGNS: 5,
-
+const useDashboardActionStore = create((set) => ({
   // Insights refresh state
   insightsLoading: false,
   onInsightsRefresh: null,
-
-  // Dashboard setters
-  setRedesigning: (isRedesigning) => set({ isRedesigning }),
-  setRedesignAttempts: (attempts) => set({ redesignAttempts: attempts }),
-  setOnRegenerate: (callback) => set({ onRegenerate: callback }),
-  setMaxRedesigns: (max) => set({ MAX_REDESIGNS: max }),
-  resetRedesignState: () => set({ isRedesigning: false, redesignAttempts: 0 }),
 
   // Insights setters
   setInsightsLoading: (loading) => set({ insightsLoading: loading }),
   setOnInsightsRefresh: (callback) => set({ onInsightsRefresh: callback }),
 
-  // Cross-chart filtering
+  // ── Cross-chart filtering (multi-select, multi-field) ──
+  // crossFilters is the filter CONTEXT: an array of { field, value } entries.
+  //   • Same field + multiple values → OR  (multi-select: West + North)
+  //   • Different fields            → AND (multi-field: Region AND Product)
+  // This is the Power BI / Tableau selection model — clicking a value toggles
+  // it in/out of the context instead of replacing it.
+  // `crossFilter` is kept as a derived convenience (the first entry) so legacy
+  // readers that still read a single filter keep working.
+  crossFilters: [],
   crossFilter: null,
-  setCrossFilter: (filter) => set({ crossFilter: filter }),
-
-  // ─── Layout persistence (drag-and-drop) ───
-  kpiLayout: null,
-  chartLayout: null,
-  layoutSaving: false,
-
-  // ─── Compact mode ───
-  compactType: 'vertical',
-
-  // ─── Removed components (for undo/restore) ───
-  removedComponents: [],
-
-  // ─── Snapshot state ───
-  snapshots: [],
-  snapshotsLoading: false,
-  showSnapshots: false,
-
-  setKpiLayout: (layout) => set({ kpiLayout: layout }),
-  setChartLayout: (layout) => set({ chartLayout: layout }),
-  setCompactType: (compactType) => set({ compactType }),
-  setShowSnapshots: (showSnapshots) => set({ showSnapshots }),
-
-  // ─── Compact layout (re-pack items greedily) ───
-  compactLayout: (type) => {
-    const { kpiLayout, chartLayout } = get();
-    const layout = type === 'kpi' ? [...(kpiLayout || [])] : [...(chartLayout || [])];
-    if (!layout || layout.length === 0) return;
-
-    const sorted = [...layout].sort((a, b) => (a.y || 0) - (b.y || 0) || (a.x || 0) - (b.x || 0));
-    let currentY = 0;
-    let currentRowHeight = 0;
-    let currentRowX = 0;
-    const cols = type === 'kpi' ? 4 : 12;
-
-    const compacted = sorted.map((item) => {
-      const w = Math.min(item.w || 1, cols);
-      if (currentRowX + w > cols) {
-        currentY += currentRowHeight;
-        currentRowX = 0;
-        currentRowHeight = 0;
-      }
-      const result = { ...item, x: currentRowX, y: currentY };
-      currentRowX += w;
-      currentRowHeight = Math.max(currentRowHeight, item.h || 1);
-      return result;
-    });
-
-    if (type === 'kpi') {
-      set({ kpiLayout: compacted });
-    } else {
-      set({ chartLayout: compacted });
-    }
-  },
-
-  // ─── Remove a grid item ───
-  removeGridItem: (type, id, componentData = null) => {
-    const { kpiLayout, chartLayout, removedComponents } = get();
-    const layout = type === 'kpi' ? [...(kpiLayout || [])] : [...(chartLayout || [])];
-    const removed = layout.find((item) => item.i === id);
-
-    const filtered = layout.filter((item) => item.i !== id);
-
-    if (type === 'kpi') {
-      set({ kpiLayout: filtered });
-    } else {
-      set({ chartLayout: filtered });
-    }
-
-    // Store removed item for possible undo
-    if (removed) {
-      set({
-        removedComponents: [
-          ...removedComponents,
-          { type, item: removed, componentData },
-        ],
-      });
-    }
-
-    // Compact after remove
-    get().compactLayout(type);
-  },
-
-  // ─── Undo last removal ───
-  undoRemove: () => {
-    const { removedComponents, kpiLayout, chartLayout } = get();
-    if (removedComponents.length === 0) return;
-
-    const last = removedComponents[removedComponents.length - 1];
-    const layout = last.type === 'kpi' ? [...(kpiLayout || [])] : [...(chartLayout || [])];
-    layout.push(last.item);
-
-    if (last.type === 'kpi') {
-      set({ kpiLayout: layout });
-    } else {
-      set({ chartLayout: layout });
-    }
-
-    set({ removedComponents: removedComponents.slice(0, -1) });
-  },
-
-  // ─── Priority management ───
-  setComponentPriority: async (datasetId, componentId, priority, reason = '') => {
-    if (!datasetId || !componentId || !priority) return;
-    try {
-      const token = localStorage.getItem('token');
-      await fetch(`/api/datasets/${datasetId}/layout/priority`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ component_id: componentId, priority, reason }),
-      });
-    } catch (e) {
-      console.warn('[Priority] Save failed:', e);
-    }
-  },
-
-  promoteComponent: (type, id, datasetId) => {
-    const { kpiLayout, chartLayout } = get();
-    const layout = type === 'kpi' ? [...(kpiLayout || [])] : [...(chartLayout || [])];
-    const item = layout.find((it) => it.i === id);
-    if (!item) return;
-
-    const currentPriority = item.priority || 'P3';
-    const priorityOrder = { P4: 'P3', P3: 'P2', P2: 'P1' };
-    const newPriority = priorityOrder[currentPriority];
-    if (!newPriority) return; // already P1
-
-    item.priority = newPriority;
-
-    if (type === 'kpi') {
-      set({ kpiLayout: layout });
-    } else {
-      set({ chartLayout: layout });
-    }
-
-    // Persist to backend
-    get().setComponentPriority(datasetId, id, newPriority, 'User promoted');
-
-    // Re-compact to reflow based on new priority
-    get().compactLayout(type);
-
-    return newPriority;
-  },
-
-  demoteComponent: (type, id, datasetId) => {
-    const { kpiLayout, chartLayout } = get();
-    const layout = type === 'kpi' ? [...(kpiLayout || [])] : [...(chartLayout || [])];
-    const item = layout.find((it) => it.i === id);
-    if (!item) return;
-
-    const currentPriority = item.priority || 'P3';
-    const priorityOrder = { P1: 'P2', P2: 'P3', P3: 'P4' };
-    const newPriority = priorityOrder[currentPriority];
-    if (!newPriority) return; // already P4
-
-    item.priority = newPriority;
-
-    if (type === 'kpi') {
-      set({ kpiLayout: layout });
-    } else {
-      set({ chartLayout: layout });
-    }
-
-    get().setComponentPriority(datasetId, id, newPriority, 'User demoted');
-    get().compactLayout(type);
-
-    return newPriority;
-  },
-
-  // ─── Snapshots ───
-  loadSnapshots: async (datasetId) => {
-    if (!datasetId) return;
-    set({ snapshotsLoading: true });
-    try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(`/api/datasets/${datasetId}/layout-snapshots/`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        set({ snapshots: data.snapshots || [] });
-      }
-    } catch (e) {
-      console.warn('[Snapshots] Load failed:', e);
-    } finally {
-      set({ snapshotsLoading: false });
-    }
-  },
-
-  saveSnapshot: async (datasetId, name, layout = {}) => {
-    if (!datasetId || !name.trim()) return false;
-    try {
-      const token = localStorage.getItem('token');
-      const { kpiLayout, chartLayout } = get();
-      const res = await fetch(`/api/datasets/${datasetId}/layout-snapshots/`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name,
-          layout: layout.kpis || layout.charts
-            ? layout
-            : { kpis: kpiLayout || [], charts: chartLayout || [] },
-          is_auto: false,
-        }),
-      });
-      if (res.ok) {
-        // Refresh snapshot list
-        get().loadSnapshots(datasetId);
-        return true;
-      }
-    } catch (e) {
-      console.warn('[Snapshots] Save failed:', e);
-    }
-    return false;
-  },
-
-  restoreSnapshot: async (datasetId, snapshotId) => {
-    if (!datasetId || !snapshotId) return null;
-    try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(
-        `/api/datasets/${datasetId}/layout-snapshots/${snapshotId}/restore`,
-        {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
-        }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        // Update local layout state
-        if (data.layout) {
-          set({
-            kpiLayout: data.layout.kpis || [],
-            chartLayout: data.layout.charts || [],
-          });
-        }
-        return data.layout;
-      }
-    } catch (e) {
-      console.warn('[Snapshots] Restore failed:', e);
+  crossFilterSource: null,
+  crossFilterActive: false,
+  normalizeFilter: (filter) => {
+    if (!filter) return null;
+    if (typeof filter === 'string') return { field: null, value: filter };
+    if (typeof filter === 'object' && filter?.value !== undefined && filter?.value !== null) {
+      return { field: filter.field || null, value: String(filter.value) };
     }
     return null;
   },
-
-  deleteSnapshot: async (datasetId, snapshotId) => {
-    if (!datasetId || !snapshotId) return false;
-    try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(
-        `/api/datasets/${datasetId}/layout-snapshots/${snapshotId}`,
-        {
-          method: 'DELETE',
-          headers: { 'Authorization': `Bearer ${token}` },
-        }
-      );
-      if (res.ok) {
-        get().loadSnapshots(datasetId);
-        return true;
-      }
-    } catch (e) {
-      console.warn('[Snapshots] Delete failed:', e);
-    }
-    return false;
+  // Sync the top drill level's values when a filter on the drilled field
+  // changes — the breadcrumb trail must stay truthful ("West, North").
+  // Always writes back (even to empty) so stale values can never resurrect a
+  // removed filter during breadcrumb navigation.
+  _syncDrillLevel: (state, next) => {
+    const stack = state.drillDownStack || [];
+    const top = stack[stack.length - 1];
+    if (!top || !top.field) return stack;
+    const levelValues = (next || [])
+      .filter((f) => (f.field || null) === top.field)
+      .map((f) => f.value);
+    return [
+      ...stack.slice(0, -1),
+      {
+        ...top,
+        values: levelValues,
+        filterValue: levelValues[0] || null,
+        label: levelValues.length > 1 ? levelValues.join(', ') : top.label,
+      },
+    ];
   },
-
-  // ─── Layout persistence (drag-and-drop) ───
-  saveLayoutToBackend: async (datasetId, layoutSnapshot = {}) => {
-    const { kpiLayout, chartLayout } = get();
-    if (!datasetId) return;
-    set({ layoutSaving: true });
-    try {
-      const token = localStorage.getItem('token');
-      const payload = {
-        kpis: layoutSnapshot.kpis ?? kpiLayout ?? [],
-        charts: layoutSnapshot.charts ?? chartLayout ?? [],
+  toggleFilter: (filter, source) => set((state) => {
+    const normalized = state.normalizeFilter ? state.normalizeFilter(filter) : null;
+    if (!normalized) {
+      return {
+        crossFilters: [],
+        crossFilter: null,
+        crossFilterSource: source || null,
+        crossFilterActive: false,
       };
-      await fetch(`/api/datasets/${datasetId}/layout`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-    } catch (e) {
-      console.warn('[Layout] Save failed:', e);
-    } finally {
-      set({ layoutSaving: false });
     }
-  },
+    const { field, value } = normalized;
+    const exists = (state.crossFilters || []).some(
+      (f) => (f.field || null) === field && String(f.value) === value
+    );
+    const next = exists
+      ? (state.crossFilters || []).filter(
+          (f) => !((f.field || null) === field && String(f.value) === value)
+        )
+      : [...(state.crossFilters || []), { field, value }];
+    const drillDownStack = state._syncDrillLevel(state, next);
+    return {
+      crossFilters: next,
+      crossFilter: next[0] || null,
+      crossFilterSource: source || null,
+      crossFilterActive: next.length > 0,
+      drillDownStack,
+    };
+  }),
+  // Replace the whole filter context (URL restore, drill navigation rebuild).
+  setFilters: (filters, source) => set((state) => {
+    const next = (Array.isArray(filters) ? filters : [])
+      .map((f) => state.normalizeFilter(f))
+      .filter(Boolean);
+    const drillDownStack = state._syncDrillLevel(state, next);
+    return {
+      crossFilters: next,
+      crossFilter: next[0] || null,
+      crossFilterSource: source || null,
+      crossFilterActive: next.length > 0,
+      drillDownStack,
+    };
+  }),
+  // Remove every filter on a field (used by the badge's per-field ✕).
+  // The badge keys legacy field-less filters as '__value__' — removing that
+  // key clears every filter whose field is null.
+  removeFiltersForField: (field) => set((state) => {
+    const next = (state.crossFilters || []).filter((f) => {
+      const fField = f.field || null;
+      if (field === '__value__') return fField !== null;
+      return fField !== field;
+    });
+    const drillDownStack = state._syncDrillLevel(state, next);
+    return {
+      crossFilters: next,
+      crossFilter: next[0] || null,
+      crossFilterSource: state.crossFilterSource,
+      crossFilterActive: next.length > 0,
+      drillDownStack,
+    };
+  }),
+  clearCrossFilter: () => set((state) => {
+    const drillDownStack = state._syncDrillLevel(state, []);
+    return {
+      crossFilters: [],
+      crossFilter: null,
+      crossFilterSource: null,
+      crossFilterActive: false,
+      drillDownStack,
+    };
+  }),
 
-  loadLayoutFromBackend: async (datasetId) => {
-    if (!datasetId) return { kpis: [], charts: [] };
-    try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(`/api/datasets/${datasetId}/layout`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        set({ kpiLayout: data.kpis || [], chartLayout: data.charts || [] });
-        return data;
-      }
-    } catch (e) {
-      console.warn('[Layout] Load failed:', e);
-    }
-    return { kpis: [], charts: [] };
-  },
+  // ── Validated hierarchy paths (ontology) for drill-down ──
+  // [{ columns, hierarchy_type, confidence, state, source, evidence, assumption_id, description }]
+  // state: 'validated' | 'provisional' — provisional paths get flagged in the UI
+  // (Act-then-Validate: the system acts on every inference, the human validates).
+  hierarchies: [],
+  setHierarchies: (hierarchies) => set({ hierarchies: hierarchies || [] }),
 
-  resetLayout: async (datasetId) => {
-    if (!datasetId) return;
-    try {
-      const token = localStorage.getItem('token');
-      await fetch(`/api/datasets/${datasetId}/layout/reset`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      set({ kpiLayout: null, chartLayout: null });
-    } catch (e) {
-      console.warn('[Layout] Reset failed:', e);
-    }
-  },
+  // ── Active hierarchy drill on a chart ──
+  // { datasetId, componentId, chartTitle, field, currentLevel, nextLevel, hierarchy,
+  //   provisional, baseChartData, baseConfig }
+  // Kept so breadcrumb navigation can restore the chart's baseline granularity.
+  hierarchyDrill: null,
+  setHierarchyDrill: (drill) => set({ hierarchyDrill: drill }),
+  clearHierarchyDrill: () => set({ hierarchyDrill: null }),
+
+  // ── Layout snapshots (removed — no UI) ──
+  // Backend API exists at /api/datasets/{id}/layout-snapshots/
+  // Re-add state + methods when snapshot UI is re-implemented.
+
+  // ── Drill-down navigation ──
+  // Stack of { label, filterValue, chartTitle } — root is { label: 'All Data', filterValue: null }
+  drillDownStack: [],
+  pushDrillDown: (level) => set((state) => ({
+    drillDownStack: [...state.drillDownStack, level],
+  })),
+  popDrillDown: (index) => set((state) => ({
+    drillDownStack: state.drillDownStack.slice(0, index),
+  })),
+  clearDrillDown: () => set({ drillDownStack: [] }),
+  restoreDrillDownStack: (stack) => set({ drillDownStack: stack || [] }),
 }));
 
 export default useDashboardActionStore;

@@ -1,24 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  Menu, X, ChevronDown, ArrowRight, Zap, Users, Box, Cpu 
+import {
+  Menu, X, ChevronDown, ArrowRight, MessageSquareText, Layers, Wallet, BookOpen
 } from 'lucide-react';
 import Logo from '../../common/Logo';
 import './Navbar.css';
 
 const productItems = [
-  { icon: Zap, label: 'Features', desc: 'AI insights & auto dashboards.', href: '/features' },
-  { icon: Cpu, label: 'How it works', desc: 'Upload, ask, and share in 3 steps.', href: '/how-it-works' },
-  { icon: Users, label: 'Use cases', desc: 'For analysts & product teams.', href: '/use-cases' },
-  { icon: Box, label: 'Integrations', desc: 'CSV, Excel, Sheets, & more.', href: '/integrations' }
+  { icon: MessageSquareText, label: 'Features', desc: 'AI chat, dashboards, connectors & more.', href: '/features' },
+  { icon: Layers, label: 'How it works', desc: 'Connect, ask, and teach — in three steps.', href: '/#how-it-works' },
+  { icon: Wallet, label: 'Pricing', desc: 'Free to start. Honest from day one.', href: '/pricing' },
+  { icon: BookOpen, label: 'Docs', desc: 'Getting started & API reference.', href: '/docs' }
 ];
 
 const Navbar = () => {
   const [isScrolled, setIsScrolled] = useState(false);
   const [activeDropdown, setActiveDropdown] = useState(null);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  
+
   const location = useLocation();
   const dropdownRef = useRef(null);
   const productButtonRef = useRef(null);
@@ -38,7 +38,7 @@ const Navbar = () => {
   // Click outside logic for dropdowns
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target) && 
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target) &&
           productButtonRef.current && !productButtonRef.current.contains(e.target)) {
         setActiveDropdown(null);
       }
@@ -51,19 +51,19 @@ const Navbar = () => {
     <>
       <header className={`navbar-wrapper ${isScrolled ? 'scrolled' : ''}`}>
         <div className="navbar-container">
-          {/* Logo Section */}
+          {/* Logo */}
           <Link to="/" className="nav-logo">
             <Logo size={32} showText={true} />
           </Link>
 
           {/* Desktop Links */}
           <nav className="nav-main-links">
-            <div 
+            <div
               className="nav-dropdown-wrapper"
               onMouseEnter={() => setActiveDropdown('product')}
               onMouseLeave={() => setActiveDropdown(null)}
             >
-              <button 
+              <button
                 ref={productButtonRef}
                 className={`nav-link-item ${activeDropdown === 'product' ? 'active' : ''}`}
               >
@@ -84,8 +84,8 @@ const Navbar = () => {
                     <div className="mega-menu-inner">
                       <div className="mega-spotlight">
                         <div className="spotlight-tag">Platform</div>
-                        <h4 className="spotlight-title">Signal Intelligence</h4>
-                        <p className="spotlight-desc">The first context-aware AI built for serious data teams.</p>
+                        <h4 className="spotlight-title">AI analytics that remembers</h4>
+                        <p className="spotlight-desc">Every correction teaches the system. Every insight compounds.</p>
                         <Link to="/features" className="spotlight-link">
                           View all features <ArrowRight size={14} />
                         </Link>
@@ -147,9 +147,10 @@ const Navbar = () => {
           >
             <div className="mobile-card">
               <Link to="/features" className="mobile-nav-item">Features <ArrowRight size={18} /></Link>
-              <Link to="/how-it-works" className="mobile-nav-item">How it works <ArrowRight size={18} /></Link>
+              <Link to="/#how-it-works" className="mobile-nav-item">How it works <ArrowRight size={18} /></Link>
               <Link to="/pricing" className="mobile-nav-item">Pricing <ArrowRight size={18} /></Link>
               <Link to="/docs" className="mobile-nav-item">Docs <ArrowRight size={18} /></Link>
+              <Link to="/blog" className="mobile-nav-item">Blog <ArrowRight size={18} /></Link>
             </div>
 
             <Link to="/register" style={{ textDecoration: 'none' }}>

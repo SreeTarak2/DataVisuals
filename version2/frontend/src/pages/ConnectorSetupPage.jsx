@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useShallow } from 'zustand/react/shallow';
 import { cn } from "../lib/utils";
 import { useTheme } from '../store/themeStore';
-import { databaseAPI, datasetAPI } from '../services/api';
+import { datasetAPI } from '../services/api';
 import useDatasetStore from '../store/datasetStore';
+import useConnectorStore from '../store/connectorStore';
 import { toast } from 'react-hot-toast';
 import RelationshipGraph from '../components/features/databases/RelationshipGraph';
 
@@ -12,6 +14,22 @@ import Breadcrumbs from './connectors/components/Breadcrumbs';
 import ConnectorHeader from './connectors/components/ConnectorHeader';
 import ManageModeView from './connectors/components/ManageModeView';
 import SetupModeView from './connectors/components/SetupModeView';
+
+const parsePostgresUrl = (url) => {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split('/').filter(Boolean);
+    return {
+      host: u.hostname,
+      port: u.port || '5432',
+      database: parts[0] || 'postgres',
+      username: decodeURIComponent(u.username),
+      password: decodeURIComponent(u.password),
+    };
+  } catch {
+    return null;
+  }
+};
 
 const DB_CONFIG = {
   postgres: {
@@ -65,7 +83,30 @@ const ConnectorSetupPage = () => {
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === 'dark';
-  const { processingDataset, setProcessingDataset } = useDatasetStore();
+  const setProcessingDataset = useDatasetStore((s) => s.setProcessingDataset);
+
+  // ── Connector Store (Zustand v5: useShallow wraps selector for stable reference) ──
+  const store = useConnectorStore(
+    useShallow((s) => ({
+      form: s.form, setFormField: s.setFormField, resetForm: s.resetForm,
+      testResult: s.testResult, testMessage: s.testMessage,
+      isTesting: s.isTesting, isSaving: s.isSaving,
+      savedConnId: s.savedConnId, error: s.error,
+      activeConnection: s.activeConnection, activeConnectionLoading: s.activeConnectionLoading,
+      tables: s.tables, tablesLoading: s.tablesLoading,
+      loadConnection: s.loadConnection, fetchTables: s.fetchTables,
+      testConnection: s.testConnection, saveConnection: s.saveConnection,
+      extractTable: s.extractTable, resetState: s.resetState,
+    }))
+  );
+  const {
+    form, setFormField, resetForm,
+    testResult, testMessage, isTesting, isSaving, savedConnId, error,
+    activeConnection, activeConnectionLoading,
+    tables, tablesLoading: loadingTables,
+    loadConnection, fetchTables, testConnection, saveConnection, extractTable,
+    resetState: resetConnectorState,
+  } = store;
 
   const isGsheets = id === 'gsheets';
   const isMongo = id === 'mongodb';
@@ -75,32 +116,10 @@ const ConnectorSetupPage = () => {
   const dbType = id === 'postgres' ? 'postgresql' : id === 'mysql' ? 'mysql' : id === 'mongodb' ? 'mongodb' : id === 'supabase' ? 'supabase' : isGsheets ? 'gsheets' : null;
   const dbInfo = DB_CONFIG[id] || { name: 'Database', defaultPort: '', meta: '', color: 'text-gray-400', bg: 'bg-white/5', docUrl: '' };
 
-  const [form, setForm] = useState({
-    name: '',
-    host: '',
-    port: dbInfo.defaultPort,
-    database: '',
-    username: '',
-    password: '',
-    connection_url: '',
-  });
-
-  const [isTesting, setIsTesting] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [testResult, setTestResult] = useState(null);
-  const [testMessage, setTestMessage] = useState('');
-  const [savedConnId, setSavedConnId] = useState(null);
-  const [error, setError] = useState(null);
+  // Local UI-only state (not shared across components)
   const [sheetUrl, setSheetUrl] = useState('');
   const [isFetching, setIsFetching] = useState(false);
   const [fetchSuccess, setFetchSuccess] = useState(false);
-
-  // ---- Manage mode state ----
-  const [loadedConn, setLoadedConn] = useState(null);
-  const [connectionLoading, setConnectionLoading] = useState(isManage);
-  const [connectionNotFound, setConnectionNotFound] = useState(false);
-  const [tables, setTables] = useState([]);
-  const [loadingTables, setLoadingTables] = useState(false);
   const [selectedTable, setSelectedTable] = useState('');
   const [useCustomQuery, setUseCustomQuery] = useState(false);
   const [customQuery, setCustomQuery] = useState('');
@@ -108,72 +127,28 @@ const ConnectorSetupPage = () => {
   const [datasetName, setDatasetName] = useState('');
   const [rowLimit, setRowLimit] = useState(100000);
 
-  // Load saved connection when connId is present
+  // ── Load saved connection when connId is present ──
   useEffect(() => {
     if (!connId || isGsheets) return;
-    setConnectionLoading(true);
-    setConnectionNotFound(false);
-    setLoadedConn(null);
-    databaseAPI.listConnections()
-      .then((res) => {
-        const conns = res.data || [];
-        const found = conns.find((c) => c.connection_id === connId);
-        if (found) {
-          setLoadedConn(found);
-          setConnectionNotFound(false);
-          setForm({
-            name: found.name || '',
-            host: found.host || '',
-            port: found.port?.toString() || dbInfo.defaultPort,
-            database: found.database || '',
-            username: found.username || '',
-            password: '',
-            connection_url: '',
-          });
-          setSavedConnId(connId);
-          // Fetch tables
-          setLoadingTables(true);
-          databaseAPI.getTables(connId)
-            .then((tRes) => setTables(tRes.data.tables || []))
-            .catch(() => {})
-            .finally(() => setLoadingTables(false));
-        } else {
-          setConnectionNotFound(true);
-        }
-      })
-      .catch(() => {
-        setConnectionNotFound(true);
-      })
-      .finally(() => {
-        setConnectionLoading(false);
-      });
-  }, [connId]);
+    loadConnection(connId).then((found) => {
+      if (found) {
+        fetchTables(connId);
+      }
+    });
+  }, [connId, isGsheets, loadConnection, fetchTables]);
 
+  // ── Reset form when connector type changes (only in setup mode) ──
   useEffect(() => {
     if (isManage) return;
-    setForm(prev => ({
-      ...prev,
-      port: dbInfo.defaultPort,
-      host: '',
-      database: '',
-      username: '',
-      password: '',
-      connection_url: '',
-    }));
-    setTestResult(null);
-    setTestMessage('');
-    setError(null);
-    setSavedConnId(null);
-  }, [id]);
+    resetForm(dbInfo.defaultPort);
+  }, [id, isManage, resetForm, dbInfo.defaultPort]);
 
-  const set = (key, val) => {
-    setForm(prev => ({ ...prev, [key]: val }));
-    if (key !== 'name') {
-      setTestResult(null);
-      setTestMessage('');
-      setError(null);
-    }
-  };
+  // ── Cleanup on unmount ──
+  useEffect(() => {
+    return () => {
+      resetConnectorState();
+    };
+  }, [resetConnectorState]);
 
   const connectionUrlMode = isMongo || isSupabase;
 
@@ -185,46 +160,34 @@ const ConnectorSetupPage = () => {
     ? form.name.length > 0 && form.connection_url.length > 0 && testResult === 'success'
     : form.name.length > 0 && form.host.length > 0 && form.database.length > 0 && form.username.length > 0 && form.password.length > 0 && testResult === 'success';
 
-  const handleExtract = async () => {
+  const handleExtract = useCallback(async () => {
     if (!useCustomQuery && !selectedTable) {
       toast.error('Select a table to extract');
       return;
     }
     setExtracting(true);
     try {
-      const { data } = await databaseAPI.extractTable(connId, {
+      const result = await extractTable(connId, {
         table_name: useCustomQuery ? null : selectedTable,
         custom_query: useCustomQuery ? customQuery : null,
         dataset_name: datasetName || undefined,
         row_limit: rowLimit,
       });
-      setProcessingDataset(data.dataset_id);
-      toast.success('Table extraction started');
-      navigate('/app/workspace');
+      if (result.success) {
+        setProcessingDataset(result.dataset_id);
+        toast.success('Table extraction started');
+        navigate('/app/workspace');
+      } else {
+        toast.error(result.error || 'Extraction failed');
+      }
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Extraction failed');
+      toast.error('Extraction failed');
     } finally {
       setExtracting(false);
     }
-  };
+  }, [connId, useCustomQuery, selectedTable, extractTable, setProcessingDataset, datasetName, rowLimit, customQuery, navigate]);
 
-  const parsePostgresUrl = (url) => {
-    try {
-      const u = new URL(url);
-      const parts = u.pathname.split('/').filter(Boolean);
-      return {
-        host: u.hostname,
-        port: u.port || '5432',
-        database: parts[0] || 'postgres',
-        username: decodeURIComponent(u.username),
-        password: decodeURIComponent(u.password),
-      };
-    } catch {
-      return null;
-    }
-  };
-
-  const buildConfig = () => {
+  const buildConfig = useCallback(() => {
     let cfg = { db_type: dbType };
     if (connectionUrlMode && form.connection_url) {
       if (isSupabase) {
@@ -245,90 +208,49 @@ const ConnectorSetupPage = () => {
       cfg.password = form.password || undefined;
     }
     return cfg;
-  };
+  }, [dbType, connectionUrlMode, form, isSupabase, parsePostgresUrl]);
 
-  const handleTestConnection = async (e) => {
+  const handleTestConnection = useCallback(async (e) => {
     if (e) e.preventDefault();
-    setIsTesting(true);
-    setTestResult(null);
-    setTestMessage('');
-    setError(null);
+    const config = buildConfig();
+    Object.keys(config).forEach(key => config[key] === undefined && delete config[key]);
+    await testConnection(config);
+  }, [buildConfig, testConnection]);
 
-    try {
-      const config = buildConfig();
-      Object.keys(config).forEach(key => config[key] === undefined && delete config[key]);
+  const handleSaveAndConnect = useCallback(async () => {
+    const config = buildConfig();
+    config.name = form.name;
+    Object.keys(config).forEach(key => config[key] === undefined && delete config[key]);
+    await saveConnection(config);
+  }, [buildConfig, form.name, saveConnection]);
 
-      const response = await databaseAPI.testConnection(config);
-      const data = response.data;
-
-      if (data.success) {
-        setTestResult('success');
-        setTestMessage(data.tables_count !== undefined
-          ? `Connected successfully. Found ${data.tables_count} tables/collections.`
-          : 'Connection successful. Credentials are valid.'
-        );
-      } else {
-        setTestResult('error');
-        setTestMessage(data.message || 'Connection failed. Check your credentials.');
-      }
-    } catch (err) {
-      setTestResult('error');
-      const detail = err.response?.data?.detail || err.message || 'Connection failed. Check your credentials and network.';
-      setTestMessage(typeof detail === 'string' ? detail : 'Connection failed. Please verify your credentials.');
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
-  const handleSaveAndConnect = async () => {
-    setIsSaving(true);
-    setError(null);
-
-    try {
-      const config = buildConfig();
-      config.name = form.name;
-      Object.keys(config).forEach(key => config[key] === undefined && delete config[key]);
-
-      const response = await databaseAPI.saveConnection(config);
-      const data = response.data;
-      setSavedConnId(data.connection_id);
-      // Notify the sidebar to refresh its Sources list
-      window.dispatchEvent(new CustomEvent('db-connection-saved', {
-        detail: { connection_id: data.connection_id },
-      }));
-    } catch (err) {
-      const detail = err.response?.data?.detail || err.message || 'Failed to save connection.';
-      setError(typeof detail === 'string' ? detail : 'Failed to save connection. Please try again.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleFetchSheet = async (e) => {
+  const handleFetchSheet = useCallback(async (e) => {
     if (e) e.preventDefault();
     if (!sheetUrl.trim()) return;
     setIsFetching(true);
-    setError(null);
 
     try {
       const response = await datasetAPI.importGoogleSheets(sheetUrl.trim());
       const data = response.data;
       if (data.success) {
         setFetchSuccess(true);
-        // Navigate to datasets after short delay
         setTimeout(() => navigate('/app/datasets'), 1200);
       } else {
-        setError(data.message || 'Failed to import Google Sheet.');
+        toast.error(data.message || 'Failed to import Google Sheet.');
       }
     } catch (err) {
       const detail = err.response?.data?.detail || err.message || 'Failed to import Google Sheet.';
-      setError(typeof detail === 'string' ? detail : 'Connection failed. Please check the URL.');
+      toast.error(typeof detail === 'string' ? detail : 'Connection failed. Please check the URL.');
     } finally {
       setIsFetching(false);
     }
-  };
+  }, [sheetUrl, datasetAPI, navigate]);
 
-  if (isManage && connectionLoading) {
+  // Manage mode rendering blocks use these values but they're only rendered when isManage is true
+  // and activeConnection is loaded, so the hooks are stable.
+
+  // ── Manage mode: loading state ──
+  if (isManage && activeConnectionLoading) {
     return (
       <div className={cn(
         "h-full flex flex-col overflow-hidden relative",
@@ -344,7 +266,8 @@ const ConnectorSetupPage = () => {
     );
   }
 
-  if (isManage && connectionNotFound) {
+  // ── Manage mode: not found (connId present but no active connection after loading) ──
+  if (isManage && !activeConnectionLoading && !activeConnection && connId) {
     return (
       <div className={cn(
         "h-full flex flex-col overflow-hidden relative",
@@ -375,8 +298,9 @@ const ConnectorSetupPage = () => {
     );
   }
 
-  if (isManage && loadedConn) {
-    const connectionLabel = loadedConn.name || loadedConn.database || dbInfo.name;
+  // ── Manage mode: active connection loaded ──
+  if (isManage && activeConnection) {
+    const connectionLabel = activeConnection.name || activeConnection.database || dbInfo.name;
     return (
       <div className={cn(
         "h-full flex flex-col overflow-hidden relative selection:bg-orange-500/20 selection:text-white transition-colors duration-300",
@@ -400,7 +324,7 @@ const ConnectorSetupPage = () => {
                 connectionLabel={connectionLabel}
                 isManage={true}
                 isGsheets={false}
-                loadedConn={loadedConn}
+                loadedConn={activeConnection}
                 isDark={isDark}
               />
             </div>
@@ -408,12 +332,10 @@ const ConnectorSetupPage = () => {
             <ManageModeView
               connId={connId}
               isDark={isDark}
-              loadedConn={loadedConn}
+              loadedConn={activeConnection}
               isSupabase={isSupabase}
               tables={tables}
-              setTables={setTables}
               loadingTables={loadingTables}
-              setLoadingTables={setLoadingTables}
               selectedTable={selectedTable}
               setSelectedTable={setSelectedTable}
               useCustomQuery={useCustomQuery}
@@ -441,6 +363,7 @@ const ConnectorSetupPage = () => {
     );
   }
 
+  // ── Setup mode ──
   return (
     <div className={cn(
       "h-full flex flex-col overflow-hidden relative selection:bg-orange-500/20 selection:text-white transition-colors duration-300",
@@ -476,7 +399,7 @@ const ConnectorSetupPage = () => {
             isMongo={isMongo}
             isSupabase={isSupabase}
             form={form}
-            set={set}
+            set={setFormField}
             canTest={canTest}
             canSave={canSave}
             isTesting={isTesting}

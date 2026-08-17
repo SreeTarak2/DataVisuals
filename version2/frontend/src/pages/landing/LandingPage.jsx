@@ -8,7 +8,7 @@ import FeatureBento from '@/components/landing/FeatureBento';
 import HowItWorks from '@/components/landing/HowItWorks';
 import AdvancedCapabilities from '@/components/landing/AdvancedCapabilities';
 import InteractiveDemo from '@/components/landing/InteractiveDemo';
-import TestimonialsCarousel from '@/components/landing/TestimonialsCarousel';
+import ProofSection from '@/components/landing/ProofSection';
 import PricingSection from '@/components/landing/PricingSection';
 import FAQSection from '@/components/landing/FAQSection';
 import { Footer } from '@/components/landing/Footer';
@@ -40,7 +40,7 @@ function LandingPage() {
         <HowItWorks />
         <AdvancedCapabilities />
         <InteractiveDemo />
-        <TestimonialsCarousel />
+        <ProofSection />
         <PricingSection />
         <FAQSection />
       </main>

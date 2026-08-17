@@ -25,7 +25,6 @@ import re
 import time
 from typing import AsyncGenerator
 
-from db.database import get_database
 from agents.eda.context import AgentContext
 from agents.eda.agents import (
     planner, data_understanding, univariate, bivariate, visualization, critic,
@@ -81,8 +80,11 @@ def _normalize_correlations(raw: list) -> list:
 
 
 async def _load_context(dataset_id: str, user_id: str, question: str) -> AgentContext:
-    db = get_database()
-    doc = await db.uploads.find_one({"_id": dataset_id, "user_id": user_id})
+    from services.datasets.enhanced_dataset_service import enhanced_dataset_service
+
+    # Strictly workspace-scoped read (resolves the user's personal workspace
+    # when no explicit workspace is threaded through the agent registry).
+    doc = await enhanced_dataset_service.get_dataset_doc(dataset_id, user_id)
     if not doc:
         raise ValueError(f"Dataset '{dataset_id}' not found")
     if not doc.get("is_processed"):

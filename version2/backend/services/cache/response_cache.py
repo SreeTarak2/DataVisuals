@@ -54,16 +54,15 @@ class ResponseCache:
         self.embedding_model_name = embedding_model
         self._cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self._embeddings: Dict[str, np.ndarray] = {}  # cache_key -> embedding
-        self._rate_limit_status: Dict[
-            str, Dict
-        ] = {}  # model -> {limited_until, count_today}
+        self._rate_limit_status: Dict[str, Dict] = {}  # model -> {limited_until, count_today}
         self._lock = threading.Lock()
         self._embedding_model = None
-
-        # Initialize embedding model for semantic matching
-        self._initialize_embeddings()
+        self._embedding_initialized = False
 
     def _initialize_embeddings(self):
+        if self._embedding_initialized:
+            return
+        self._embedding_initialized = True
         """Initialize sentence transformer for semantic similarity.
 
         Uses the shared embedding singleton to avoid loading the
@@ -86,6 +85,8 @@ class ResponseCache:
     def _compute_embedding(self, text: str) -> Optional[np.ndarray]:
         """Compute embedding for text using loaded model."""
         if self._embedding_model is None:
+            self._initialize_embeddings()
+        if self._embedding_model is None:
             return None
         try:
             return self._embedding_model.encode(
@@ -103,9 +104,7 @@ class ResponseCache:
         normalized = re.sub(r"[?!.,;:]+$", "", normalized)
         return normalized
 
-    def _generate_cache_key(
-        self, query: str, dataset_id: str, mode: str = "learning"
-    ) -> str:
+    def _generate_cache_key(self, query: str, dataset_id: str, mode: str = "learning") -> str:
         """Generate cache key from normalized query, dataset, and chat mode."""
         normalized = self._normalize_query(query)
         content = f"{dataset_id}:{mode}:{normalized}"
@@ -116,9 +115,7 @@ class ResponseCache:
         created_at = entry.get("created_at", 0)
         return time.time() - created_at > self.ttl_seconds
 
-    def get(
-        self, query: str, dataset_id: str, mode: str = "learning"
-    ) -> Optional[Dict[str, Any]]:
+    def get(self, query: str, dataset_id: str, mode: str = "learning") -> Optional[Dict[str, Any]]:
         """
         Get cached response if available and not expired.
 
@@ -205,9 +202,7 @@ class ResponseCache:
         """
         # Try semantic matching first if available
         if use_semantic and self._embedding_model:
-            semantic_result = self._find_similar_semantic(
-                query, dataset_id, mode, threshold
-            )
+            semantic_result = self._find_similar_semantic(query, dataset_id, mode, threshold)
             if semantic_result:
                 return semantic_result
 
@@ -314,9 +309,7 @@ class ResponseCache:
             "limited_until": time.time() + retry_after_seconds,
             "last_limited": time.time(),
         }
-        logger.warning(
-            f"Model {model} marked as rate limited for {retry_after_seconds}s"
-        )
+        logger.warning(f"Model {model} marked as rate limited for {retry_after_seconds}s")
 
     def is_rate_limited(self, model: str) -> bool:
         """Check if model is currently rate limited."""
@@ -583,11 +576,8 @@ Available columns for ranking:
                 [f"- `{c['name']}` ({c.get('type', 'unknown')})" for c in columns[:10]]
             )
             + (f"\n- ... and {len(columns) - 10} more" if len(columns) > 10 else ""),
-            column_preview=", ".join(all_cols[:5])
-            + ("..." if len(all_cols) > 5 else ""),
-            numeric_columns=", ".join(numeric_cols[:5])
-            if numeric_cols
-            else "None detected",
+            column_preview=", ".join(all_cols[:5]) + ("..." if len(all_cols) > 5 else ""),
+            numeric_columns=", ".join(numeric_cols[:5]) if numeric_cols else "None detected",
             categorical_columns=", ".join(categorical_cols[:5])
             if categorical_cols
             else "None detected",

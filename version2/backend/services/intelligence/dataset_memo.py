@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -94,8 +94,8 @@ class DatasetMemo:
 
     # ── Pipeline Metadata ────────────────────────────────────────────────
     pipeline_version: str = "3.0"
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     row_count: int = 0
     column_count: int = 0
 
@@ -249,7 +249,7 @@ class DatasetMemoCache:
             persist_to_mongo: If True, also persist to MongoDB.
             mongo_db: PyMongo database instance (required if persist_to_mongo=True).
         """
-        memo.updated_at = datetime.utcnow()
+        memo.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         serialized = memo.to_dict()
         cls._cache[dataset_id] = serialized
 

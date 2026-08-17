@@ -1,24 +1,21 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import ChatPanel from '../features/chat/ChatPanel';
 import ProcessingModal from '../features/datasets/ProcessingModal';
 import { cn } from '../../lib/utils';
-import { AiBotIcon } from '../svg/icons';
+import Logo from '../common/Logo';
 import useDatasetStore from '../../store/datasetStore';
 import { agenticAPI } from '../../services/api';
 
-const SHOW_FAB_ROUTES = ['/app/dashboard', '/app/datasets', '/app/charts', '/app/analysis'];
+const SHOW_FAB_ROUTES = ['/app/dashboard', '/app/datasets'];
 const DashboardLayout = () => {
   const location = useLocation();
   const [chatOpen, setChatOpen] = useState(false);
   const [chartContext, setChartContext] = useState(null);
   const [initialQuery, setInitialQuery] = useState(null);
-  const [insightContext, setInsightContext] = useState(null);
-
   const { processingDatasetId, clearProcessingState } = useDatasetStore();
 
   useEffect(() => {
@@ -35,10 +32,7 @@ const DashboardLayout = () => {
     // Use a stable reference for the handler to prevent duplicate listeners in StrictMode
     const handleQueryEvent = (e) => {
       const query = e.detail?.query || null;
-      const ctx = e.detail?.insightContext || null;
-
       setInitialQuery(query);
-      setInsightContext(ctx);
       setChartContext(null); // clear any chart context
       setChatOpen(true);
 
@@ -50,7 +44,7 @@ const DashboardLayout = () => {
           agenticAPI.submitFeedback({
             insight_text: `User implicitly investigated: "${query.substring(0, 100)}..."`,
             feedback_type: 'useful',
-            dataset_id: ctx?.dataset_id || null
+            dataset_id: null
           }).catch(err => console.debug('Implicit feedback saved successfully.'));
         } catch (error) {
           console.warn('Failed to log implicit belief:', error);
@@ -69,29 +63,34 @@ const DashboardLayout = () => {
     setChatOpen(false);
     setChartContext(null);
     setInitialQuery(null);
-    setInsightContext(null);
   }, []);
 
   const handleClearChartContext = useCallback(() => setChartContext(null), []);
   const handleClearInitialQuery = useCallback(() => {
     setInitialQuery(null);
-    setInsightContext(null);
   }, []);
 
   const showFab = SHOW_FAB_ROUTES.some((r) => location.pathname.startsWith(r));
   const showButton = showFab && !chatOpen;
+  const isPlayground = location.pathname === '/app/playground';
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg-primary)]">
       {/* Sidebar — self-manages width */}
-      <Sidebar />
+      {!isPlayground && <Sidebar />}
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        <Header />
+        {!isPlayground && <Header />}
 
         <div className="flex-1 flex overflow-hidden relative">
-          <main className="flex-1 overflow-y-auto p-0 relative bg-[var(--bg-primary)]">
+          <main 
+            className="flex-1 overflow-y-auto p-0 relative bg-[var(--bg-primary)]"
+            style={{
+              transition: 'margin-right 0.35s cubic-bezier(0.16, 1, 0.3, 1)',
+              marginRight: chatOpen ? 'var(--chat-panel-width, 480px)' : '0'
+            }}
+          >
             <Outlet />
           </main>
 
@@ -103,7 +102,6 @@ const DashboardLayout = () => {
             onClearChartContext={handleClearChartContext}
             initialQuery={initialQuery}
             onClearInitialQuery={handleClearInitialQuery}
-            insightContext={insightContext}
           />
         </div>
       </div>
@@ -126,14 +124,14 @@ const DashboardLayout = () => {
             className={cn(
               "fixed bottom-6 right-6 z-50",
               "w-13 h-13 rounded-full flex items-center justify-center cursor-grab active:cursor-grabbing transition-shadow duration-300",
-              "text-white shadow-premium hover:shadow-xl"
+              "bg-white dark:bg-black shadow-lg shadow-black/5 dark:shadow-black/60 hover:shadow-xl",
+              "border border-black/5 dark:border-white/10"
             )}
-            style={{
-              backgroundColor: 'var(--accent-primary)',
-            }}
             title="Ask AI (Drag to move)"
           >
-            <AiBotIcon className="w-10 h-10 pointer-events-none" />
+            <div className="w-10 h-10 flex items-center justify-center">
+              <Logo size={32} />
+            </div>
           </motion.button>
         )}
       </AnimatePresence>

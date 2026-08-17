@@ -10,23 +10,26 @@ import useDashboardActionStore from '../../../store/dashboardActionStore';
  */
 const PivotTable = ({ component, datasetData }) => {
   const { colors } = useChartTheme();
-  const { crossFilter, setCrossFilter } = useDashboardActionStore();
-  
+  const { crossFilters, toggleFilter } = useDashboardActionStore();
+
   // Extract data from the component or hydrated data
   const data = useMemo(() => {
     return component.chart_data?.data || component.data || [];
   }, [component]);
 
-  // Handle row click for cross-filtering
+  // Active values for a field — multi-select (OR) highlight + toggle.
+  const activeValuesFor = (field) =>
+    (crossFilters || [])
+      .filter((f) => (f.field || null) === field)
+      .map((f) => String(f.value));
+
+  // Handle row click for cross-filtering (field-aware — the first column is
+  // the row's dimension, so clicks carry { field, value }; clicking again
+  // toggles that value out — multi-select semantics)
   const handleRowClick = (row) => {
-    // Usually we filter by the first column (dimension)
     const firstCol = Object.keys(row)[0];
     const value = row[firstCol];
-    if (crossFilter === String(value)) {
-      setCrossFilter(null); // Toggle off
-    } else {
-      setCrossFilter(String(value));
-    }
+    toggleFilter({ field: firstCol, value: String(value) }, 'Pivot Table');
   };
 
   // If no data, show empty state
@@ -76,7 +79,8 @@ const PivotTable = ({ component, datasetData }) => {
           <tbody>
             {data.slice(0, 100).map((row, i) => {
               const firstCol = Object.keys(row)[0];
-              const isFiltered = crossFilter === String(row[firstCol]);
+              const activeValues = activeValuesFor(firstCol);
+              const isFiltered = activeValues.includes(String(row[firstCol]));
 
               return (
                 <tr 
