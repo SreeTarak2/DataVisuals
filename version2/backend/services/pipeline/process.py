@@ -51,6 +51,9 @@ from services.pipeline.load import coerce_numeric_columns, load_dataset
 from services.pipeline.helpers import convert_types_for_json, extract_sample_rows
 from services.pipeline.normalize import normalize_column_names
 from services.pipeline.structural_fixers import apply_structural_fixers
+from services.pipeline.date_fixer import detect_date_candidates
+from services.pipeline.category_fixer import detect_category_merges
+from services.pipeline.unpivot_fixer import detect_unpivot_candidates
 from services.pipeline.tracker import PipelineTracker
 from services.cleaning.column_suggester import suggest_cleaning_actions
 from services.intelligence.dataset_memo import DatasetMemo, DatasetMemoCache
@@ -508,6 +511,45 @@ async def process_dataset(
                         logger.info("  Updated Parquet with normalized column names")
                     except Exception as e:
                         logger.warning(f"  Parquet update after normalization failed: {e}")
+
+        # ── Stage 4: Date type-coercion proposals (deterministic, no LLM) ──
+        async with tracker.stage("date_detection", "Detecting Date Columns"):
+            try:
+                date_proposals = detect_date_candidates(df_clean)
+                if date_proposals:
+                    cleaning_manifest = (cleaning_manifest or []) + date_proposals
+                    logger.info(
+                        "  Date proposals: %d columns flagged for type coercion",
+                        len(date_proposals),
+                    )
+            except Exception as e:
+                logger.warning("  Date detection skipped (%s) — continuing", e)
+
+        # ── Stage 4b: Category merge proposals (deterministic, no LLM) ──
+        async with tracker.stage("category_detection", "Detecting Dirty Categories"):
+            try:
+                category_proposals = detect_category_merges(df_clean)
+                if category_proposals:
+                    cleaning_manifest = (cleaning_manifest or []) + category_proposals
+                    logger.info(
+                        "  Category proposals: %d columns with mergeable values",
+                        len(category_proposals),
+                    )
+            except Exception as e:
+                logger.warning("  Category detection skipped (%s) — continuing", e)
+
+        # ── Stage 4c: Unpivot proposals (deterministic, no LLM) ────────
+        async with tracker.stage("unpivot_detection", "Detecting Pivoted Columns"):
+            try:
+                unpivot_proposals = detect_unpivot_candidates(df_clean)
+                if unpivot_proposals:
+                    cleaning_manifest = (cleaning_manifest or []) + unpivot_proposals
+                    logger.info(
+                        "  Unpivot proposals: %d column groups",
+                        len(unpivot_proposals),
+                    )
+            except Exception as e:
+                logger.warning("  Unpivot detection skipped (%s) — continuing", e)
 
         # ── Stage 5: Unified Profiling (deterministic, no LLM) ──────────
         async with tracker.stage("profiling", "Profiling Data"):

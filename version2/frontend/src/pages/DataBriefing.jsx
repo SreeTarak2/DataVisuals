@@ -271,10 +271,18 @@ function matchColumnsFromIntent(intent, columnGroups) {
 function deriveManifestState(action) {
   if (action.state) return action.state;
   const approved = action.approved;
-  const isProposal = action.action_type === 'merge' || action.action_type === 'remove';
+  const isProposal = isProposalAction(action);
   if (approved === true) return isProposal ? 'applied' : 'confirmed';
   if (approved === false) return isProposal ? 'rejected' : 'reverted';
   return isProposal ? 'proposed' : 'applied_silently';
+}
+
+// Proposals are never executed without explicit user approval.
+// type_coercion (string → date) is a proposal like merge/remove.
+function isProposalAction(action) {
+  return action.action_type === 'merge' || action.action_type === 'remove'
+    || action.action_type === 'type_coercion' || action.action_type === 'merge_values'
+    || action.action_type === 'unpivot_columns';
 }
 
 const MANIFEST_STATE_CONFIG = {
@@ -293,6 +301,19 @@ function describeManifestAction(action) {
   }
   if (action.action_type === 'merge') {
     return `Merge duplicate columns: ${cols.join(', ') || '?'}`;
+  }
+  if (action.action_type === 'type_coercion') {
+    const col = action.target_column || cols[0] || '?'; 
+    return `Parse dates in '${col}' → ${action.proposed_type || 'Date'}`;
+  }
+  if (action.action_type === 'merge_values') {
+    const col = action.target_column || cols[0] || '?';
+    const n = Object.keys(action.mapping || action.evidence?.mapping || {}).length;
+    return `${n} value variant${n === 1 ? '' : 's'} in '${col}' → canonical`;
+  }
+  if (action.action_type === 'unpivot_columns') {
+    const [timeCol, measure] = action.new_column_names || ['time', 'value'];
+    return `Unpivot ${cols.length} '${measure}' columns → ${timeCol}/${measure}`;
   }
   if (action.normalized_name && action.original_name) {
     return `${action.original_name} → ${action.normalized_name}`;
@@ -852,7 +873,7 @@ const DataBriefing = () => {
                     {rawManifest.map((action, idx) => {
                       const state = deriveManifestState(action);
                       const cfg = MANIFEST_STATE_CONFIG[state] || MANIFEST_STATE_CONFIG.applied_silently;
-                      const isProposal = action.action_type === 'merge' || action.action_type === 'remove';
+                      const isProposal = isProposalAction(action);
                       // Structural fixers (header shift / TOTAL row drop) applied
                       // silently at ingest — not individually revertable.
                       const isStructural = action.action_type === 'shift_header' || action.action_type === 'drop_row';
@@ -870,6 +891,12 @@ const DataBriefing = () => {
                           {action.reasoning && (
                             <p className="mt-1 text-[10px] text-zinc-500 leading-snug">
                               {action.reasoning}
+                            </p>
+                          )}
+                          {action.evidence?.before?.length > 0 && (
+                            <p className="mt-1 text-[9px] font-mono text-zinc-600 leading-snug">
+                              {action.evidence.before[0]} → {action.evidence.after?.[0]}
+                              {action.evidence.before.length > 1 ? ` (+${action.evidence.before.length - 1} more)` : ''}
                             </p>
                           )}
                           {!isProposal && action.applied_steps?.length > 0 && (

@@ -47,6 +47,9 @@ from typing import Any
 import polars as pl
 
 from db.database import get_database
+from services.pipeline.date_fixer import apply_date_coercion
+from services.pipeline.category_fixer import apply_merge_values
+from services.pipeline.unpivot_fixer import apply_unpivot
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +63,15 @@ def _now_iso() -> str:
 
 
 def is_ai_proposal(entry: dict) -> bool:
-    """merge/remove entries originate from the AI suggester and are proposals."""
-    return entry.get("action_type") in ("merge", "remove")
+    """Proposal entries originate from the AI suggester or deterministic
+    detectors and are never executed without user approval."""
+    return entry.get("action_type") in (
+        "merge",
+        "remove",
+        "type_coercion",
+        "merge_values",
+        "unpivot_columns",
+    )
 
 
 def entry_state(entry: dict) -> str:
@@ -199,7 +209,10 @@ def apply_merge(df: pl.DataFrame, entry: dict, warnings: list[str]) -> pl.DataFr
 
 
 def _columns_changed(before: pl.DataFrame, after: pl.DataFrame) -> bool:
-    return before.columns != after.columns
+    """Detect column renames/drops AND schema changes (e.g. date coercion
+    keeps the name but changes the dtype — a mutation that must still
+    trigger the downstream refresh cascade)."""
+    return before.columns != after.columns or before.schema != after.schema
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -265,8 +278,17 @@ def execute_mutation(
             return df, updated
 
         if approved:
-            df = apply_drop(df, entry, warnings) if entry.get("action_type") == "remove" \
-                else apply_merge(df, entry, warnings)
+            action_type = entry.get("action_type")
+            if action_type == "remove":
+                df = apply_drop(df, entry, warnings)
+            elif action_type == "type_coercion":
+                df = apply_date_coercion(df, entry, warnings)
+            elif action_type == "merge_values":
+                df = apply_merge_values(df, entry, warnings)
+            elif action_type == "unpivot_columns":
+                df = apply_unpivot(df, entry, warnings)
+            else:
+                df = apply_merge(df, entry, warnings)
             updated["approved"] = True
             updated["state"] = "applied"
         else:

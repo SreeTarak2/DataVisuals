@@ -16,7 +16,12 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 # Actions that change query results — block chat until reviewed.
-CRITICAL_ACTION_TYPES = frozenset({"drop", "remove", "merge"})
+# type_coercion (string → date) and merge_values (fuzzy category merging)
+# change how filters, aggregations, and time-series queries behave, so they
+# block too.
+CRITICAL_ACTION_TYPES = frozenset(
+    {"drop", "remove", "merge", "type_coercion", "merge_values", "unpivot_columns"}
+)
 
 # Actions that only relabel columns — warn, never block.
 COSMETIC_ACTION_TYPES = frozenset({"rename"})

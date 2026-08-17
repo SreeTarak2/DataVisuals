@@ -53,3 +53,5 @@ matplotlib
 
 # ── Misc ──
 requests                # CLI eval script (scripts/chatbot_eval_runner.py)
+python-dateutil          # date parsing (services/pipeline/date_fixer.py)
+rapidfuzz               # fuzzy category matching (services/pipeline/category_fixer.py)
